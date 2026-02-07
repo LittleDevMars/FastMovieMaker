@@ -2,6 +2,173 @@
 
 ---
 
+## 2026-02-08 (Day 7) 작업 요약
+
+**오디오 타임라인 시각화 및 편집 기능 구현 완료**
+
+### 구현 내용
+
+#### 1. 모델 확장
+- **개선:** `src/models/subtitle.py` - SubtitleTrack에 오디오 타임라인 필드 추가
+  - `audio_start_ms: int = 0` - 타임라인에서 오디오 시작 위치
+  - `audio_duration_ms: int = 0` - 오디오 총 재생 길이
+  - TTS 생성 시 FFprobe로 자동 측정
+
+#### 2. 타임라인 시각화
+- **개선:** `src/ui/timeline_widget.py` - 오디오 트랙 레이어 추가
+  - `_draw_audio_track()` - 자막 아래 녹색 박스로 오디오 표시
+  - "🔊 TTS Audio" 레이블 표시
+  - 선택 시 밝은 녹색으로 하이라이트
+  - 오디오 색상: `_AUDIO_COLOR`, `_AUDIO_BORDER`, `_AUDIO_SELECTED_COLOR`
+
+#### 3. 편집 기능
+- **개선:** `src/ui/timeline_widget.py` - 오디오 드래그/리사이즈
+  - 드래그 모드 추가: `AUDIO_MOVE`, `AUDIO_RESIZE_LEFT`, `AUDIO_RESIZE_RIGHT`
+  - `_start_audio_drag()` - 오디오 드래그 시작 (원본 위치 저장)
+  - `_handle_audio_drag()` - 드래그 중 실시간 업데이트
+    - AUDIO_MOVE: 좌우 이동 (duration 유지)
+    - AUDIO_RESIZE_LEFT: 왼쪽 가장자리 드래그 (start + duration 조정)
+    - AUDIO_RESIZE_RIGHT: 오른쪽 가장자리 드래그 (duration만 조정)
+  - `_hit_test()` 수정: 오디오 영역 감지 추가
+    - "audio_left_edge", "audio_right_edge", "audio_body"
+  - 마우스 커서 자동 변경
+    - 가장자리: `SizeHorCursor` (←→)
+    - 본문: `OpenHandCursor` (✋)
+  - `audio_moved = Signal(int, int)` - 변경 통지 시그널
+
+#### 4. MainWindow 통합
+- **개선:** `src/ui/main_window.py` - TTS 생성 및 오디오 타임라인 연동
+  - `_on_generate_tts()` 수정
+    - `AudioMerger.get_audio_duration()` 호출하여 오디오 길이 자동 측정
+    - `track.audio_duration_ms` 설정 (초 → 밀리초 변환)
+    - `track.audio_start_ms = 0` (타임라인 시작)
+    - 실패 시 fallback: 마지막 세그먼트 end_ms 사용
+  - `_on_timeline_audio_moved()` 신규 핸들러
+    - 타임라인에서 오디오 이동/리사이즈 시 호출
+    - `track.audio_start_ms`, `track.audio_duration_ms` 직접 업데이트
+    - 상태바 메시지 표시 ("Audio track adjusted: XXms ~ XXms")
+  - 시그널 연결: `self._timeline.audio_moved.connect(self._on_timeline_audio_moved)`
+
+#### 5. 프로젝트 I/O
+- **개선:** `src/services/project_io.py` - 오디오 타임라인 저장/로드
+  - `save_project()` 수정
+    - track_data에 `audio_start_ms`, `audio_duration_ms` 추가
+  - `load_project()` 수정
+    - v2 format: track_data에서 `audio_start_ms`, `audio_duration_ms` 읽기
+    - 기본값 0 (하위 호환성)
+  - 기존 프로젝트 파일과 완전 호환
+
+#### 6. UI 개선
+- **개선:** `src/utils/config.py` - 타임라인 높이 증가
+  - `TIMELINE_HEIGHT = 140` (기존 120 → +20)
+  - 오디오 트랙 공간 확보 (75~115 픽셀)
+  - 주석 추가: "Increased to accommodate audio track"
+
+#### 7. 테스트
+- **신규:** `tests/test_audio_timeline.py` - 9개 오디오 타임라인 테스트
+  - 필드 초기화 및 기본값
+  - 이동 (audio_start_ms 변경)
+  - 리사이즈 (audio_duration_ms 변경)
+  - 좌측 가장자리 리사이즈 (start + duration 동시 변경)
+  - 우측 가장자리 리사이즈 (duration만 변경)
+  - 자막 세그먼트와 함께 사용
+  - 직렬화/역직렬화 (persistence)
+  - 경계 제약 조건 (음수 방지, 최소값 클램핑)
+
+- **개선:** `tests/test_project_io.py` - 4개 오디오 타임라인 I/O 테스트
+  - 저장/로드 라운드트립 (audio_start_ms, audio_duration_ms 유지)
+  - JSON 구조 검증 (필드 존재 확인)
+  - 멀티트랙 (오디오 있는 트랙 + 없는 트랙 혼합)
+  - 하위 호환성 (오래된 프로젝트 파일 로드 시 기본값 0)
+
+- **전체 테스트:** `pytest tests/ -v` → **109/109 passed**
+  - 기존 96개 + 신규 13개 (오디오 타임라인 9개 + I/O 4개)
+  - 0.11초 실행
+  - 회귀 없음 ✅
+
+### 기술 세부사항
+
+#### 타임라인 레이아웃 (높이 140px)
+```
+0-14px:     눈금자 (ruler + timecode)
+20-70px:    자막 세그먼트 (subtitle segments)
+75-115px:   오디오 트랙 (audio track) ← NEW
+120-140px:  하단 여백
+```
+
+#### 오디오 편집 워크플로우
+```
+사용자가 오디오 박스 클릭/드래그
+    ↓
+_hit_test() → "audio_body" / "audio_left_edge" / "audio_right_edge"
+    ↓
+_start_audio_drag() → 원본 위치 저장 (drag_orig_audio_start_ms, drag_orig_audio_duration_ms)
+    ↓
+mouseMoveEvent() → _handle_audio_drag()
+    ├─ AUDIO_MOVE: new_start = orig_start + dx_ms
+    ├─ AUDIO_RESIZE_LEFT: new_start = orig_start + dx_ms, duration += (old_start - new_start)
+    └─ AUDIO_RESIZE_RIGHT: new_duration = orig_duration + dx_ms
+    ↓
+mouseReleaseEvent() → audio_moved.emit(new_start_ms, new_duration_ms)
+    ↓
+MainWindow._on_timeline_audio_moved() → track.audio_start_ms/duration_ms 업데이트
+    ↓
+프로젝트 저장 시 audio_start_ms, audio_duration_ms 자동 저장
+```
+
+#### Hit Test 우선순위
+1. 오디오 트랙 (y: 75-115)
+   - 왼쪽 가장자리 (±6px)
+   - 오른쪽 가장자리 (±6px)
+   - 본문
+2. 자막 세그먼트 (y: 20-70)
+   - 왼쪽/오른쪽 가장자리
+   - 본문
+
+### 사용 방법
+
+1. **TTS 생성**:
+   ```
+   Ctrl+T → 대본 입력 → Generate
+   ```
+
+2. **오디오 타임라인 확인**:
+   - 타임라인 하단에 녹색 오디오 박스 자동 표시
+   - "🔊 TTS Audio" 레이블 표시
+   - FFprobe로 측정된 정확한 길이 반영
+
+3. **오디오 이동**:
+   - 오디오 박스 중앙 클릭 → 좌우 드래그
+   - 상태바: "Audio track adjusted: XXms ~ XXms"
+
+4. **오디오 크기 조절**:
+   - 왼쪽 가장자리 드래그: 시작 위치 조정 (duration 자동 변경)
+   - 오른쪽 가장자리 드래그: 재생 길이 조정 (start 고정)
+
+5. **프로젝트 저장/로드**:
+   - Ctrl+S로 저장 → audio_start_ms, audio_duration_ms 자동 저장
+   - 프로젝트 재로드 → 오디오 타임라인 정보 복원
+
+### 파일 변경 요약
+- **수정:** 6개 파일
+  - `src/models/subtitle.py` (+2 필드)
+  - `src/ui/timeline_widget.py` (+오디오 레이어, 드래그/리사이즈)
+  - `src/ui/main_window.py` (+오디오 길이 측정, 시그널 핸들러)
+  - `src/services/project_io.py` (+오디오 타임라인 I/O)
+  - `src/utils/config.py` (+타임라인 높이)
+  - `tests/test_project_io.py` (+4 테스트)
+- **신규:** 1개 파일
+  - `tests/test_audio_timeline.py` (9 테스트)
+
+### 성과
+- ✅ 타임라인에서 오디오 시각화 및 편집 완전 구현
+- ✅ 직관적인 드래그 앤 드롭 인터페이스
+- ✅ 프로젝트 파일 하위 호환성 유지
+- ✅ 13개 새 테스트 추가 (모두 통과)
+- ✅ 기존 기능 회귀 없음
+
+---
+
 ## 2026-02-08 (Day 6) 작업 요약
 
 **TTS (Text-to-Speech) 음성 생성 기능 구현 완료**
