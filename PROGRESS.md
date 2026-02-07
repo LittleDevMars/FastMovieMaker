@@ -11,11 +11,34 @@
 - GitHub CLI 설치 및 공개 레포 생성
 - push 완료: https://github.com/LittleDevMars/FastMovieMaker
 
+---
+
+## 2026-02-08 (Day 2) 작업 요약
+
+**macOS 환경 세팅 및 크로스 플랫폼 지원**
+
+- 의존성 전체 설치 완료 (PySide6, torch, torchaudio, openai-whisper, ffmpeg-python)
+- `python3 main.py` 실행 테스트 → 영상 로드 및 재생 확인 완료
+- macOS/Windows 크로스 플랫폼 대응:
+  - `main.py`: `QT_MEDIA_BACKEND`를 플랫폼별 자동 설정 (darwin/windows)
+  - `src/utils/config.py`: FFmpeg 경로를 플랫폼별 자동 감지 (macOS: `/opt/homebrew/bin/ffmpeg`)
+  - `AGENTS.md`: macOS/Windows 양쪽 빌드 가이드 업데이트
+- Git push 완료
+
+**검증 결과:**
+- [x] 앱 창이 정상적으로 뜨는지
+- [x] 커맨드라인 인자로 MP4 로드 및 재생 동작
+- [x] 타임라인에 재생 헤드 표시 및 이동
+- [ ] Subtitles → Generate → Whisper 자막 생성 (미테스트)
+- [ ] 자막 오버레이 표시 (미테스트)
+- [ ] File → Export SRT (미테스트)
+- [ ] `pytest tests/ -v` 단위 테스트 (미실행)
+
 **다음 세션 TODO:**
-1. 의존성 설치 (`torch`, `PySide6`, `openai-whisper` 등)
-2. `python main.py` 실행 테스트
-3. `pytest tests/ -v` 단위 테스트 실행
-4. 검증 체크리스트 항목 확인
+1. Whisper 자막 생성 기능 테스트
+2. 자막 편집/오버레이 기능 테스트
+3. SRT 내보내기 및 영상 내보내기 테스트
+4. `pytest tests/ -v` 단위 테스트 실행
 
 ---
 
