@@ -165,8 +165,28 @@ class TimelineWidget(QWidget):
 
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
         """Draw audio track below subtitle segments."""
-        if not self._track.audio_path or self._track.audio_duration_ms <= 0:
+        # Debug: File logging
+        import datetime
+        log_file = "/tmp/timeline_audio_debug.log"
+
+        def log(msg):
+            with open(log_file, "a") as f:
+                f.write(f"[{datetime.datetime.now()}] {msg}\n")
+
+        # Debug: Check why audio track is not showing
+        if not self._track:
+            log("_draw_audio_track - no track")
             return
+
+        log(f"_draw_audio_track - track={self._track.name}, "
+            f"audio_path={self._track.audio_path}, "
+            f"audio_duration_ms={self._track.audio_duration_ms}")
+
+        if not self._track.audio_path or self._track.audio_duration_ms <= 0:
+            log(f"_draw_audio_track - early return (no audio or duration <= 0)")
+            return
+
+        log(f"_draw_audio_track - DRAWING AUDIO BOX!")
 
         audio_y = 75
         audio_h = 40

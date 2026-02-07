@@ -65,7 +65,10 @@
       "Bash(python:*)",
       "Bash(pytest:*)",
       "Bash(ls:*)",
-      "Bash(open:*)"
+      "Bash(open:*)",
+      "Bash(PYTHONPATH=/Users/namhyunjun/MyProject/FastMovieMaker python3:*)",
+      "Bash(pkill:*)",
+      "Bash(find:*)"
     ]
   }
 }

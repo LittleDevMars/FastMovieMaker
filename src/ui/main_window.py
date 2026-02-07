@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QUrl, Qt
@@ -284,6 +285,14 @@ class MainWindow(QMainWindow):
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
+
+        screenshot_action = QAction("Take &Screenshot", self)
+        screenshot_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        screenshot_action.triggered.connect(self._on_take_screenshot)
+        help_menu.addAction(screenshot_action)
+
+        help_menu.addSeparator()
+
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -1055,6 +1064,31 @@ class MainWindow(QMainWindow):
 
     def _on_player_error(self, error, error_string: str) -> None:
         self.statusBar().showMessage(f"Player error: {error_string}")
+
+    def _on_take_screenshot(self) -> None:
+        """Capture a screenshot of the main window for debugging."""
+        try:
+            # Generate timestamp filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = Path(f"/tmp/fastmoviemaker_screenshot_{timestamp}.png")
+
+            # Capture the window
+            pixmap = self.grab()
+            pixmap.save(str(screenshot_path))
+
+            # Show status message with path
+            self.statusBar().showMessage(
+                f"Screenshot saved: {screenshot_path}", 5000
+            )
+            print(f"✅ Screenshot saved to: {screenshot_path}")
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Screenshot Failed",
+                f"Failed to capture screenshot:\n{e}"
+            )
+            print(f"❌ Screenshot error: {e}")
 
     def _on_about(self) -> None:
         QMessageBox.about(
