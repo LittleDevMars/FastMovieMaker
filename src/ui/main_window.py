@@ -27,7 +27,9 @@ from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.autosave import AutoSaveManager
 from src.services.subtitle_exporter import export_srt, import_srt
+from src.services.translator import TranslatorService
 from src.ui.dialogs.recovery_dialog import RecoveryDialog
+from src.ui.dialogs.translate_dialog import TranslateDialog
 from src.ui.commands import (
     AddSegmentCommand,
     BatchShiftCommand,
@@ -231,6 +233,12 @@ class MainWindow(QMainWindow):
         clear_action = QAction("&Clear Subtitles", self)
         clear_action.triggered.connect(self._on_clear_subtitles)
         sub_menu.addAction(clear_action)
+
+        sub_menu.addSeparator()
+
+        translate_action = QAction("&Translate Track...", self)
+        translate_action.triggered.connect(self._on_translate_track)
+        sub_menu.addAction(translate_action)
 
         sub_menu.addSeparator()
 
@@ -640,6 +648,41 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
         self.statusBar().showMessage("Subtitles cleared")
+
+    def _on_translate_track(self) -> None:
+        """Open the translate dialog and process the translation."""
+        if not self._project.has_subtitles:
+            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to translate.")
+            return
+
+        # Available languages
+        available_langs = [
+            "Korean", "English", "Japanese", "Chinese", "Spanish", "French",
+            "German", "Russian", "Portuguese", "Italian", "Dutch"
+        ]
+
+        # Create and show the dialog
+        dialog = TranslateDialog(self._project.subtitle_track, available_langs, self)
+        result = dialog.exec()
+
+        if result == QDialog.DialogCode.Accepted:
+            translated_track = dialog.get_result_track()
+            if translated_track:
+                if dialog.is_new_track():
+                    # Add as new track
+                    self._project.subtitle_tracks.append(translated_track)
+                    self._project.active_track_index = len(self._project.subtitle_tracks) - 1
+                    self._refresh_track_selector()
+                    self._on_track_changed(self._project.active_track_index)
+                    self.statusBar().showMessage(f"Added translated track: {translated_track.name}")
+                else:
+                    # Replace current track
+                    self._project.subtitle_track = translated_track
+                    self._refresh_all_widgets()
+                    self.statusBar().showMessage("Track translated")
+
+                # Notify autosave
+                self._autosave.notify_edit()
 
     def _on_edit_default_style(self) -> None:
         from src.ui.dialogs.style_dialog import StyleDialog
