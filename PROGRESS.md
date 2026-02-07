@@ -145,8 +145,95 @@
 - [x] 단위 테스트 36/36 passed
 
 **다음 세션 TODO:**
-1. GUI 통합 테스트 (실행하여 전체 기능 수동 검증)
-2. Phase 4 계획 논의
+1. ~~GUI 통합 테스트 (실행하여 전체 기능 수동 검증)~~ → Day 3에서 완료
+2. ~~Phase 4 계획 논의~~ → Phase 4 구현 시작
+
+---
+
+## 2026-02-08 (Day 3 - 계속) 작업 요약
+
+**Phase 4 Week 1-2 구현 완료**
+
+### MKV 파일 지원
+- MKV 파일 로딩 시 자동 MP4 변환 (macOS AVFoundation 미지원 대응)
+- `main_window.py`: FFmpeg 기반 변환 (`_convert_to_mp4()`) + QProgressDialog
+
+### 윈도우 크기 조정
+- 기본 윈도우 크기: 1100x700 → 1440x900
+- 비디오 위젯 최소 크기: 640x360
+- 스플리터 사이즈 명시 설정
+
+### Phase 4 Week 1: Professional Workflow
+- **신규:** `src/services/autosave.py` - AutoSaveManager
+  - 30초 간격 자동 저장
+  - 5초 idle timeout (편집 후 5초 뒤 저장)
+  - Recovery 파일 관리 (`~/.fastmoviemaker/autosave/`)
+  - Recent files 리스트 관리 (최대 10개)
+- **신규:** `src/ui/dialogs/recovery_dialog.py` - RecoveryDialog
+  - 앱 시작 시 복구 파일 감지 → 복원/삭제 선택
+- **File 메뉴:** Recent Projects 서브메뉴 추가
+- **Drag & Drop:** 비디오/SRT/프로젝트 파일 드래그 앤 드롭 지원
+- **신규:** `src/ui/search_bar.py` - SearchBar 위젯
+  - 자막 텍스트 검색 (대소문자 구분 옵션)
+  - 검색 결과 카운터 및 네비게이션 (Next/Previous)
+- **subtitle_panel.py:** SearchBar 통합
+  - `Ctrl+F` - 검색창 표시
+  - `F3` / `Shift+F3` - 다음/이전 결과
+  - `Escape` - 검색 닫기
+  - 검색 결과 하이라이트 (라이트 블루 배경)
+  - 검색 결과 클릭 시 자동 시크
+
+### Phase 4 Week 2: Translation & Settings
+- **신규:** `src/services/translator.py` - TranslatorService
+  - 3가지 번역 엔진 지원: DeepL API, GPT-4o-mini, Google Translate
+  - 배치 번역 + 속도 제한 (rate limiting)
+  - 언어 코드 매핑 (ISO_639_1_CODES, DEEPL_LANGUAGE_CODES)
+- **신규:** `src/ui/dialogs/translate_dialog.py` - TranslateDialog
+  - Source/Target 언어 선택
+  - 번역 엔진 선택 + API 키 입력/저장
+  - 프로그레스바 + 미리보기
+  - 옵션: 새 트랙 생성 vs 현재 트랙 교체
+- **main_window.py:** Subtitles 메뉴에 "Translate Track..." 추가
+- **신규:** `src/services/settings_manager.py` - SettingsManager
+  - QSettings 래퍼 (type-safe 환경 설정 관리)
+  - 일반 설정 (autosave interval/idle, recent files max, default language)
+  - 편집 설정 (default subtitle duration, snap tolerance, frame FPS)
+  - 고급 설정 (FFmpeg path, Whisper cache directory)
+  - API 키 설정 (DeepL, OpenAI)
+  - UI 설정 (theme)
+- **신규:** `src/ui/dialogs/preferences_dialog.py` - PreferencesDialog
+  - 4개 탭: General / Editing / Advanced / API Keys
+  - QTabWidget 기반 환경 설정 UI
+  - 실시간 설정 로드/저장 (QSettings 동기화)
+- **main_window.py:** Edit 메뉴에 "Preferences..." 추가 (`Ctrl+,`)
+- **translate_dialog.py:** SettingsManager 사용으로 마이그레이션 (QSettings 직접 호출 제거)
+
+### Git Commits
+1. Phase 3 전체 구현 (78cfece)
+2. Phase 4 Week 1 기능 (4bce445)
+3. Phase 4 Week 2 Translation (8115f02)
+
+### 검증
+- [x] MKV 파일 자동 변환 및 로드
+- [x] 윈도우 크기 적절히 조정
+- [x] Autosave + Recovery 동작
+- [x] Recent Projects 메뉴 표시
+- [x] Drag & Drop 파일 로드
+- [x] 자막 검색 (Ctrl+F, F3/Shift+F3)
+- [x] 번역 다이얼로그 표시 및 API 키 저장
+- [x] Preferences 다이얼로그 표시 및 설정 저장
+- [x] `python3 main.py` 실행 정상 (import 에러 없음)
+
+### 버그 수정
+- **MKV 오디오 재생 문제 해결**
+  - 문제: 5.1/7.1 서라운드 오디오가 MacBook 스피커에서 재생 안 됨
+  - 원인: FFmpeg 변환 시 멀티채널 오디오가 스테레오로 다운믹스되지 않음
+  - 해결: `-ac 2` 옵션 추가로 모든 오디오를 스테레오로 강제 변환
+  - 영향: MKV, AVI, FLV 등 모든 변환 포맷에 적용
+
+**다음 TODO:**
+1. Phase 4 Week 2 나머지: 자막 스타일 프리셋
+2. Phase 4 Week 3: Timecode 정밀 편집, Waveform, Batch Export, 키보드 커스터마이징
 
 ---
 

@@ -62,7 +62,11 @@ class VideoPlayerWidget(QGraphicsView):
 
     def set_subtitle_track(self, track: SubtitleTrack | None) -> None:
         self._subtitle_track = track
-        self._update_subtitle(self._player.position())
+        try:
+            self._update_subtitle(self._player.position())
+        except RuntimeError:
+            # Player might be deleted during app shutdown
+            pass
 
     def _get_effective_style(self, segment: SubtitleSegment) -> SubtitleStyle:
         """Return the segment's style if set, otherwise the default style."""

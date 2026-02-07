@@ -28,6 +28,7 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.autosave import AutoSaveManager
 from src.services.subtitle_exporter import export_srt, import_srt
 from src.services.translator import TranslatorService
+from src.ui.dialogs.preferences_dialog import PreferencesDialog
 from src.ui.dialogs.recovery_dialog import RecoveryDialog
 from src.ui.dialogs.translate_dialog import TranslateDialog
 from src.ui.commands import (
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
 
         # Media stack
         self._audio_output = QAudioOutput()
+        self._audio_output.setVolume(1.0)  # Ensure volume is at maximum
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
 
@@ -221,6 +223,13 @@ class MainWindow(QMainWindow):
         batch_shift_action = QAction("&Batch Shift Timing...", self)
         batch_shift_action.triggered.connect(self._on_batch_shift)
         edit_menu.addAction(batch_shift_action)
+
+        edit_menu.addSeparator()
+
+        preferences_action = QAction("&Preferences...", self)
+        preferences_action.setShortcut(QKeySequence("Ctrl+,"))
+        preferences_action.triggered.connect(self._on_preferences)
+        edit_menu.addAction(preferences_action)
 
         # Subtitles menu
         sub_menu = menubar.addMenu("&Subtitles")
@@ -459,6 +468,14 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(cmd)
         self.statusBar().showMessage(f"All subtitles shifted by {offset:+d}ms")
 
+    def _on_preferences(self) -> None:
+        """Show the preferences dialog."""
+        dialog = PreferencesDialog(self)
+        if dialog.exec():
+            # Settings are saved in the dialog, just show a message
+            self.statusBar().showMessage("Preferences updated")
+            # Note: Some settings (like theme) require restart
+
     # ------------------------------------------------------------ Track management
 
     def _on_track_changed(self, index: int) -> None:
@@ -512,6 +529,9 @@ class MainWindow(QMainWindow):
     # Formats that macOS AVFoundation cannot play natively
     _NEEDS_CONVERT = {".mkv", ".avi", ".flv", ".wmv", ".webm"}
 
+    # All supported video formats
+    _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v"}
+
     def _load_video(self, path: Path) -> None:
         self._project.reset()
         self._undo_stack.clear()
@@ -553,8 +573,13 @@ class MainWindow(QMainWindow):
         cmd = [
             ffmpeg,
             "-i", str(source),
+            "-map", "0:v:0",  # Map first video stream
+            "-map", "0:a:0?",  # Map first audio stream if exists
             "-c:v", "copy",
             "-c:a", "aac",
+            "-ac", "2",  # Downmix to stereo (critical for laptop speakers!)
+            "-b:a", "192k",
+            "-strict", "experimental",
             "-y",
             str(tmp),
         ]
@@ -579,8 +604,13 @@ class MainWindow(QMainWindow):
                 cmd_reencode = [
                     ffmpeg,
                     "-i", str(source),
+                    "-map", "0:v:0",
+                    "-map", "0:a:0?",
                     "-c:v", "libx264", "-preset", "fast",
                     "-c:a", "aac",
+                    "-ac", "2",  # Downmix to stereo
+                    "-b:a", "192k",
+                    "-strict", "experimental",
                     "-y",
                     str(tmp),
                 ]
@@ -994,7 +1024,7 @@ class MainWindow(QMainWindow):
             elif suffix == ".fmm.json":
                 self._on_load_project(path)
 
-            elif suffix in VIDEO_EXTENSIONS:
+            elif suffix in self._VIDEO_EXTENSIONS:
                 self._load_video(path)
 
             event.acceptProposedAction()
@@ -1006,7 +1036,7 @@ class MainWindow(QMainWindow):
             return False
 
         suffix = path.suffix.lower()
-        return suffix in VIDEO_EXTENSIONS or suffix == ".srt" or suffix == ".fmm.json"
+        return suffix in self._VIDEO_EXTENSIONS or suffix == ".srt" or suffix == ".fmm.json"
 
     # ----------------------------------------------------- Lifecycle
 

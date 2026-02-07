@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QSettings, Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.subtitle import SubtitleTrack
+from src.services.settings_manager import SettingsManager
 from src.services.translator import TranslationEngine, TranslatorService
 
 
@@ -48,6 +49,7 @@ class TranslateDialog(QDialog):
         self._translator = TranslatorService(self)
         self._translator.progress.connect(self._on_progress)
         self._translator.error.connect(self._on_error)
+        self._settings = SettingsManager()
 
         # Result
         self._result_track = None
@@ -154,22 +156,20 @@ class TranslateDialog(QDialog):
         layout.addWidget(self._button_box)
 
     def _load_api_keys(self):
-        """Load saved API keys from QSettings."""
-        settings = QSettings()
-
+        """Load saved API keys from settings."""
         # Load DeepL API key
-        deepl_key = settings.value("api_keys/deepl", "")
+        deepl_key = self._settings.get_deepl_api_key()
         self._translator.set_api_key(TranslationEngine.DEEPL, deepl_key)
 
         # Load OpenAI API key
-        gpt_key = settings.value("api_keys/openai", "")
+        gpt_key = self._settings.get_openai_api_key()
         self._translator.set_api_key(TranslationEngine.GPT, gpt_key)
 
         # Update the UI with the current engine's key
         self._on_engine_changed()
 
     def _save_api_key(self):
-        """Save the API key to QSettings."""
+        """Save the API key to settings."""
         key = self._api_key_edit.text().strip()
         if not key:
             return
@@ -177,13 +177,13 @@ class TranslateDialog(QDialog):
         engine = self._engine_combo.currentData()
         self._translator.set_api_key(engine, key)
 
-        # Save to QSettings
-        settings = QSettings()
+        # Save to settings
         if engine == TranslationEngine.DEEPL:
-            settings.setValue("api_keys/deepl", key)
+            self._settings.set_deepl_api_key(key)
         elif engine == TranslationEngine.GPT:
-            settings.setValue("api_keys/openai", key)
+            self._settings.set_openai_api_key(key)
 
+        self._settings.sync()
         QMessageBox.information(self, "API Key Saved", "API key has been saved.")
 
     def _on_engine_changed(self):

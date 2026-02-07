@@ -36,7 +36,32 @@
       "Bash(\"H:/MyProject/FastMovieMaker/.venv/Scripts/pip.exe\" install edge-tts)",
       "Bash(\"H:/MyProject/FastMovieMaker/.venv/Scripts/python.exe\" -c \"\nimport asyncio\nimport edge_tts\n\nasync def main\\(\\):\n    text = ''안녕하세요. 이것은 자막 테스트 영상입니다. 빠른 영상 편집기 FastMovieMaker를 테스트하고 있습니다. 자막이 정상적으로 생성되는지 확인합니다.''\n    communicate = edge_tts.Communicate\\(text, ''ko-KR-SunHiNeural''\\)\n    await communicate.save\\(''H:/MyProject/FastMovieMaker/tests/speech.mp3''\\)\n    print\\(''Speech saved''\\)\n\nasyncio.run\\(main\\(\\)\\)\n\")",
       "Bash(\"E:/Python/Scripts/ffmpeg.exe\" -f lavfi -i testsrc=duration=15:size=1280x720:rate=30 -i \"H:/MyProject/FastMovieMaker/tests/speech.mp3\" -c:v libx264 -c:a aac -pix_fmt yuv420p -shortest -y \"H:/MyProject/FastMovieMaker/tests/test_video_speech.mp4\")",
-      "Bash(\"H:/MyProject/FastMovieMaker/.venv/Scripts/python.exe\" -c \"from src.services.video_exporter import export_video; from src.workers.export_worker import ExportWorker; print\\(''video export imports OK''\\)\")"
+      "Bash(\"H:/MyProject/FastMovieMaker/.venv/Scripts/python.exe\" -c \"from src.services.video_exporter import export_video; from src.workers.export_worker import ExportWorker; print\\(''video export imports OK''\\)\")",
+      "Bash(pip3 install:*)",
+      "Bash(screencapture:*)",
+      "Bash(osascript:*)",
+      "Bash(mdfind:*)",
+      "Bash(python3 -c \"\nfrom PySide6.QtWidgets import QApplication\nfrom PySide6.QtCore import QTimer\nimport sys, os\n\n# 이미 실행 중인 앱에 시그널을 보내는 대신,\n# 앱 프로세스에서 직접 열도록 함\n# 앱 프로세스의 stdin으로는 접근 불가하므로 다른 방법 사용\n\n# 대안: xdg-open 또는 open 명령어로 파일 연결\nos.system\\(''open -a Python /Users/namhyunjun/MyProject/youtubeShort/temp/background.mp4''\\)\n\")",
+      "Bash(/opt/homebrew/bin/ffprobe:*)",
+      "Bash(/opt/homebrew/bin/ffmpeg:*)",
+      "Bash(python3:*)",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.14/bin/python3:*)",
+      "Bash(\"/Applications/Python 3.14/Install Certificates.command\")",
+      "Bash(brew reinstall:*)",
+      "Bash(brew install:*)",
+      "Bash(brew info:*)",
+      "Bash(brew tap:*)",
+      "Bash(brew options:*)",
+      "Bash(brew cat:*)",
+      "Bash(brew unlink:*)",
+      "Bash(brew uninstall:*)",
+      "Bash(SCRATCHPAD=\"/private/tmp/claude-501/-Users-namhyunjun-MyProject-FastMovieMaker/b553729d-34ba-43de-bf33-371f204af322/scratchpad\")",
+      "Bash(SCRATCHPAD=\"/private/tmp/claude-501/-Users-namhyunjun-MyProject-FastMovieMaker/b553729d-34ba-43de-bf33-371f204af322/scratchpad\" /opt/homebrew/bin/ffmpeg:*)",
+      "Bash(SCRATCHPAD=/private/tmp/claude-501/-Users-namhyunjun-MyProject-FastMovieMaker/b553729d-34ba-43de-bf33-371f204af322/scratchpad)",
+      "Bash(gh repo view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(xargs kill:*)"
     ]
   }
 }
