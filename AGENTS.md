@@ -8,12 +8,14 @@ FastMovieMaker is a video subtitle editor with Whisper-based automatic subtitle 
 
 ## Build & Run Commands
 
-```powershell
-# Install dependencies (CUDA 12.4 - adjust for your GPU)
+```bash
+# macOS (Apple Silicon)
+pip3 install -r requirements.txt
+python3 main.py
+
+# Windows (CUDA 12.4 - adjust for your GPU)
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
-
-# Run application
 python main.py
 
 # Run all tests
@@ -28,8 +30,12 @@ pytest tests/test_models.py::TestSubtitleTrack::test_segment_at -v
 
 ## External Dependencies
 
-- **FFmpeg**: Required for audio extraction. The app looks for it at `E:\Python\Scripts\ffmpeg.exe` or via system PATH. Update `src/utils/config.py` if your FFmpeg is elsewhere.
-- **GPU Support**: Whisper uses CUDA if available, falls back to CPU.
+- **FFmpeg**: Required for audio extraction. The app auto-detects the path by platform:
+  - macOS: `/opt/homebrew/bin/ffmpeg` (Homebrew default)
+  - Windows: `E:\Python\Scripts\ffmpeg.exe`
+  - Others: system PATH
+  - Update `src/utils/config.py` if your FFmpeg is elsewhere.
+- **GPU Support**: Whisper uses CUDA if available, MPS (Apple Silicon) if available, falls back to CPU.
 
 ## Architecture
 

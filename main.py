@@ -3,8 +3,11 @@
 import os
 import sys
 
-# Use Windows Media Foundation backend (Qt's bundled FFmpeg backend has issues)
-os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
+# Set platform-appropriate media backend
+if sys.platform == "darwin":
+    os.environ.setdefault("QT_MEDIA_BACKEND", "darwin")
+elif sys.platform == "win32":
+    os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt

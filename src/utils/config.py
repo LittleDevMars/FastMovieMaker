@@ -10,7 +10,13 @@ APP_VERSION = "0.1.0"
 ORG_NAME = "FastMovieMaker"
 
 # FFmpeg
-FFMPEG_PATH = r"E:\Python\Scripts\ffmpeg.exe"
+import sys
+if sys.platform == "darwin":
+    FFMPEG_PATH = "/opt/homebrew/bin/ffmpeg"
+elif sys.platform == "win32":
+    FFMPEG_PATH = r"E:\Python\Scripts\ffmpeg.exe"
+else:
+    FFMPEG_PATH = "ffmpeg"
 
 def find_ffmpeg() -> str | None:
     """Return FFmpeg path if available."""
