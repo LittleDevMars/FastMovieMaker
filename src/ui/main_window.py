@@ -329,38 +329,50 @@ class MainWindow(QMainWindow):
 
     def _sync_tts_playback(self) -> None:
         """Synchronize TTS audio playback with video position."""
-        track = self._project.subtitle_track
+        try:
+            track = self._project.subtitle_track
 
-        # Check if track has TTS audio
-        if not track or not track.audio_path or track.audio_duration_ms <= 0:
-            return
+            # Check if track has TTS audio
+            if not track or not track.audio_path or track.audio_duration_ms <= 0:
+                return
 
-        # Check if audio file exists
-        audio_path = Path(track.audio_path)
-        if not audio_path.exists():
-            return
+            # Check if audio file exists
+            audio_path = Path(track.audio_path)
+            if not audio_path.exists():
+                return
 
-        # Get current playback position
-        current_pos_ms = self._player.position()
-        audio_start_ms = track.audio_start_ms
-        audio_end_ms = audio_start_ms + track.audio_duration_ms
+            # Get current playback position
+            current_pos_ms = self._player.position()
+            audio_start_ms = track.audio_start_ms
+            audio_end_ms = audio_start_ms + track.audio_duration_ms
 
-        # Check if current position is within TTS audio range
-        if audio_start_ms <= current_pos_ms < audio_end_ms:
-            # Calculate TTS audio position (offset from audio start)
-            tts_pos_ms = current_pos_ms - audio_start_ms
+            # Check if current position is within TTS audio range
+            if audio_start_ms <= current_pos_ms < audio_end_ms:
+                # Calculate TTS audio position (offset from audio start)
+                tts_pos_ms = current_pos_ms - audio_start_ms
 
-            # Load audio if not already loaded or different source
-            if self._tts_player.source() != QUrl.fromLocalFile(str(audio_path)):
-                self._tts_player.setSource(QUrl.fromLocalFile(str(audio_path)))
+                # Load audio if not already loaded or different source
+                current_source = self._tts_player.source()
+                new_source = QUrl.fromLocalFile(str(audio_path))
 
-            # Set position and play
-            self._tts_player.setPosition(tts_pos_ms)
-            self._tts_player.play()
-        else:
-            # Outside TTS audio range, stop TTS playback
-            if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-                self._tts_player.pause()
+                # Compare source URLs (handle empty source case)
+                if not current_source.isValid() or current_source != new_source:
+                    self._tts_player.setSource(new_source)
+
+                # Set position and play
+                self._tts_player.setPosition(tts_pos_ms)
+
+                # Only call play() if not already playing
+                if self._tts_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+                    self._tts_player.play()
+            else:
+                # Outside TTS audio range, stop TTS playback
+                if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                    self._tts_player.pause()
+
+        except Exception as e:
+            # Silently handle TTS sync errors to avoid disrupting playback
+            print(f"Warning: TTS sync error: {e}")
 
     def _seek_relative(self, delta_ms: int) -> None:
         pos = max(0, self._player.position() + delta_ms)
