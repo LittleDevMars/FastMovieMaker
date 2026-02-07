@@ -133,11 +133,20 @@ class TimelineWidget(QWidget):
         w = self.width()
         h = self.height()
 
+        # Always fill background - this should always be visible
         painter.fillRect(0, 0, w, h, self._BG_COLOR)
+
+        # Draw a bright border to make timeline visible
+        painter.setPen(QPen(QColor(255, 0, 0), 3))  # Red border for debugging
+        painter.drawRect(1, 1, w-2, h-2)
+
+        # Draw debug text
+        painter.setPen(QColor(255, 255, 0))  # Yellow text
+        painter.drawText(10, 20, f"TIMELINE: {w}x{h}")
 
         if self._duration_ms <= 0:
             painter.setPen(self._RULER_TEXT_COLOR)
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No video loaded")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Timeline: No video loaded")
             painter.end()
             return
 
