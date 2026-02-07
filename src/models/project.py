@@ -18,6 +18,7 @@ class ProjectState:
     active_track_index: int = 0
     duration_ms: int = 0
     default_style: SubtitleStyle = field(default_factory=SubtitleStyle)
+    video_has_audio: bool = False  # Whether video file has audio track
 
     @property
     def subtitle_track(self) -> SubtitleTrack:

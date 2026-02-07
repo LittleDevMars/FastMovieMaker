@@ -56,10 +56,12 @@ class TimelineWidget(QWidget):
     _SELECTED_COLOR = QColor(100, 200, 255, 200)
     _SELECTED_BORDER = QColor(150, 220, 255)
     _PLAYHEAD_COLOR = QColor(255, 60, 60)
-    _AUDIO_COLOR = QColor(100, 200, 100, 180)
+    _AUDIO_COLOR = QColor(100, 200, 100, 180)  # TTS audio - green
     _AUDIO_BORDER = QColor(120, 220, 120)
     _AUDIO_SELECTED_COLOR = QColor(150, 255, 150, 200)
     _AUDIO_SELECTED_BORDER = QColor(180, 255, 180)
+    _VIDEO_AUDIO_COLOR = QColor(255, 150, 50, 180)  # Video audio - orange
+    _VIDEO_AUDIO_BORDER = QColor(255, 180, 80)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -147,8 +149,9 @@ class TimelineWidget(QWidget):
         self._px_per_ms = w / visible_ms
 
         self._draw_ruler(painter, w, h, visible_ms)
+        self._draw_video_audio(painter, w, h)  # Video audio track (if video loaded)
         if self._track:
-            self._draw_audio_track(painter, h)
+            self._draw_audio_track(painter, h)  # TTS audio track
             self._draw_segments(painter, h)
         self._draw_playhead(painter, h)
         painter.end()
@@ -170,6 +173,34 @@ class TimelineWidget(QWidget):
             painter.setPen(self._RULER_TEXT_COLOR)
             painter.drawText(int(x) + 3, 12, ms_to_display(int(t)))
             t += tick_ms
+
+    def _draw_video_audio(self, painter: QPainter, w: int, h: int) -> None:
+        """Draw video audio track (orange box spanning entire video duration)."""
+        # Only draw if we have a duration (video loaded)
+        if self._duration_ms <= 0:
+            return
+
+        video_audio_y = 120  # Below TTS audio
+        video_audio_h = 15   # Smaller height
+
+        x1 = self._ms_to_x(0)
+        x2 = self._ms_to_x(self._duration_ms)
+
+        if x2 < 0 or x1 > w:
+            return
+
+        rect = QRectF(x1, video_audio_y, max(x2 - x1, 2), video_audio_h)
+
+        painter.setPen(QPen(self._VIDEO_AUDIO_BORDER, 1))
+        painter.setBrush(QBrush(self._VIDEO_AUDIO_COLOR))
+        painter.drawRoundedRect(rect, 3, 3)
+
+        # Draw label
+        if x2 - x1 > 100:  # Only if wide enough
+            painter.setPen(QColor(255, 255, 255))
+            painter.setFont(QFont("Arial", 9))
+            label_rect = QRectF(x1 + 5, video_audio_y, x2 - x1 - 10, video_audio_h)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "🎬 Video Audio")
 
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
         """Draw audio track below subtitle segments."""
