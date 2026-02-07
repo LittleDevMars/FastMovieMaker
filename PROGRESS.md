@@ -25,17 +25,25 @@
   - `AGENTS.md`: macOS/Windows 양쪽 빌드 가이드 업데이트
 - Git push 완료
 
+**Whisper 자막 생성 파이프라인 테스트**
+
+- `audio_extractor.py`: `subprocess.CREATE_NO_WINDOW` macOS 호환성 수정 (Windows 전용 → 플랫폼 분기)
+- Python SSL 인증서 설치 (Whisper 모델 다운로드용)
+- Whisper tiny 모델 다운로드 및 전사 테스트 성공
+  - 오디오 추출 (FFmpeg) → Whisper 전사 → SubtitleTrack 변환 파이프라인 정상 동작 확인
+
 **검증 결과:**
 - [x] 앱 창이 정상적으로 뜨는지
 - [x] 커맨드라인 인자로 MP4 로드 및 재생 동작
 - [x] 타임라인에 재생 헤드 표시 및 이동
-- [ ] Subtitles → Generate → Whisper 자막 생성 (미테스트)
+- [x] Whisper 자막 생성 파이프라인 (오디오 추출 → 모델 로드 → 전사 → SubtitleTrack)
+- [ ] UI에서 Subtitles → Generate 다이얼로그 테스트 (Accessibility 권한 필요)
 - [ ] 자막 오버레이 표시 (미테스트)
 - [ ] File → Export SRT (미테스트)
 - [ ] `pytest tests/ -v` 단위 테스트 (미실행)
 
 **다음 세션 TODO:**
-1. Whisper 자막 생성 기능 테스트
+1. UI에서 Whisper 자막 생성 다이얼로그 테스트
 2. 자막 편집/오버레이 기능 테스트
 3. SRT 내보내기 및 영상 내보내기 테스트
 4. `pytest tests/ -v` 단위 테스트 실행
