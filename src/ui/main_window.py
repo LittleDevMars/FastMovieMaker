@@ -382,8 +382,8 @@ class MainWindow(QMainWindow):
         """Push current model state to all widgets."""
         track = self._project.subtitle_track
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
-        self._subtitle_panel.refresh()
-        self._timeline.refresh()
+        self._subtitle_panel.set_track(track if len(track) > 0 else None)
+        self._timeline.set_track(track if len(track) > 0 else None)
         # Notify autosave of edits
         self._autosave.notify_edit()
 
