@@ -322,12 +322,50 @@ class MainWindow(QMainWindow):
     def _toggle_play_pause(self) -> None:
         if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self._player.pause()
+            self._tts_player.pause()
         else:
             self._player.play()
+            self._sync_tts_playback()
+
+    def _sync_tts_playback(self) -> None:
+        """Synchronize TTS audio playback with video position."""
+        track = self._project.subtitle_track
+
+        # Check if track has TTS audio
+        if not track or not track.audio_path or track.audio_duration_ms <= 0:
+            return
+
+        # Check if audio file exists
+        audio_path = Path(track.audio_path)
+        if not audio_path.exists():
+            return
+
+        # Get current playback position
+        current_pos_ms = self._player.position()
+        audio_start_ms = track.audio_start_ms
+        audio_end_ms = audio_start_ms + track.audio_duration_ms
+
+        # Check if current position is within TTS audio range
+        if audio_start_ms <= current_pos_ms < audio_end_ms:
+            # Calculate TTS audio position (offset from audio start)
+            tts_pos_ms = current_pos_ms - audio_start_ms
+
+            # Load audio if not already loaded or different source
+            if self._tts_player.source() != QUrl.fromLocalFile(str(audio_path)):
+                self._tts_player.setSource(QUrl.fromLocalFile(str(audio_path)))
+
+            # Set position and play
+            self._tts_player.setPosition(tts_pos_ms)
+            self._tts_player.play()
+        else:
+            # Outside TTS audio range, stop TTS playback
+            if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self._tts_player.pause()
 
     def _seek_relative(self, delta_ms: int) -> None:
         pos = max(0, self._player.position() + delta_ms)
         self._player.setPosition(pos)
+        self._sync_tts_playback()
 
     def _seek_frame_relative(self, frame_delta: int) -> None:
         """Seek by a relative number of frames.
@@ -346,6 +384,7 @@ class MainWindow(QMainWindow):
         ms_delta = frame_to_ms(frame_delta, fps)
 
         self._seek_relative(ms_delta)
+        self._sync_tts_playback()
 
     def _on_delete_selected_subtitle(self) -> None:
         rows = self._subtitle_panel._table.selectionModel().selectedRows()
@@ -359,6 +398,7 @@ class MainWindow(QMainWindow):
         self._player.positionChanged.connect(self._timeline.set_playhead)
         self._player.errorOccurred.connect(self._on_player_error)
         self._controls.position_changed_by_user.connect(self._timeline.set_playhead)
+        self._controls.position_changed_by_user.connect(self._on_position_changed_by_user)
 
         # Seek signals
         self._timeline.seek_requested.connect(self._on_timeline_seek)
@@ -1061,6 +1101,11 @@ class MainWindow(QMainWindow):
 
     def _on_timeline_seek(self, position_ms: int) -> None:
         self._player.setPosition(position_ms)
+        self._sync_tts_playback()
+
+    def _on_position_changed_by_user(self, position_ms: int) -> None:
+        """Handle position change from playback controls slider."""
+        self._sync_tts_playback()
 
     def _on_player_error(self, error, error_string: str) -> None:
         self.statusBar().showMessage(f"Player error: {error_string}")
