@@ -23,20 +23,38 @@ from PySide6.QtWidgets import (
 from src.ui.search_bar import SearchBar
 
 from src.models.subtitle import SubtitleTrack
-from src.utils.time_utils import ms_to_display, display_to_ms
+from src.utils.time_utils import ms_to_display, parse_flexible_timecode
 
 
 class _TimeEditDialog(QDialog):
-    """Small dialog to edit start / end times."""
+    """Dialog to edit start/end times with flexible timecode format support."""
 
-    def __init__(self, start_ms: int, end_ms: int, parent=None):
+    def __init__(self, start_ms: int, end_ms: int, fps: int, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Time")
+        self._fps = fps
+
         layout = QFormLayout(self)
+
+        # Input fields with current values
         self._start_edit = QLineEdit(ms_to_display(start_ms))
         self._end_edit = QLineEdit(ms_to_display(end_ms))
-        layout.addRow("Start (MM:SS.mmm):", self._start_edit)
-        layout.addRow("End (MM:SS.mmm):", self._end_edit)
+        layout.addRow("Start:", self._start_edit)
+        layout.addRow("End:", self._end_edit)
+
+        # Help text showing supported formats
+        help_text = QLabel(
+            "Supported formats:\n"
+            "• MM:SS.mmm (e.g., 01:23.456)\n"
+            "• HH:MM:SS.mmm (e.g., 00:01:23.456)\n"
+            "• HH:MM:SS:FF (e.g., 00:01:23:15)\n"
+            f"• F:123 (frame number at {fps} fps)"
+        )
+        help_text.setStyleSheet("color: gray; font-size: 10px;")
+        help_text.setWordWrap(True)
+        layout.addRow("", help_text)
+
+        # OK/Cancel buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -45,7 +63,17 @@ class _TimeEditDialog(QDialog):
         layout.addRow(buttons)
 
     def values(self) -> tuple[int, int]:
-        return display_to_ms(self._start_edit.text()), display_to_ms(self._end_edit.text())
+        """Parse and return start/end times in milliseconds.
+
+        Returns:
+            Tuple of (start_ms, end_ms)
+
+        Raises:
+            ValueError: If timecode format is invalid
+        """
+        start_ms = parse_flexible_timecode(self._start_edit.text(), self._fps)
+        end_ms = parse_flexible_timecode(self._end_edit.text(), self._fps)
+        return start_ms, end_ms
 
 
 class SubtitlePanel(QWidget):
@@ -179,14 +207,28 @@ class SubtitlePanel(QWidget):
         elif col in (1, 2):
             # Open time edit dialog
             seg = self._track[row]
-            dlg = _TimeEditDialog(seg.start_ms, seg.end_ms, self)
+
+            # Get FPS from settings
+            from src.services.settings_manager import SettingsManager
+            settings = SettingsManager()
+            fps = settings.get_frame_seek_fps()
+
+            dlg = _TimeEditDialog(seg.start_ms, seg.end_ms, fps, self)
             if dlg.exec():
                 try:
                     start, end = dlg.values()
                     if end > start:
                         self.time_edited.emit(row, start, end)
-                except (ValueError, IndexError):
-                    QMessageBox.warning(self, "Invalid Time", "Could not parse time values.")
+                    else:
+                        QMessageBox.warning(
+                            self, "Invalid Time Range",
+                            "End time must be greater than start time."
+                        )
+                except ValueError as e:
+                    QMessageBox.warning(
+                        self, "Invalid Timecode",
+                        f"Could not parse timecode: {str(e)}"
+                    )
 
     def _on_cell_changed(self, row: int, col: int) -> None:
         if self._editing or col != 3:

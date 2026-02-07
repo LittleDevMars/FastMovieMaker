@@ -77,3 +77,16 @@ Models and services are intentionally Qt-free for testability. Workers wrap serv
 ### Time Units
 
 All timestamps use **milliseconds (int)** internally. Conversion helpers in `src/utils/time_utils.py`.
+
+**Frame-based editing** is supported via conversion functions:
+- `ms_to_frame(ms, fps)` / `frame_to_ms(frame, fps)` - Convert between ms and frame numbers
+- `snap_to_frame(ms, fps)` - Snap to nearest frame boundary
+- Frame-based keyboard seek: `Shift+Left/Right` moves by 1 frame
+
+**Timecode formats** supported in time edit dialogs:
+- `MM:SS.mmm` - Minutes:Seconds.milliseconds (e.g., 01:23.456)
+- `HH:MM:SS.mmm` - Hours:Minutes:Seconds.milliseconds (e.g., 00:01:23.456)
+- `HH:MM:SS:FF` - Hours:Minutes:Seconds:Frames (e.g., 00:01:23:15)
+- `F:123` or `frame:123` - Direct frame number
+
+All timecode parsing is handled by `parse_flexible_timecode(text, fps)` which auto-detects the format.

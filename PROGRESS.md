@@ -293,7 +293,92 @@
 
 **다음 TODO:**
 1. 수동 GUI 테스트 (TESTING.md 체크리스트 실행)
-2. Phase 4 Week 3 계획 및 구현
+2. ~~Phase 4 Week 3 계획 및 구현~~ → Day 5 완료
+
+---
+
+## 2026-02-08 (Day 5) 작업 요약
+
+**Phase 4 Week 3: 타임코드 정밀 편집 구현 완료**
+
+### 구현 내용 (P0 - 핵심 기능)
+
+#### 1. 프레임 변환 유틸리티
+- **신규:** `src/utils/time_utils.py` - 6개 프레임 변환 함수 추가
+  - `ms_to_frame(ms, fps)` - 밀리초를 프레임 번호로 변환
+  - `frame_to_ms(frame, fps)` - 프레임 번호를 밀리초로 변환
+  - `snap_to_frame(ms, fps)` - 가장 가까운 프레임 경계로 스냅
+  - `ms_to_timecode_frames(ms, fps)` - HH:MM:SS:FF 형식으로 변환
+  - `timecode_frames_to_ms(text, fps)` - HH:MM:SS:FF 형식 파싱
+  - `parse_flexible_timecode(text, fps)` - 다양한 타임코드 형식 자동 파싱
+- 정수 연산 사용으로 부동소수점 오차 방지
+- 반올림으로 가장 가까운 프레임 선택
+
+#### 2. 프레임 단위 키보드 시크
+- **개선:** `src/ui/main_window.py` - 프레임 단위 키보드 단축키 추가
+  - `Shift+Left` - 한 프레임 뒤로 이동
+  - `Shift+Right` - 한 프레임 앞으로 이동
+  - `_seek_frame_relative(frame_delta)` 메서드 구현
+  - SettingsManager의 FPS 설정 사용 (기본 30fps)
+
+#### 3. 향상된 타임코드 입력
+- **개선:** `src/ui/subtitle_panel.py` - _TimeEditDialog 다이얼로그 개선
+  - 4가지 타임코드 형식 지원:
+    - `MM:SS.mmm` (기존, e.g., 01:23.456)
+    - `HH:MM:SS.mmm` (시간 포함, e.g., 00:01:23.456)
+    - `HH:MM:SS:FF` (프레임 포함, e.g., 00:01:23:15)
+    - `F:123` 또는 `frame:123` (프레임 번호)
+  - 도움말 텍스트 표시 (현재 FPS 포함)
+  - 향상된 에러 처리 (명확한 에러 메시지)
+  - FPS 파라미터 전달 (`SettingsManager`에서 가져옴)
+
+### 테스트
+- **신규:** `tests/test_time_utils.py` - 36개 프레임 변환 테스트 추가
+  - `TestFrameConversion` - 프레임 변환 및 라운드트립 (10개 테스트)
+  - `TestTimecodeFrames` - HH:MM:SS:FF 형식 변환 (14개 테스트)
+  - `TestFlexibleParsing` - 유연한 타임코드 파싱 (12개 테스트)
+  - 24/25/30/60/120 FPS 모두 테스트
+  - 엣지 케이스 (0ms, 음수, 큰 값, 잘못된 형식)
+- **전체 테스트:** `pytest tests/ -v` → **85/85 passed** (기존 49 + 신규 36)
+  - 0.16초 실행 (빠른 성능)
+  - 회귀 없음 (기존 테스트 모두 통과)
+
+### 수정된 파일
+1. `src/utils/time_utils.py` - 6개 함수 추가 (178줄 추가)
+2. `src/ui/main_window.py` - 프레임 시크 단축키 및 메서드 추가
+3. `src/ui/subtitle_panel.py` - _TimeEditDialog 개선 및 FPS 전달
+4. `tests/test_time_utils.py` - 36개 테스트 추가
+
+### 검증
+- [x] 프레임 변환 함수 정확성 (24/30/60fps)
+- [x] 프레임 → ms → 프레임 라운드트립 일치
+- [x] 프레임 스냅 기능 (가장 가까운 프레임 선택)
+- [x] 4가지 타임코드 형식 파싱
+- [x] 타임코드 형식 에러 처리
+- [x] 단위 테스트 85/85 passed
+- [x] 기존 기능 회귀 없음
+
+### 설계 원칙
+- **정수 연산 우선**: 부동소수점 오차 방지 (`int(round(...))`)
+- **FPS 독립성**: 밀리초만 저장, 프레임 번호는 실시간 계산
+- **명확한 에러 메시지**: `ValueError` with 상세 설명
+- **하위 호환성**: 기존 `MM:SS.mmm` 형식 유지
+
+### 수동 테스트 체크리스트
+- [ ] Shift+Right/Left로 프레임 단위 시크 동작
+- [ ] 타임코드 다이얼로그에서 4가지 형식 입력 가능
+- [ ] 잘못된 형식 입력 시 명확한 에러 메시지
+- [ ] FPS 설정 변경 시 프레임 시크 간격 변경
+- [ ] 프로젝트 저장/로드 시 시간 값 유지
+
+### 다음 단계 (P1 - 향상 기능, 추후 작업)
+- 타임라인 프레임 스냅 (드래그 시 프레임 경계로)
+- 프레임 번호 실시간 표시 (상태바 또는 플레이어)
+- Jump to Frame 다이얼로그
+
+**다음 TODO:**
+1. 수동 GUI 테스트 (프레임 시크 및 타임코드 입력)
+2. Phase 4 Week 3 나머지 기능 (Waveform, Batch Export) 또는 Phase 5 계획
 
 ---
 

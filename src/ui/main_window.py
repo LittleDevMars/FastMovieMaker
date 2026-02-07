@@ -273,6 +273,12 @@ class MainWindow(QMainWindow):
         sc_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
         sc_right.activated.connect(lambda: self._seek_relative(5000))
 
+        # Shift+Left/Right → seek ±1 frame
+        sc_frame_left = QShortcut(QKeySequence("Shift+Left"), self)
+        sc_frame_left.activated.connect(lambda: self._seek_frame_relative(-1))
+        sc_frame_right = QShortcut(QKeySequence("Shift+Right"), self)
+        sc_frame_right.activated.connect(lambda: self._seek_frame_relative(1))
+
         # Delete → delete selected subtitle
         sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
         sc_del.activated.connect(self._on_delete_selected_subtitle)
@@ -286,6 +292,24 @@ class MainWindow(QMainWindow):
     def _seek_relative(self, delta_ms: int) -> None:
         pos = max(0, self._player.position() + delta_ms)
         self._player.setPosition(pos)
+
+    def _seek_frame_relative(self, frame_delta: int) -> None:
+        """Seek by a relative number of frames.
+
+        Args:
+            frame_delta: Number of frames to move (+/- integer)
+        """
+        if self._player.duration() <= 0:
+            return
+
+        from src.services.settings_manager import SettingsManager
+        from src.utils.time_utils import frame_to_ms
+
+        settings = SettingsManager()
+        fps = settings.get_frame_seek_fps()
+        ms_delta = frame_to_ms(frame_delta, fps)
+
+        self._seek_relative(ms_delta)
 
     def _on_delete_selected_subtitle(self) -> None:
         rows = self._subtitle_panel._table.selectionModel().selectedRows()
