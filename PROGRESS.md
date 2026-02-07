@@ -40,13 +40,12 @@
 - [ ] UI에서 Subtitles → Generate 다이얼로그 테스트 (Accessibility 권한 필요)
 - [ ] 자막 오버레이 표시 (미테스트)
 - [ ] File → Export SRT (미테스트)
-- [ ] `pytest tests/ -v` 단위 테스트 (미실행)
+- [x] `pytest tests/ -v` 단위 테스트: 20/20 passed (0.03s)
 
 **다음 세션 TODO:**
-1. UI에서 Whisper 자막 생성 다이얼로그 테스트
+1. UI에서 Subtitles → Generate 다이얼로그 테스트
 2. 자막 편집/오버레이 기능 테스트
 3. SRT 내보내기 및 영상 내보내기 테스트
-4. `pytest tests/ -v` 단위 테스트 실행
 
 ---
 
