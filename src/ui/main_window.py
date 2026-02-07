@@ -1129,15 +1129,21 @@ class MainWindow(QMainWindow):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_path = Path(f"/tmp/fastmoviemaker_screenshot_{timestamp}.png")
 
-            # Capture the window
-            pixmap = self.grab()
+            # Capture the window - use screen() for full window capture
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            window_geometry = self.frameGeometry()
+            pixmap = screen.grabWindow(0, window_geometry.x(), window_geometry.y(),
+                                      window_geometry.width(), window_geometry.height())
             pixmap.save(str(screenshot_path))
 
             # Show status message with path
             self.statusBar().showMessage(
-                f"Screenshot saved: {screenshot_path}", 5000
+                f"Screenshot saved: {screenshot_path} ({pixmap.width()}x{pixmap.height()})", 5000
             )
             print(f"✅ Screenshot saved to: {screenshot_path}")
+            print(f"   Window geometry: {window_geometry}")
+            print(f"   Pixmap size: {pixmap.width()}x{pixmap.height()}")
 
         except Exception as e:
             QMessageBox.warning(
