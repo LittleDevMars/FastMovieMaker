@@ -1,15 +1,21 @@
 """Main application window."""
 
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QUrl, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
@@ -19,9 +25,21 @@ from PySide6.QtWidgets import (
 from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.subtitle_exporter import export_srt, import_srt
+from src.ui.commands import (
+    AddSegmentCommand,
+    BatchShiftCommand,
+    DeleteSegmentCommand,
+    EditStyleCommand,
+    EditTextCommand,
+    EditTimeCommand,
+    MergeCommand,
+    MoveSegmentCommand,
+    SplitCommand,
+)
 from src.ui.playback_controls import PlaybackControls
 from src.ui.subtitle_panel import SubtitlePanel
 from src.ui.timeline_widget import TimelineWidget
+from src.ui.track_selector import TrackSelector
 from src.ui.video_player_widget import VideoPlayerWidget
 from src.ui.dialogs.whisper_dialog import WhisperDialog
 from src.utils.config import APP_NAME, APP_VERSION, VIDEO_FILTER, find_ffmpeg
@@ -31,9 +49,14 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(1280, 800)
+        self.resize(1440, 900)
 
         self._project = ProjectState()
+        self._temp_video_path: Path | None = None  # for converted MKV etc.
+
+        # Undo stack
+        self._undo_stack = QUndoStack(self)
 
         # Media stack
         self._audio_output = QAudioOutput()
@@ -42,6 +65,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_menu()
+        self._setup_shortcuts()
         self._connect_signals()
         self._restore_geometry()
 
@@ -60,15 +84,24 @@ class MainWindow(QMainWindow):
         # Video player
         self._video_widget = VideoPlayerWidget(self._player)
 
-        # Subtitle panel (right side)
+        # Track selector + subtitle panel (right side)
+        self._track_selector = TrackSelector()
         self._subtitle_panel = SubtitlePanel()
+
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self._track_selector)
+        right_layout.addWidget(self._subtitle_panel, 1)
 
         # Top splitter: video | subtitle panel
         self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._top_splitter.addWidget(self._video_widget)
-        self._top_splitter.addWidget(self._subtitle_panel)
+        self._top_splitter.addWidget(right_widget)
         self._top_splitter.setStretchFactor(0, 3)
         self._top_splitter.setStretchFactor(1, 1)
+        self._top_splitter.setSizes([1050, 390])
 
         # Playback controls
         self._controls = PlaybackControls(self._player, self._audio_output)
@@ -103,6 +136,10 @@ class MainWindow(QMainWindow):
         import_srt_action.triggered.connect(self._on_import_srt)
         file_menu.addAction(import_srt_action)
 
+        import_srt_track_action = QAction("Import SRT to &New Track...", self)
+        import_srt_track_action.triggered.connect(self._on_import_srt_new_track)
+        file_menu.addAction(import_srt_track_action)
+
         file_menu.addSeparator()
 
         export_action = QAction("&Export SRT...", self)
@@ -134,6 +171,33 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        # Edit menu
+        edit_menu = menubar.addMenu("&Edit")
+
+        undo_action = self._undo_stack.createUndoAction(self, "&Undo")
+        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        edit_menu.addAction(undo_action)
+
+        redo_action = self._undo_stack.createRedoAction(self, "&Redo")
+        redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        edit_menu.addAction(redo_action)
+
+        edit_menu.addSeparator()
+
+        split_action = QAction("S&plit Subtitle", self)
+        split_action.triggered.connect(self._on_split_subtitle)
+        edit_menu.addAction(split_action)
+
+        merge_action = QAction("&Merge Subtitles", self)
+        merge_action.triggered.connect(self._on_merge_subtitles)
+        edit_menu.addAction(merge_action)
+
+        edit_menu.addSeparator()
+
+        batch_shift_action = QAction("&Batch Shift Timing...", self)
+        batch_shift_action.triggered.connect(self._on_batch_shift)
+        edit_menu.addAction(batch_shift_action)
+
         # Subtitles menu
         sub_menu = menubar.addMenu("&Subtitles")
 
@@ -146,11 +210,49 @@ class MainWindow(QMainWindow):
         clear_action.triggered.connect(self._on_clear_subtitles)
         sub_menu.addAction(clear_action)
 
+        sub_menu.addSeparator()
+
+        style_action = QAction("Default &Style...", self)
+        style_action.triggered.connect(self._on_edit_default_style)
+        sub_menu.addAction(style_action)
+
         # Help menu
         help_menu = menubar.addMenu("&Help")
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+    def _setup_shortcuts(self) -> None:
+        """Bind keyboard shortcuts not already covered by menu actions."""
+        # Space → play/pause toggle
+        sc_space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        sc_space.activated.connect(self._toggle_play_pause)
+
+        # Left/Right → seek ±5 seconds
+        sc_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        sc_left.activated.connect(lambda: self._seek_relative(-5000))
+        sc_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        sc_right.activated.connect(lambda: self._seek_relative(5000))
+
+        # Delete → delete selected subtitle
+        sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        sc_del.activated.connect(self._on_delete_selected_subtitle)
+
+    def _toggle_play_pause(self) -> None:
+        if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._player.pause()
+        else:
+            self._player.play()
+
+    def _seek_relative(self, delta_ms: int) -> None:
+        pos = max(0, self._player.position() + delta_ms)
+        self._player.setPosition(pos)
+
+    def _on_delete_selected_subtitle(self) -> None:
+        rows = self._subtitle_panel._table.selectionModel().selectedRows()
+        if rows and self._project.has_subtitles:
+            index = rows[0].row()
+            self._on_segment_delete(index)
 
     def _connect_signals(self) -> None:
         # Player signals
@@ -168,10 +270,20 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.time_edited.connect(self._on_time_edited)
         self._subtitle_panel.segment_add_requested.connect(self._on_segment_add)
         self._subtitle_panel.segment_delete_requested.connect(self._on_segment_delete)
+        self._subtitle_panel.style_edit_requested.connect(self._on_edit_segment_style)
 
         # Timeline editing signals
         self._timeline.segment_selected.connect(self._on_timeline_segment_selected)
         self._timeline.segment_moved.connect(self._on_timeline_segment_moved)
+
+        # Track selector signals
+        self._track_selector.track_changed.connect(self._on_track_changed)
+        self._track_selector.track_added.connect(self._on_track_added)
+        self._track_selector.track_removed.connect(self._on_track_removed)
+        self._track_selector.track_renamed.connect(self._on_track_renamed)
+
+        # Undo stack
+        self._undo_stack.indexChanged.connect(lambda _: self._refresh_all_widgets())
 
     # ------------------------------------------------------------ Refresh
 
@@ -182,38 +294,174 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.refresh()
         self._timeline.refresh()
 
-    # ---------------------------------------------------- Edit handlers
+    def _refresh_track_selector(self) -> None:
+        """Sync track selector with project state."""
+        names = [t.name or f"Track {i+1}" for i, t in enumerate(self._project.subtitle_tracks)]
+        self._track_selector.set_tracks(names, self._project.active_track_index)
+
+    # ---------------------------------------------------- Edit handlers (with Undo)
 
     def _on_text_edited(self, index: int, new_text: str) -> None:
-        self._project.subtitle_track.update_segment_text(index, new_text)
-        self._refresh_all_widgets()
-        self.statusBar().showMessage(f"Text updated (segment {index + 1})")
+        track = self._project.subtitle_track
+        if 0 <= index < len(track):
+            old_text = track[index].text
+            cmd = EditTextCommand(track, index, old_text, new_text)
+            self._undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Text updated (segment {index + 1})")
 
     def _on_time_edited(self, index: int, start_ms: int, end_ms: int) -> None:
-        self._project.subtitle_track.update_segment_time(index, start_ms, end_ms)
-        self._refresh_all_widgets()
-        self.statusBar().showMessage(f"Time updated (segment {index + 1})")
+        track = self._project.subtitle_track
+        if 0 <= index < len(track):
+            seg = track[index]
+            cmd = EditTimeCommand(track, index, seg.start_ms, seg.end_ms, start_ms, end_ms)
+            self._undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Time updated (segment {index + 1})")
 
     def _on_segment_add(self, start_ms: int, end_ms: int) -> None:
         seg = SubtitleSegment(start_ms, end_ms, "New subtitle")
-        self._project.subtitle_track.add_segment(seg)
-        self._refresh_all_widgets()
+        cmd = AddSegmentCommand(self._project.subtitle_track, seg)
+        self._undo_stack.push(cmd)
         self.statusBar().showMessage("Subtitle added")
 
     def _on_segment_delete(self, index: int) -> None:
-        self._project.subtitle_track.remove_segment(index)
-        self._refresh_all_widgets()
-        self.statusBar().showMessage("Subtitle deleted")
+        track = self._project.subtitle_track
+        if 0 <= index < len(track):
+            seg = track[index]
+            cmd = DeleteSegmentCommand(track, index, seg)
+            self._undo_stack.push(cmd)
+            self.statusBar().showMessage("Subtitle deleted")
 
     def _on_timeline_segment_selected(self, index: int) -> None:
-        # Highlight the corresponding row in the subtitle panel
         if self._project.has_subtitles and 0 <= index < len(self._project.subtitle_track):
             self._subtitle_panel._table.selectRow(index)
 
     def _on_timeline_segment_moved(self, index: int, new_start: int, new_end: int) -> None:
-        self._project.subtitle_track.update_segment_time(index, new_start, new_end)
-        self._refresh_all_widgets()
-        self.statusBar().showMessage(f"Segment {index + 1} moved")
+        track = self._project.subtitle_track
+        if 0 <= index < len(track):
+            seg = track[index]
+            cmd = MoveSegmentCommand(track, index, seg.start_ms, seg.end_ms, new_start, new_end)
+            self._undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Segment {index + 1} moved")
+
+    # --------------------------------------------- Split / Merge / Batch Shift
+
+    def _on_split_subtitle(self) -> None:
+        if not self._project.has_subtitles:
+            QMessageBox.warning(self, "No Subtitles", "No subtitles to split.")
+            return
+
+        rows = self._subtitle_panel._table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "No Selection", "Select a subtitle to split.")
+            return
+
+        index = rows[0].row()
+        track = self._project.subtitle_track
+        if index < 0 or index >= len(track):
+            return
+
+        seg = track[index]
+        split_ms = self._player.position()
+
+        if split_ms <= seg.start_ms or split_ms >= seg.end_ms:
+            QMessageBox.warning(
+                self, "Invalid Position",
+                "Move the playhead inside the selected subtitle to split it."
+            )
+            return
+
+        # Split text at midpoint of words
+        words = seg.text.split()
+        mid = max(1, len(words) // 2)
+        text1 = " ".join(words[:mid])
+        text2 = " ".join(words[mid:])
+        if not text1:
+            text1 = seg.text
+        if not text2:
+            text2 = seg.text
+
+        first = SubtitleSegment(seg.start_ms, split_ms, text1, style=seg.style)
+        second = SubtitleSegment(split_ms, seg.end_ms, text2, style=seg.style)
+
+        cmd = SplitCommand(track, index, split_ms, seg, first, second)
+        self._undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Segment {index + 1} split at {split_ms}ms")
+
+    def _on_merge_subtitles(self) -> None:
+        if not self._project.has_subtitles:
+            QMessageBox.warning(self, "No Subtitles", "No subtitles to merge.")
+            return
+
+        rows = self._subtitle_panel._table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "No Selection", "Select a subtitle to merge with the next one.")
+            return
+
+        index = rows[0].row()
+        track = self._project.subtitle_track
+        if index < 0 or index + 1 >= len(track):
+            QMessageBox.warning(self, "Cannot Merge", "Select a subtitle that has a following subtitle.")
+            return
+
+        first = track[index]
+        second = track[index + 1]
+        merged_text = first.text + " " + second.text
+        merged = SubtitleSegment(first.start_ms, second.end_ms, merged_text, style=first.style)
+
+        cmd = MergeCommand(track, index, first, second, merged)
+        self._undo_stack.push(cmd)
+        self.statusBar().showMessage(f"Segments {index + 1}-{index + 2} merged")
+
+    def _on_batch_shift(self) -> None:
+        if not self._project.has_subtitles:
+            QMessageBox.warning(self, "No Subtitles", "No subtitles to shift.")
+            return
+
+        offset, ok = QInputDialog.getInt(
+            self, "Batch Shift", "Offset (ms, negative=earlier):", 0, -60000, 60000, 100
+        )
+        if not ok or offset == 0:
+            return
+
+        cmd = BatchShiftCommand(self._project.subtitle_track, offset)
+        self._undo_stack.push(cmd)
+        self.statusBar().showMessage(f"All subtitles shifted by {offset:+d}ms")
+
+    # ------------------------------------------------------------ Track management
+
+    def _on_track_changed(self, index: int) -> None:
+        if 0 <= index < len(self._project.subtitle_tracks):
+            self._project.active_track_index = index
+            track = self._project.subtitle_track
+            self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
+            self._subtitle_panel.set_track(track if len(track) > 0 else None)
+            self._timeline.set_track(track if len(track) > 0 else None)
+            self._undo_stack.clear()
+            self.statusBar().showMessage(f"Switched to track: {track.name or f'Track {index+1}'}")
+
+    def _on_track_added(self, name: str) -> None:
+        new_track = SubtitleTrack(name=name)
+        self._project.subtitle_tracks.append(new_track)
+        self._project.active_track_index = len(self._project.subtitle_tracks) - 1
+        self._refresh_track_selector()
+        self._on_track_changed(self._project.active_track_index)
+
+    def _on_track_removed(self, index: int) -> None:
+        if len(self._project.subtitle_tracks) <= 1:
+            QMessageBox.warning(self, "Cannot Remove", "At least one track must remain.")
+            return
+        if 0 <= index < len(self._project.subtitle_tracks):
+            self._project.subtitle_tracks.pop(index)
+            self._project.active_track_index = min(
+                self._project.active_track_index, len(self._project.subtitle_tracks) - 1
+            )
+            self._refresh_track_selector()
+            self._on_track_changed(self._project.active_track_index)
+
+    def _on_track_renamed(self, index: int, name: str) -> None:
+        if 0 <= index < len(self._project.subtitle_tracks):
+            self._project.subtitle_tracks[index].name = name
+            self._refresh_track_selector()
 
     # ------------------------------------------------------------ Actions
 
@@ -229,19 +477,104 @@ class MainWindow(QMainWindow):
         settings.setValue("last_video_dir", str(Path(path).parent))
         self._load_video(Path(path))
 
+    # Formats that macOS AVFoundation cannot play natively
+    _NEEDS_CONVERT = {".mkv", ".avi", ".flv", ".wmv", ".webm"}
+
     def _load_video(self, path: Path) -> None:
         self._project.reset()
+        self._undo_stack.clear()
+        self._cleanup_temp_video()
         self._project.video_path = path
 
-        self._player.setSource(QUrl.fromLocalFile(str(path)))
+        playback_path = path
+        if sys.platform == "darwin" and path.suffix.lower() in self._NEEDS_CONVERT:
+            converted = self._convert_to_mp4(path)
+            if converted:
+                playback_path = converted
+                self._temp_video_path = converted
+            else:
+                QMessageBox.critical(
+                    self, "Conversion Failed",
+                    f"Could not convert {path.suffix} to MP4 for playback.\n"
+                    "Make sure FFmpeg is installed."
+                )
+                return
+
+        self._player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._player.play()
 
         self._video_widget.set_subtitle_track(None)
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
+        self._refresh_track_selector()
 
         self.setWindowTitle(f"{path.name} – {APP_NAME}")
         self.statusBar().showMessage(f"Loaded: {path.name}")
+
+    def _convert_to_mp4(self, source: Path) -> Path | None:
+        """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            return None
+
+        tmp = Path(tempfile.mktemp(suffix=".mp4", prefix="fmm_"))
+        cmd = [
+            ffmpeg,
+            "-i", str(source),
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-y",
+            str(tmp),
+        ]
+
+        progress = QProgressDialog(f"Converting {source.name} to MP4...", "Cancel", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300,
+            )
+            progress.close()
+            if result.returncode == 0 and tmp.is_file():
+                self.statusBar().showMessage(f"Converted {source.suffix} to MP4 for playback")
+                return tmp
+            else:
+                # If copy codec fails, try re-encoding
+                cmd_reencode = [
+                    ffmpeg,
+                    "-i", str(source),
+                    "-c:v", "libx264", "-preset", "fast",
+                    "-c:a", "aac",
+                    "-y",
+                    str(tmp),
+                ]
+                progress2 = QProgressDialog(f"Re-encoding {source.name}...", None, 0, 0, self)
+                progress2.setWindowModality(Qt.WindowModality.WindowModal)
+                progress2.setMinimumDuration(0)
+                progress2.show()
+                QApplication.processEvents()
+                result2 = subprocess.run(
+                    cmd_reencode, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=600,
+                )
+                progress2.close()
+                if result2.returncode == 0 and tmp.is_file():
+                    return tmp
+                return None
+        except subprocess.TimeoutExpired:
+            progress.close()
+            tmp.unlink(missing_ok=True)
+            return None
+
+    def _cleanup_temp_video(self) -> None:
+        """Remove previously created temp video file."""
+        if self._temp_video_path and self._temp_video_path.is_file():
+            self._temp_video_path.unlink(missing_ok=True)
+        self._temp_video_path = None
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._project.duration_ms = duration_ms
@@ -267,19 +600,45 @@ class MainWindow(QMainWindow):
 
     def _apply_subtitle_track(self, track: SubtitleTrack) -> None:
         self._project.subtitle_track = track
+        self._undo_stack.clear()
         self._video_widget.set_subtitle_track(track)
         self._subtitle_panel.set_track(track)
         self._timeline.set_track(track)
+        self._refresh_track_selector()
         self.statusBar().showMessage(
             f"Subtitles loaded: {len(track)} segments"
         )
 
     def _on_clear_subtitles(self) -> None:
-        self._project.subtitle_track = SubtitleTrack()
+        self._project.subtitle_track = SubtitleTrack(name=self._project.subtitle_track.name)
+        self._undo_stack.clear()
         self._video_widget.set_subtitle_track(None)
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
         self.statusBar().showMessage("Subtitles cleared")
+
+    def _on_edit_default_style(self) -> None:
+        from src.ui.dialogs.style_dialog import StyleDialog
+        dialog = StyleDialog(self._project.default_style, parent=self, title="Default Subtitle Style")
+        if dialog.exec():
+            self._project.default_style = dialog.result_style()
+            self._video_widget.set_default_style(self._project.default_style)
+            self.statusBar().showMessage("Default style updated")
+
+    def _on_edit_segment_style(self, index: int) -> None:
+        if not self._project.has_subtitles or index < 0 or index >= len(self._project.subtitle_track):
+            return
+        from src.ui.dialogs.style_dialog import StyleDialog
+        seg = self._project.subtitle_track[index]
+        current_style = seg.style if seg.style is not None else self._project.default_style
+        dialog = StyleDialog(current_style, parent=self, title=f"Style - Segment {index + 1}")
+        if dialog.exec():
+            old_style = seg.style
+            new_style = dialog.result_style()
+            cmd = EditStyleCommand(self._project.subtitle_track, index, old_style, new_style)
+            self._undo_stack.push(cmd)
+            self._video_widget.set_default_style(self._project.default_style)
+            self.statusBar().showMessage(f"Style updated (segment {index + 1})")
 
     def _on_import_srt(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -289,7 +648,27 @@ class MainWindow(QMainWindow):
             return
         try:
             track = import_srt(Path(path))
+            track.name = self._project.subtitle_track.name
             self._apply_subtitle_track(track)
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", str(e))
+
+    def _on_import_srt_new_track(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import SRT to New Track", "", "SRT Files (*.srt);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            track = import_srt(Path(path))
+            track_name = Path(path).stem
+            track.name = track_name
+            self._project.subtitle_tracks.append(track)
+            self._project.active_track_index = len(self._project.subtitle_tracks) - 1
+            self._undo_stack.clear()
+            self._refresh_track_selector()
+            self._on_track_changed(self._project.active_track_index)
+            self.statusBar().showMessage(f"Imported to new track: {track_name}")
         except Exception as e:
             QMessageBox.critical(self, "Import Error", str(e))
 
@@ -351,14 +730,20 @@ class MainWindow(QMainWindow):
             from src.services.project_io import load_project
             project = load_project(Path(path))
             self._project = project
+            self._undo_stack.clear()
             # Load video if it exists
             if project.video_path and project.video_path.is_file():
                 self._player.setSource(QUrl.fromLocalFile(str(project.video_path)))
                 self._player.play()
                 self.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
             # Apply subtitles
+            self._video_widget.set_default_style(project.default_style)
+            self._refresh_track_selector()
             if project.has_subtitles:
-                self._apply_subtitle_track(project.subtitle_track)
+                track = project.subtitle_track
+                self._video_widget.set_subtitle_track(track)
+                self._subtitle_panel.set_track(track)
+                self._timeline.set_track(track)
             self.statusBar().showMessage(f"Project loaded: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
@@ -394,4 +779,5 @@ class MainWindow(QMainWindow):
         settings.setValue("window_geometry", self.saveGeometry())
         settings.setValue("window_state", self.saveState())
         self._player.stop()
+        self._cleanup_temp_video()
         super().closeEvent(event)

@@ -53,6 +53,7 @@ class SubtitlePanel(QWidget):
     time_edited = Signal(int, int, int)  # (segment index, start_ms, end_ms)
     segment_add_requested = Signal(int, int)  # (start_ms, end_ms)
     segment_delete_requested = Signal(int)  # segment index
+    style_edit_requested = Signal(int)  # segment index
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -173,11 +174,16 @@ class SubtitlePanel(QWidget):
 
         add_action = menu.addAction("Add Subtitle Here")
         delete_action = None
+        style_action = None
         if self._track and 0 <= row < len(self._track):
             delete_action = menu.addAction("Delete Subtitle")
+            menu.addSeparator()
+            style_action = menu.addAction("Edit Style...")
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
-        if action == add_action:
+        if action is not None and action == style_action:
+            self.style_edit_requested.emit(row)
+        elif action == add_action:
             # Insert at the clicked row position or at end
             if self._track and 0 <= row < len(self._track):
                 seg = self._track[row]

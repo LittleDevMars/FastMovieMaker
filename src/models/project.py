@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleTrack
 
 
@@ -13,8 +14,26 @@ class ProjectState:
     """Holds the current state of the editing session."""
 
     video_path: Path | None = None
-    subtitle_track: SubtitleTrack = field(default_factory=SubtitleTrack)
+    subtitle_tracks: list[SubtitleTrack] = field(default_factory=lambda: [SubtitleTrack(name="Default")])
+    active_track_index: int = 0
     duration_ms: int = 0
+    default_style: SubtitleStyle = field(default_factory=SubtitleStyle)
+
+    @property
+    def subtitle_track(self) -> SubtitleTrack:
+        """Return the active subtitle track (backward-compatible)."""
+        if 0 <= self.active_track_index < len(self.subtitle_tracks):
+            return self.subtitle_tracks[self.active_track_index]
+        return self.subtitle_tracks[0]
+
+    @subtitle_track.setter
+    def subtitle_track(self, track: SubtitleTrack) -> None:
+        """Replace the active track (backward-compatible)."""
+        if 0 <= self.active_track_index < len(self.subtitle_tracks):
+            self.subtitle_tracks[self.active_track_index] = track
+        else:
+            self.subtitle_tracks = [track]
+            self.active_track_index = 0
 
     @property
     def has_video(self) -> bool:
@@ -26,5 +45,7 @@ class ProjectState:
 
     def reset(self) -> None:
         self.video_path = None
-        self.subtitle_track = SubtitleTrack()
+        self.subtitle_tracks = [SubtitleTrack(name="Default")]
+        self.active_track_index = 0
         self.duration_ms = 0
+        self.default_style = SubtitleStyle()

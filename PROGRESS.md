@@ -69,7 +69,84 @@
 - [x] `pytest tests/ -v` 단위 테스트: 20/20 passed (0.03s)
 
 **다음 세션 TODO:**
-1. Phase 3 기능 구현 시작
+1. ~~Phase 3 기능 구현 시작~~ → Day 3에서 완료
+
+---
+
+## 2026-02-08 (Day 3) 작업 요약
+
+**Phase 3 전체 구현 완료**
+
+### Step 1: 다크 테마 + 키보드 단축키
+- `main.py`: QPalette 기반 다크 테마 (`_apply_dark_theme()`) - Fusion 스타일
+- `main_window.py`: 키보드 단축키 바인딩
+  - `Space` - 재생/일시정지 토글
+  - `Ctrl+O/S/Z/Shift+Z/G/E` - 파일/편집 단축키
+  - `Left/Right` - 5초 시크
+  - `Delete` - 선택된 자막 삭제
+
+### Step 2: 자막 스타일 데이터 모델
+- 신규: `src/models/style.py` - `SubtitleStyle` dataclass (폰트, 색상, 위치 등)
+- `SubtitleSegment`에 `style: SubtitleStyle | None` 필드 추가
+- `SubtitleTrack`에 `name: str` 필드 추가
+
+### Step 3: 프로젝트 I/O v2
+- `project_io.py`: PROJECT_VERSION = 2
+  - 스타일 직렬화/역직렬화 (`_style_to_dict`, `_dict_to_style`)
+  - 멀티트랙 저장/로드
+  - v1 → v2 자동 마이그레이션
+
+### Step 4: 비디오 플레이어 스타일 렌더링
+- `video_player_widget.py`: `_get_effective_style()`, `_apply_style()`
+  - QGraphicsDropShadowEffect으로 아웃라인 효과
+  - position 옵션에 따른 자막 배치 (top/bottom, left/center/right)
+
+### Step 5: 자막 스타일 다이얼로그
+- 신규: `src/ui/dialogs/style_dialog.py` - `StyleDialog`
+  - QFontComboBox, QColorDialog, 미리보기 패널
+  - 기본 스타일: Subtitles → Default Style...
+  - 개별 세그먼트: 우클릭 → Edit Style...
+
+### Step 6: Undo/Redo (QUndoStack)
+- 신규: `src/ui/commands.py` - 8개 QUndoCommand 서브클래스
+  - EditTextCommand, EditTimeCommand, AddSegmentCommand, DeleteSegmentCommand
+  - MoveSegmentCommand, EditStyleCommand, SplitCommand, MergeCommand, BatchShiftCommand
+- Edit 메뉴: Undo (`Ctrl+Z`), Redo (`Ctrl+Shift+Z`)
+
+### Step 7: 고급 편집 - Split/Merge/Batch Shift
+- **Split**: 재생 위치에서 선택된 자막을 둘로 분할
+- **Merge**: 연속 2개 자막을 하나로 합침
+- **Batch Shift**: 모든 자막 타이밍을 ±N ms 일괄 이동
+- 모든 편집이 QUndoStack Command로 래핑
+
+### Step 8-9: 멀티트랙
+- `ProjectState`: `subtitle_tracks: list[SubtitleTrack]`, `active_track_index: int`
+- `active_subtitle_track` 프로퍼티로 하위 호환성 유지
+- 신규: `src/ui/track_selector.py` - QComboBox + 추가/삭제/이름 변경 버튼
+- File 메뉴: "Import SRT to New Track..." 추가
+
+### 테스트
+- `pytest tests/ -v`: **36/36 passed** (기존 20 + 신규 16)
+- 신규 테스트:
+  - `test_models.py`: SubtitleStyle, 멀티트랙, style 할당 테스트
+  - `test_project_io.py`: v2 roundtrip, 멀티트랙 roundtrip, 세그먼트 스타일, v1 마이그레이션
+
+### 검증 체크리스트
+- [x] 다크 테마 적용
+- [x] 키보드 단축키 바인딩
+- [x] SubtitleStyle 모델 + 복사
+- [x] 프로젝트 v2 저장/로드 + v1 호환
+- [x] 비디오 플레이어 스타일 렌더링
+- [x] 스타일 다이얼로그 (기본 + 개별)
+- [x] Undo/Redo 시스템
+- [x] Split/Merge/Batch Shift
+- [x] 멀티트랙 데이터 모델
+- [x] 멀티트랙 UI (TrackSelector)
+- [x] 단위 테스트 36/36 passed
+
+**다음 세션 TODO:**
+1. GUI 통합 테스트 (실행하여 전체 기능 수동 검증)
+2. Phase 4 계획 논의
 
 ---
 

@@ -11,9 +11,43 @@ elif sys.platform == "win32":
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
 
 from src.utils.config import APP_NAME, ORG_NAME
 from src.ui.main_window import MainWindow
+
+
+def _apply_dark_theme(app: QApplication) -> None:
+    """Apply a dark color palette using the Fusion style."""
+    app.setStyle("Fusion")
+    palette = QPalette()
+
+    # Base colors
+    palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(212, 212, 212))
+    palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 45))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(50, 50, 50))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(212, 212, 212))
+    palette.setColor(QPalette.ColorRole.Text, QColor(212, 212, 212))
+    palette.setColor(QPalette.ColorRole.Button, QColor(55, 55, 55))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(212, 212, 212))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 255, 255))
+
+    # Links
+    palette.setColor(QPalette.ColorRole.Link, QColor(80, 160, 255))
+    palette.setColor(QPalette.ColorRole.LinkVisited, QColor(130, 100, 200))
+
+    # Highlight
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(60, 140, 220))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+
+    # Disabled
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(120, 120, 120))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(120, 120, 120))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(120, 120, 120))
+
+    app.setPalette(palette)
 
 
 def main() -> None:
@@ -21,7 +55,7 @@ def main() -> None:
     QApplication.setApplicationName(APP_NAME)
 
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    _apply_dark_theme(app)
 
     window = MainWindow()
     window.show()

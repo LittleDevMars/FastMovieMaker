@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.models.style import SubtitleStyle
 
 
 @dataclass
@@ -12,6 +16,7 @@ class SubtitleSegment:
     start_ms: int
     end_ms: int
     text: str
+    style: SubtitleStyle | None = None
 
     @property
     def duration_ms(self) -> int:
@@ -24,6 +29,7 @@ class SubtitleTrack:
 
     segments: list[SubtitleSegment] = field(default_factory=list)
     language: str = ""
+    name: str = ""
 
     def segment_at(self, position_ms: int) -> SubtitleSegment | None:
         """Return the segment active at the given position, or None."""
