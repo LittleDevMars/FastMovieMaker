@@ -75,6 +75,8 @@ def save_project(project: ProjectState, path: Path) -> None:
             "name": track.name,
             "language": track.language,
             "audio_path": track.audio_path,
+            "audio_start_ms": track.audio_start_ms,
+            "audio_duration_ms": track.audio_duration_ms,
             "segments": [_segment_to_dict(seg) for seg in track],
         })
 
@@ -109,6 +111,8 @@ def load_project(path: Path) -> ProjectState:
                 language=track_data.get("language", ""),
                 name=track_data.get("name", ""),
                 audio_path=track_data.get("audio_path", ""),
+                audio_start_ms=track_data.get("audio_start_ms", 0),
+                audio_duration_ms=track_data.get("audio_duration_ms", 0),
             )
             for seg_data in track_data.get("segments", []):
                 track.add_segment(_dict_to_segment(seg_data))

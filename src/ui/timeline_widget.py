@@ -30,6 +30,9 @@ class _DragMode(Enum):
     MOVE = auto()
     RESIZE_LEFT = auto()
     RESIZE_RIGHT = auto()
+    AUDIO_MOVE = auto()
+    AUDIO_RESIZE_LEFT = auto()
+    AUDIO_RESIZE_RIGHT = auto()
 
 
 _EDGE_PX = 6  # pixels from segment edge that trigger resize
@@ -42,6 +45,7 @@ class TimelineWidget(QWidget):
     seek_requested = Signal(int)  # ms
     segment_selected = Signal(int)  # segment index
     segment_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
+    audio_moved = Signal(int, int)  # (new_start_ms, new_duration_ms)
 
     # Colors
     _BG_COLOR = QColor(30, 30, 30)
@@ -52,6 +56,10 @@ class TimelineWidget(QWidget):
     _SELECTED_COLOR = QColor(100, 200, 255, 200)
     _SELECTED_BORDER = QColor(150, 220, 255)
     _PLAYHEAD_COLOR = QColor(255, 60, 60)
+    _AUDIO_COLOR = QColor(100, 200, 100, 180)
+    _AUDIO_BORDER = QColor(120, 220, 120)
+    _AUDIO_SELECTED_COLOR = QColor(150, 255, 150, 200)
+    _AUDIO_SELECTED_BORDER = QColor(180, 255, 180)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,6 +76,7 @@ class TimelineWidget(QWidget):
 
         # Selection
         self._selected_index: int = -1
+        self._audio_selected: bool = False
 
         # Drag state
         self._drag_mode = _DragMode.NONE
@@ -75,6 +84,8 @@ class TimelineWidget(QWidget):
         self._drag_start_x: float = 0.0
         self._drag_orig_start_ms: int = 0
         self._drag_orig_end_ms: int = 0
+        self._drag_orig_audio_start_ms: int = 0
+        self._drag_orig_audio_duration_ms: int = 0
 
     # -------------------------------------------------------- Public API
 
@@ -129,6 +140,7 @@ class TimelineWidget(QWidget):
 
         self._draw_ruler(painter, w, h, visible_ms)
         if self._track:
+            self._draw_audio_track(painter, h)
             self._draw_segments(painter, h)
         self._draw_playhead(painter, h)
         painter.end()
@@ -151,9 +163,44 @@ class TimelineWidget(QWidget):
             painter.drawText(int(x) + 3, 12, ms_to_display(int(t)))
             t += tick_ms
 
+    def _draw_audio_track(self, painter: QPainter, h: int) -> None:
+        """Draw audio track below subtitle segments."""
+        if not self._track.audio_path or self._track.audio_duration_ms <= 0:
+            return
+
+        audio_y = 75
+        audio_h = 40
+
+        x1 = self._ms_to_x(self._track.audio_start_ms)
+        x2 = self._ms_to_x(self._track.audio_start_ms + self._track.audio_duration_ms)
+
+        if x2 < 0 or x1 > self.width():
+            return
+
+        rect = QRectF(x1, audio_y, max(x2 - x1, 2), audio_h)
+
+        if self._audio_selected:
+            painter.setPen(QPen(self._AUDIO_SELECTED_BORDER, 2))
+            painter.setBrush(QBrush(self._AUDIO_SELECTED_COLOR))
+        else:
+            painter.setPen(QPen(self._AUDIO_BORDER, 1))
+            painter.setBrush(QBrush(self._AUDIO_COLOR))
+        painter.drawRoundedRect(rect, 3, 3)
+
+        # Draw label
+        if rect.width() > 50:
+            painter.setPen(QColor("white"))
+            painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            text_rect = rect.adjusted(4, 2, -4, -2)
+            painter.drawText(
+                text_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                "🔊 TTS Audio",
+            )
+
     def _draw_segments(self, painter: QPainter, h: int) -> None:
         seg_y = 20
-        seg_h = h - 30
+        seg_h = 50
 
         for i, seg in enumerate(self._track):
             x1 = self._ms_to_x(seg.start_ms)
@@ -205,15 +252,31 @@ class TimelineWidget(QWidget):
         y = event.position().y()
         seg_idx, hit = self._hit_test(x, y)
 
-        if hit == "left_edge":
+        if hit == "audio_left_edge":
+            self._audio_selected = True
+            self._selected_index = -1
+            self._start_audio_drag(_DragMode.AUDIO_RESIZE_LEFT, x)
+        elif hit == "audio_right_edge":
+            self._audio_selected = True
+            self._selected_index = -1
+            self._start_audio_drag(_DragMode.AUDIO_RESIZE_RIGHT, x)
+        elif hit == "audio_body":
+            self._audio_selected = True
+            self._selected_index = -1
+            self._start_audio_drag(_DragMode.AUDIO_MOVE, x)
+        elif hit == "left_edge":
+            self._audio_selected = False
             self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
         elif hit == "right_edge":
+            self._audio_selected = False
             self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
         elif hit == "body":
+            self._audio_selected = False
             self._selected_index = seg_idx
             self.segment_selected.emit(seg_idx)
             self._start_drag(_DragMode.MOVE, seg_idx, x)
         else:
+            self._audio_selected = False
             self._selected_index = -1
             self._drag_mode = _DragMode.SEEK
             self._seek_to_x(x)
@@ -228,21 +291,31 @@ class TimelineWidget(QWidget):
             self._seek_to_x(x)
             return
 
+        if self._drag_mode in (_DragMode.AUDIO_MOVE, _DragMode.AUDIO_RESIZE_LEFT, _DragMode.AUDIO_RESIZE_RIGHT):
+            self._handle_audio_drag(x)
+            return
+
         if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
             self._handle_drag(x)
             return
 
         # Update cursor based on hover
         seg_idx, hit = self._hit_test(x, y)
-        if hit in ("left_edge", "right_edge"):
+        if hit in ("left_edge", "right_edge", "audio_left_edge", "audio_right_edge"):
             self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-        elif hit == "body":
+        elif hit in ("body", "audio_body"):
             self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
         else:
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
+        if self._drag_mode in (_DragMode.AUDIO_MOVE, _DragMode.AUDIO_RESIZE_LEFT, _DragMode.AUDIO_RESIZE_RIGHT):
+            # Emit final audio position
+            if self._track:
+                if (self._track.audio_start_ms != self._drag_orig_audio_start_ms or
+                    self._track.audio_duration_ms != self._drag_orig_audio_duration_ms):
+                    self.audio_moved.emit(self._track.audio_start_ms, self._track.audio_duration_ms)
+        elif self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
             # Emit final position
             if self._track and 0 <= self._drag_seg_index < len(self._track):
                 seg = self._track[self._drag_seg_index]
@@ -306,26 +379,74 @@ class TimelineWidget(QWidget):
 
         self.update()
 
+    def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
+        """Start dragging audio track."""
+        self._drag_mode = mode
+        self._drag_start_x = x
+        if self._track:
+            self._drag_orig_audio_start_ms = self._track.audio_start_ms
+            self._drag_orig_audio_duration_ms = self._track.audio_duration_ms
+
+    def _handle_audio_drag(self, x: float) -> None:
+        """Handle audio track drag/resize."""
+        if not self._track:
+            return
+
+        dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+
+        if self._drag_mode == _DragMode.AUDIO_MOVE:
+            new_start = max(0, self._drag_orig_audio_start_ms + dx_ms)
+            if new_start + self._drag_orig_audio_duration_ms > self._duration_ms:
+                new_start = self._duration_ms - self._drag_orig_audio_duration_ms
+            self._track.audio_start_ms = max(0, new_start)
+        elif self._drag_mode == _DragMode.AUDIO_RESIZE_LEFT:
+            new_start = max(0, self._drag_orig_audio_start_ms + dx_ms)
+            new_start = min(new_start, self._track.audio_start_ms + self._track.audio_duration_ms - 100)
+            duration_change = self._track.audio_start_ms - new_start
+            self._track.audio_start_ms = new_start
+            self._track.audio_duration_ms += duration_change
+        elif self._drag_mode == _DragMode.AUDIO_RESIZE_RIGHT:
+            new_duration = max(100, self._drag_orig_audio_duration_ms + dx_ms)
+            max_duration = self._duration_ms - self._track.audio_start_ms
+            self._track.audio_duration_ms = min(new_duration, max_duration)
+
+        self.update()
+
     def _hit_test(self, x: float, y: float) -> tuple[int, str]:
         """Return (segment_index, hit_zone) or (-1, '') if nothing hit."""
         if not self._track:
             return -1, ""
-        seg_y = 20
-        seg_h = self.height() - 30
-        if y < seg_y or y > seg_y + seg_h:
-            return -1, ""
 
-        for i, seg in enumerate(self._track):
-            x1 = self._ms_to_x(seg.start_ms)
-            x2 = self._ms_to_x(seg.end_ms)
-            if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                continue
-            if abs(x - x1) <= _EDGE_PX:
-                return i, "left_edge"
-            if abs(x - x2) <= _EDGE_PX:
-                return i, "right_edge"
-            if x1 <= x <= x2:
-                return i, "body"
+        # Check audio track first (below subtitles)
+        audio_y = 75
+        audio_h = 40
+        if audio_y <= y <= audio_y + audio_h:
+            if self._track.audio_path and self._track.audio_duration_ms > 0:
+                x1 = self._ms_to_x(self._track.audio_start_ms)
+                x2 = self._ms_to_x(self._track.audio_start_ms + self._track.audio_duration_ms)
+                if x1 - _EDGE_PX <= x <= x2 + _EDGE_PX:
+                    if abs(x - x1) <= _EDGE_PX:
+                        return -2, "audio_left_edge"
+                    if abs(x - x2) <= _EDGE_PX:
+                        return -2, "audio_right_edge"
+                    if x1 <= x <= x2:
+                        return -2, "audio_body"
+
+        # Check subtitle segments
+        seg_y = 20
+        seg_h = 50
+        if seg_y <= y <= seg_y + seg_h:
+            for i, seg in enumerate(self._track):
+                x1 = self._ms_to_x(seg.start_ms)
+                x2 = self._ms_to_x(seg.end_ms)
+                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                    continue
+                if abs(x - x1) <= _EDGE_PX:
+                    return i, "left_edge"
+                if abs(x - x2) <= _EDGE_PX:
+                    return i, "right_edge"
+                if x1 <= x <= x2:
+                    return i, "body"
         return -1, ""
 
     # ----------------------------------------------------------- Helpers

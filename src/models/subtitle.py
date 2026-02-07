@@ -31,6 +31,8 @@ class SubtitleTrack:
     language: str = ""
     name: str = ""
     audio_path: str = ""  # Path to associated audio file (e.g., TTS generated audio)
+    audio_start_ms: int = 0  # Timeline position where audio starts playing
+    audio_duration_ms: int = 0  # Total duration of the audio file
 
     def segment_at(self, position_ms: int) -> SubtitleSegment | None:
         """Return the segment active at the given position, or None."""

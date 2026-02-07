@@ -61,7 +61,11 @@
       "Bash(gh repo view:*)",
       "Bash(gh issue list:*)",
       "Bash(python -m pytest:*)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(python:*)",
+      "Bash(pytest:*)",
+      "Bash(ls:*)",
+      "Bash(open:*)"
     ]
   }
 }

@@ -114,3 +114,136 @@ class TestV1Migration:
         assert loaded.subtitle_track.name == "Default"
         # Default style should be applied
         assert loaded.default_style.font_size == 18
+
+
+class TestAudioTimeline:
+    """Tests for audio timeline save/load."""
+
+    def test_audio_timeline_roundtrip(self, tmp_path):
+        """Test saving and loading audio timeline information."""
+        project = ProjectState()
+        project.video_path = Path("/fake/video.mp4")
+        project.duration_ms = 30000
+
+        track = SubtitleTrack(
+            name="TTS Track",
+            audio_path="/tmp/tts_audio.mp3",
+            audio_start_ms=1000,
+            audio_duration_ms=25000,
+        )
+        track.add_segment(SubtitleSegment(1000, 3000, "First"))
+        track.add_segment(SubtitleSegment(3000, 5000, "Second"))
+
+        project.subtitle_track = track
+
+        path = tmp_path / "test_audio.fmm.json"
+        save_project(project, path)
+        loaded = load_project(path)
+
+        assert loaded.subtitle_track.audio_path == "/tmp/tts_audio.mp3"
+        assert loaded.subtitle_track.audio_start_ms == 1000
+        assert loaded.subtitle_track.audio_duration_ms == 25000
+
+    def test_audio_timeline_json_structure(self, tmp_path):
+        """Test JSON structure includes audio timeline fields."""
+        project = ProjectState()
+        track = SubtitleTrack(
+            name="Test",
+            audio_path="/tmp/audio.mp3",
+            audio_start_ms=500,
+            audio_duration_ms=10000,
+        )
+        project.subtitle_track = track
+
+        path = tmp_path / "test.fmm.json"
+        save_project(project, path)
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        track_data = data["tracks"][0]
+
+        assert "audio_path" in track_data
+        assert "audio_start_ms" in track_data
+        assert "audio_duration_ms" in track_data
+        assert track_data["audio_path"] == "/tmp/audio.mp3"
+        assert track_data["audio_start_ms"] == 500
+        assert track_data["audio_duration_ms"] == 10000
+
+    def test_audio_timeline_multitrack(self, tmp_path):
+        """Test audio timeline with multiple tracks."""
+        project = ProjectState()
+        project.duration_ms = 50000
+
+        # Track 1: TTS with audio
+        track1 = SubtitleTrack(
+            name="TTS Korean",
+            audio_path="/tmp/korean.mp3",
+            audio_start_ms=0,
+            audio_duration_ms=20000,
+        )
+        track1.add_segment(SubtitleSegment(0, 5000, "안녕하세요"))
+
+        # Track 2: No audio
+        track2 = SubtitleTrack(name="English")
+        track2.add_segment(SubtitleSegment(0, 5000, "Hello"))
+
+        # Track 3: TTS with different timing
+        track3 = SubtitleTrack(
+            name="TTS English",
+            audio_path="/tmp/english.mp3",
+            audio_start_ms=5000,
+            audio_duration_ms=15000,
+        )
+        track3.add_segment(SubtitleSegment(5000, 10000, "Welcome"))
+
+        project.subtitle_tracks = [track1, track2, track3]
+        project.active_track_index = 0
+
+        path = tmp_path / "test_multi.fmm.json"
+        save_project(project, path)
+        loaded = load_project(path)
+
+        assert len(loaded.subtitle_tracks) == 3
+
+        # Check track 1
+        assert loaded.subtitle_tracks[0].audio_path == "/tmp/korean.mp3"
+        assert loaded.subtitle_tracks[0].audio_start_ms == 0
+        assert loaded.subtitle_tracks[0].audio_duration_ms == 20000
+
+        # Check track 2 (no audio)
+        assert loaded.subtitle_tracks[1].audio_path == ""
+        assert loaded.subtitle_tracks[1].audio_start_ms == 0
+        assert loaded.subtitle_tracks[1].audio_duration_ms == 0
+
+        # Check track 3
+        assert loaded.subtitle_tracks[2].audio_path == "/tmp/english.mp3"
+        assert loaded.subtitle_tracks[2].audio_start_ms == 5000
+        assert loaded.subtitle_tracks[2].audio_duration_ms == 15000
+
+    def test_audio_timeline_backward_compatibility(self, tmp_path):
+        """Test loading old projects without audio timeline fields."""
+        # Create a v2 project without audio timeline fields
+        old_data = {
+            "version": 2,
+            "video_path": "/fake/video.mp4",
+            "duration_ms": 10000,
+            "default_style": {"font_size": 18, "font_color": "#FFFFFF"},
+            "active_track_index": 0,
+            "tracks": [
+                {
+                    "name": "Old Track",
+                    "language": "ko",
+                    "audio_path": "",
+                    # audio_start_ms and audio_duration_ms missing
+                    "segments": [
+                        {"start_ms": 0, "end_ms": 2000, "text": "test"}
+                    ],
+                }
+            ],
+        }
+
+        path = tmp_path / "old.fmm.json"
+        path.write_text(json.dumps(old_data), encoding="utf-8")
+
+        loaded = load_project(path)
+        assert loaded.subtitle_track.audio_start_ms == 0  # Default value
+        assert loaded.subtitle_track.audio_duration_ms == 0  # Default value

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.services.audio_merger import AudioMerger
 from src.services.autosave import AutoSaveManager
 from src.services.subtitle_exporter import export_srt, import_srt
 from src.services.translator import TranslatorService
@@ -364,6 +365,7 @@ class MainWindow(QMainWindow):
         # Timeline editing signals
         self._timeline.segment_selected.connect(self._on_timeline_segment_selected)
         self._timeline.segment_moved.connect(self._on_timeline_segment_moved)
+        self._timeline.audio_moved.connect(self._on_timeline_audio_moved)
 
         # Track selector signals
         self._track_selector.track_changed.connect(self._on_track_changed)
@@ -433,6 +435,17 @@ class MainWindow(QMainWindow):
             cmd = MoveSegmentCommand(track, index, seg.start_ms, seg.end_ms, new_start, new_end)
             self._undo_stack.push(cmd)
             self.statusBar().showMessage(f"Segment {index + 1} moved")
+
+    def _on_timeline_audio_moved(self, new_start_ms: int, new_duration_ms: int) -> None:
+        """Handle audio track moved/resized in timeline."""
+        track = self._project.subtitle_track
+        if track and track.audio_path:
+            # Update audio position (no undo/redo for now, direct update)
+            track.audio_start_ms = new_start_ms
+            track.audio_duration_ms = new_duration_ms
+            self.statusBar().showMessage(
+                f"Audio track adjusted: {new_start_ms}ms ~ {new_start_ms + new_duration_ms}ms"
+            )
 
     # --------------------------------------------- Split / Merge / Batch Shift
 
@@ -734,6 +747,18 @@ class MainWindow(QMainWindow):
                 # Add as new track
                 track.name = f"TTS Track {len(self._project.subtitle_tracks)}"
                 track.audio_path = audio_path  # Store audio path for playback
+
+                # Set audio duration for timeline visualization
+                try:
+                    duration_sec = AudioMerger.get_audio_duration(Path(audio_path))
+                    track.audio_duration_ms = int(duration_sec * 1000)
+                    track.audio_start_ms = 0  # Start at beginning of timeline
+                except Exception as e:
+                    # Fallback: use last segment end time
+                    if len(track) > 0:
+                        track.audio_duration_ms = track[-1].end_ms
+                    track.audio_start_ms = 0
+
                 self._project.subtitle_tracks.append(track)
 
                 # Update track selector with new track list
