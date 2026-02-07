@@ -58,8 +58,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.setMinimumSize(1280, 800)
-        self.resize(1440, 900)
+        self.setMinimumSize(1280, 900)  # Increased to ensure timeline is always visible
+        self.resize(1440, 950)
 
         # Enable drag & drop
         self.setAcceptDrops(True)
