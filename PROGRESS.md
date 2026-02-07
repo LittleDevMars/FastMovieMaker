@@ -32,20 +32,30 @@
 - Whisper tiny 모델 다운로드 및 전사 테스트 성공
   - 오디오 추출 (FFmpeg) → Whisper 전사 → SubtitleTrack 변환 파이프라인 정상 동작 확인
 
+**전체 기능 테스트**
+
+- UI에서 Whisper Generate 다이얼로그 자동 호출 테스트 → 정상 표시 확인 (모델/언어 선택, 프로그레스바)
+- Whisper medium 모델 다운로드 완료 (1.42GB)
+- SRT 내보내기/가져오기: round-trip 일치 확인
+- 영상 내보내기 (자막 하드번):
+  - Homebrew FFmpeg에 `libass` 미포함 → `homebrew-ffmpeg/ffmpeg` tap으로 재설치하여 해결
+  - `video_exporter.py`: subtitles 필터 경로 이스케이프 macOS 분기 처리 수정
+  - 자막 하드번 영상 내보내기 성공
+
 **검증 결과:**
 - [x] 앱 창이 정상적으로 뜨는지
 - [x] 커맨드라인 인자로 MP4 로드 및 재생 동작
 - [x] 타임라인에 재생 헤드 표시 및 이동
 - [x] Whisper 자막 생성 파이프라인 (오디오 추출 → 모델 로드 → 전사 → SubtitleTrack)
-- [ ] UI에서 Subtitles → Generate 다이얼로그 테스트 (Accessibility 권한 필요)
-- [ ] 자막 오버레이 표시 (미테스트)
-- [ ] File → Export SRT (미테스트)
+- [x] UI에서 Subtitles → Generate 다이얼로그 표시
+- [x] SRT 내보내기/가져오기 (round-trip 정상)
+- [x] 영상 내보내기 (자막 하드번)
 - [x] `pytest tests/ -v` 단위 테스트: 20/20 passed (0.03s)
 
 **다음 세션 TODO:**
-1. UI에서 Subtitles → Generate 다이얼로그 테스트
-2. 자막 편집/오버레이 기능 테스트
-3. SRT 내보내기 및 영상 내보내기 테스트
+1. 실제 음성 영상으로 Whisper 자막 생성 → 오버레이 표시 end-to-end 테스트
+2. 자막 편집 기능 (텍스트 수정, 시간 조정) UI 테스트
+3. Phase 3 기능 구현 시작
 
 ---
 
