@@ -85,6 +85,12 @@ class MainWindow(QMainWindow):
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
 
+        # TTS audio player (separate from video player)
+        self._tts_audio_output = QAudioOutput()
+        self._tts_audio_output.setVolume(1.0)
+        self._tts_player = QMediaPlayer()
+        self._tts_player.setAudioOutput(self._tts_audio_output)
+
         self._build_ui()
         self._build_menu()
         self._setup_shortcuts()
@@ -245,6 +251,11 @@ class MainWindow(QMainWindow):
         tts_action.triggered.connect(self._on_generate_tts)
         sub_menu.addAction(tts_action)
 
+        play_tts_action = QAction("&Play TTS Audio", self)
+        play_tts_action.setShortcut(QKeySequence("Ctrl+P"))
+        play_tts_action.triggered.connect(self._on_play_tts_audio)
+        sub_menu.addAction(play_tts_action)
+
         clear_action = QAction("&Clear Subtitles", self)
         clear_action.triggered.connect(self._on_clear_subtitles)
         sub_menu.addAction(clear_action)
@@ -260,6 +271,15 @@ class MainWindow(QMainWindow):
         style_action = QAction("Default &Style...", self)
         style_action.triggered.connect(self._on_edit_default_style)
         sub_menu.addAction(style_action)
+
+        sub_menu.addSeparator()
+
+        edit_position_action = QAction("Edit Subtitle &Position", self)
+        edit_position_action.setCheckable(True)
+        edit_position_action.setShortcut(QKeySequence("Ctrl+E"))
+        edit_position_action.triggered.connect(self._on_toggle_position_edit)
+        sub_menu.addAction(edit_position_action)
+        self._edit_position_action = edit_position_action  # Store reference
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -713,6 +733,7 @@ class MainWindow(QMainWindow):
             if track and len(track) > 0:
                 # Add as new track
                 track.name = f"TTS Track {len(self._project.subtitle_tracks)}"
+                track.audio_path = audio_path  # Store audio path for playback
                 self._project.subtitle_tracks.append(track)
 
                 # Update track selector with new track list
@@ -730,8 +751,72 @@ class MainWindow(QMainWindow):
                     f"TTS generated: {len(track)} segments, audio: {audio_path}"
                 )
 
-                # TODO: Store audio_path in project for future playback
-                # For now, we just notify the user where it is saved
+    def _on_play_tts_audio(self) -> None:
+        """Play TTS audio for the current track."""
+        # Get current track
+        current_track = self._project.subtitle_track
+
+        # Check if track has audio
+        if not current_track or not current_track.audio_path:
+            QMessageBox.information(
+                self,
+                "No TTS Audio",
+                "The current track doesn't have TTS audio.\n\n"
+                "Generate TTS audio first (Ctrl+T)."
+            )
+            return
+
+        # Check if audio file exists
+        audio_path = Path(current_track.audio_path)
+        if not audio_path.exists():
+            QMessageBox.warning(
+                self,
+                "Audio File Not Found",
+                f"TTS audio file not found:\n{audio_path}\n\n"
+                "It may have been deleted."
+            )
+            return
+
+        # Stop current TTS playback if any
+        if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._tts_player.stop()
+
+        # Play TTS audio
+        self._tts_player.setSource(QUrl.fromLocalFile(str(audio_path)))
+        self._tts_player.play()
+
+        self.statusBar().showMessage(
+            f"Playing TTS audio: {current_track.name}"
+        )
+
+    def _on_toggle_position_edit(self, checked: bool) -> None:
+        """Toggle subtitle position editing mode."""
+        self._video_widget.set_subtitle_edit_mode(checked)
+
+        if checked:
+            self.statusBar().showMessage(
+                "Edit Mode: Drag subtitle to reposition. Press Ctrl+E again to save."
+            )
+        else:
+            # Save position when exiting edit mode
+            position = self._video_widget.get_subtitle_position()
+            if position:
+                x, y = position
+                # Update current segment's style
+                current_track = self._project.subtitle_track
+                if current_track and len(current_track) > 0:
+                    # Update default style with custom position
+                    self._project.default_style.custom_x = x
+                    self._project.default_style.custom_y = y
+                    self._video_widget.set_default_style(self._project.default_style)
+
+                    self.statusBar().showMessage(
+                        f"Subtitle position saved: ({x}, {y})"
+                    )
+                    # Mark as edited for autosave
+                    self._on_document_edited()
+            else:
+                self.statusBar().showMessage("Edit Mode OFF")
 
     def _apply_subtitle_track(self, track: SubtitleTrack) -> None:
         self._project.subtitle_track = track

@@ -30,6 +30,7 @@ class SubtitleTrack:
     segments: list[SubtitleSegment] = field(default_factory=list)
     language: str = ""
     name: str = ""
+    audio_path: str = ""  # Path to associated audio file (e.g., TTS generated audio)
 
     def segment_at(self, position_ms: int) -> SubtitleSegment | None:
         """Return the segment active at the given position, or None."""

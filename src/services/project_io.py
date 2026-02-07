@@ -24,6 +24,8 @@ def _style_to_dict(style: SubtitleStyle) -> dict:
         "bg_color": style.bg_color,
         "position": style.position,
         "margin_bottom": style.margin_bottom,
+        "custom_x": style.custom_x,
+        "custom_y": style.custom_y,
     }
 
 
@@ -39,6 +41,8 @@ def _dict_to_style(d: dict) -> SubtitleStyle:
         bg_color=d.get("bg_color", ""),
         position=d.get("position", "bottom-center"),
         margin_bottom=d.get("margin_bottom", 40),
+        custom_x=d.get("custom_x"),
+        custom_y=d.get("custom_y"),
     )
 
 
@@ -70,6 +74,7 @@ def save_project(project: ProjectState, path: Path) -> None:
         tracks_data.append({
             "name": track.name,
             "language": track.language,
+            "audio_path": track.audio_path,
             "segments": [_segment_to_dict(seg) for seg in track],
         })
 
@@ -103,6 +108,7 @@ def load_project(path: Path) -> ProjectState:
             track = SubtitleTrack(
                 language=track_data.get("language", ""),
                 name=track_data.get("name", ""),
+                audio_path=track_data.get("audio_path", ""),
             )
             for seg_data in track_data.get("segments", []):
                 track.add_segment(_dict_to_segment(seg_data))

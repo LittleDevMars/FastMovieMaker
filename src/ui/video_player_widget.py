@@ -47,6 +47,11 @@ class VideoPlayerWidget(QGraphicsView):
         self._subtitle_item.setVisible(False)
         self._scene.addItem(self._subtitle_item)
 
+        # Subtitle position editing
+        self._edit_mode = False
+        self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
         # Apply default style
         self._apply_style(self._default_style)
 
@@ -117,6 +122,11 @@ class VideoPlayerWidget(QGraphicsView):
         if style is None:
             style = self._default_style
 
+        # Use custom position if set
+        if style.custom_x is not None and style.custom_y is not None:
+            self._subtitle_item.setPos(style.custom_x, style.custom_y)
+            return
+
         view_rect = self.viewport().rect()
         scene_rect = self.mapToScene(view_rect).boundingRect()
         text_width = self._subtitle_item.boundingRect().width()
@@ -153,3 +163,25 @@ class VideoPlayerWidget(QGraphicsView):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._fit_video()
+
+    def set_subtitle_edit_mode(self, enabled: bool) -> None:
+        """Enable/disable subtitle position editing mode."""
+        self._edit_mode = enabled
+        self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemIsMovable, enabled)
+
+        # Visual feedback: change cursor when hovering
+        if enabled:
+            self._subtitle_item.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self._subtitle_item.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def get_subtitle_position(self) -> tuple[int, int] | None:
+        """Get current subtitle position (x, y) in scene coordinates."""
+        if not self._subtitle_item.isVisible():
+            return None
+        pos = self._subtitle_item.pos()
+        return (int(pos.x()), int(pos.y()))
+
+    def is_edit_mode(self) -> bool:
+        """Check if subtitle edit mode is enabled."""
+        return self._edit_mode

@@ -19,6 +19,8 @@ class SubtitleStyle:
     bg_color: str = ""  # empty = transparent
     position: str = "bottom-center"  # bottom-center, top-center, bottom-left, bottom-right
     margin_bottom: int = 40
+    custom_x: int | None = None  # Custom X position (pixels from left), None = use position
+    custom_y: int | None = None  # Custom Y position (pixels from top), None = use position
 
     def copy(self) -> SubtitleStyle:
         """Return a shallow copy."""
@@ -33,4 +35,6 @@ class SubtitleStyle:
             bg_color=self.bg_color,
             position=self.position,
             margin_bottom=self.margin_bottom,
+            custom_x=self.custom_x,
+            custom_y=self.custom_y,
         )
