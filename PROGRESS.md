@@ -232,8 +232,68 @@
   - 영향: MKV, AVI, FLV 등 모든 변환 포맷에 적용
 
 **다음 TODO:**
-1. Phase 4 Week 2 나머지: 자막 스타일 프리셋
+1. ~~Phase 4 Week 2 나머지: 자막 스타일 프리셋~~ → 완료
 2. Phase 4 Week 3: Timecode 정밀 편집, Waveform, Batch Export, 키보드 커스터마이징
+
+---
+
+## 2026-02-08 (Day 4) 작업 요약
+
+**Phase 4 Week 2 완료: 자막 스타일 프리셋 시스템**
+
+### 구현 내용
+- **신규:** `src/services/style_preset_manager.py` - StylePresetManager
+  - QSettings 기반 스타일 프리셋 저장/로드/삭제/이름변경
+  - 프리셋 리스트 관리 (알파벳 정렬)
+  - 기본 프리셋 자동 생성 (YouTube, Cinema, Karaoke, Minimal)
+  - 모든 프리셋 데이터 영구 저장
+
+- **개선:** `src/ui/dialogs/style_dialog.py` - StyleDialog 프리셋 UI 추가
+  - 왼쪽: 프리셋 목록 (QListWidget)
+  - 오른쪽: 스타일 편집 패널 (기존)
+  - 프리셋 관리 버튼: Save / Rename / Delete
+  - 프리셋 선택 시 스타일 즉시 적용
+  - 프리셋 덮어쓰기 확인 다이얼로그
+  - UI 레이아웃: 수평 분할 (프리셋 목록 | 편집기)
+
+### 기본 프리셋
+1. **YouTube**: Arial Bold 24px, 흰색, 두꺼운 검은 외곽선
+2. **Cinema**: Times New Roman Italic 20px, 크림색, 얇은 외곽선
+3. **Karaoke**: Comic Sans Bold 28px, 노란색, 빨간 외곽선, 반투명 배경
+4. **Minimal**: Helvetica 16px, 흰색, 기본 외곽선
+
+### 테스트
+- **신규:** `tests/test_style_preset_manager.py` - 13개 테스트
+  - 저장/로드/삭제/이름변경
+  - 프리셋 존재 여부 확인
+  - 모든 프리셋 가져오기
+  - 기본 프리셋 생성
+  - 덮어쓰기
+  - 지속성 (persistence across instances)
+- **전체 테스트:** `pytest tests/ -v` → **49/49 passed** (기존 36 + 신규 13)
+
+### 검증
+- [x] 프리셋 매니저 QSettings 저장/로드
+- [x] 스타일 다이얼로그 프리셋 UI
+- [x] 기본 프리셋 자동 생성
+- [x] 프리셋 선택하여 스타일 적용
+- [x] 프리셋 저장/이름변경/삭제
+- [x] 덮어쓰기 확인 다이얼로그
+- [x] 단위 테스트 49/49 passed
+
+### 문서화
+- **신규:** `TESTING.md` - 포괄적 수동 테스트 체크리스트
+  - 12개 카테고리 (기본 동작, 자막 생성, 편집, 멀티트랙, 스타일링, 검색, 번역, 설정, 내보내기, MKV, UI/UX, 에러 처리)
+  - 100개 이상의 테스트 항목
+  - 결과 기록 표
+  - 알려진 이슈 섹션
+
+### Git Commit
+- `Phase 4 Week 2: 자막 스타일 프리셋 구현` (예정)
+
+**다음 TODO:**
+1. 수동 GUI 테스트 (TESTING.md 체크리스트 실행)
+2. Phase 4 Week 3 계획 및 구현
 
 ---
 
