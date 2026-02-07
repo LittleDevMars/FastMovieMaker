@@ -833,6 +833,10 @@ class MainWindow(QMainWindow):
                 # Refresh UI to show the new track
                 self._refresh_all_widgets()
 
+                # Set timeline duration to TTS audio length if no video
+                if not self._project.has_video and track.audio_duration_ms > 0:
+                    self._timeline.set_duration(track.audio_duration_ms)
+
                 self.statusBar().showMessage(
                     f"TTS generated: {len(track)} segments, audio: {audio_path}"
                 )
