@@ -1,8 +1,9 @@
-"""Subtitle list panel using QTableWidget with inline editing."""
+"""Subtitle list panel using QTableWidget with inline editing and search."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
 )
+
+from src.ui.search_bar import SearchBar
 
 from src.models.subtitle import SubtitleTrack
 from src.utils.time_utils import ms_to_display, display_to_ms
@@ -59,14 +62,25 @@ class SubtitlePanel(QWidget):
         super().__init__(parent)
         self._track: SubtitleTrack | None = None
         self._editing = False  # guard to ignore cellChanged during rebuild
+        self._search_results = []  # indexes of matched segments
+        self._current_result = -1  # current highlighted result index
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Header with subtitle count
         self._header_label = QLabel("Subtitles")
         self._header_label.setStyleSheet("font-weight: bold; padding: 4px;")
         layout.addWidget(self._header_label)
 
+        # Search bar (initially hidden)
+        self._search_bar = SearchBar(self)
+        self._search_bar.search_changed.connect(self._on_search)
+        self._search_bar.next_result.connect(self._on_next_result)
+        self._search_bar.previous_result.connect(self._on_previous_result)
+        layout.addWidget(self._search_bar)
+
+        # Subtitle table
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(["#", "Start", "End", "Text"])
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -87,6 +101,9 @@ class SubtitlePanel(QWidget):
         self._table.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self._table)
 
+        # Search shortcuts
+        self._setup_shortcuts()
+
     # --------------------------------------------------------------- Public
 
     def set_track(self, track: SubtitleTrack | None) -> None:
@@ -95,7 +112,21 @@ class SubtitlePanel(QWidget):
 
     def refresh(self) -> None:
         """Rebuild the table from the current track data."""
+        # Remember current search text
+        search_visible = self._search_bar.isVisible()
+        if search_visible:
+            search_text = self._search_bar._search_edit.text()
+            case_sensitive = self._search_bar._case_checkbox.isChecked()
+        else:
+            search_text = ""
+            case_sensitive = False
+
+        # Rebuild table
         self._rebuild_table()
+
+        # Restore search if active
+        if search_visible and search_text:
+            self._on_search(search_text, case_sensitive)
 
     # --------------------------------------------------------------- Build
 
@@ -168,6 +199,128 @@ class SubtitlePanel(QWidget):
             if new_text and new_text != self._track[row].text:
                 self.text_edited.emit(row, new_text)
 
+    # --------------------------------------------------------------- Search
+
+    def _setup_shortcuts(self) -> None:
+        """Setup keyboard shortcuts for search."""
+        # Ctrl+F - show search bar
+        search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        search_shortcut.activated.connect(self._show_search_bar)
+
+        # F3 - find next
+        next_shortcut = QShortcut(QKeySequence("F3"), self)
+        next_shortcut.activated.connect(self._on_next_result)
+
+        # Shift+F3 - find previous
+        prev_shortcut = QShortcut(QKeySequence("Shift+F3"), self)
+        prev_shortcut.activated.connect(self._on_previous_result)
+
+        # Escape - hide search bar
+        esc_shortcut = QShortcut(QKeySequence("Escape"), self)
+        esc_shortcut.activated.connect(self._hide_search_bar)
+
+    def _show_search_bar(self) -> None:
+        """Show the search bar and focus it."""
+        self._search_bar.set_focus()
+
+    def _hide_search_bar(self) -> None:
+        """Hide the search bar and clear search."""
+        self._search_bar.close_search()
+        self._clear_search_results()
+
+    def _on_search(self, text: str, case_sensitive: bool) -> None:
+        """Perform search and highlight results."""
+        self._clear_search_results()
+
+        if not text or not self._track:
+            return
+
+        # Find matching segments
+        for i, seg in enumerate(self._track):
+            if self._text_matches(seg.text, text, case_sensitive):
+                self._search_results.append(i)
+
+        # Highlight the table rows
+        self._highlight_search_results()
+
+        # Update result counter
+        self._search_bar.update_result_count(len(self._search_results))
+
+        # Go to first result if any
+        if self._search_results:
+            self._goto_result(0)
+
+    def _text_matches(self, text: str, search: str, case_sensitive: bool) -> bool:
+        """Check if text matches search criteria."""
+        if not case_sensitive:
+            return search.lower() in text.lower()
+        return search in text
+
+    def _highlight_search_results(self) -> None:
+        """Highlight rows that match search criteria."""
+        for row in range(self._table.rowCount()):
+            # Reset background
+            for col in range(self._table.columnCount()):
+                item = self._table.item(row, col)
+                if item:
+                    item.setBackground(QColor(0, 0, 0, 0))  # Transparent
+
+        # Highlight matches
+        highlight_color = QColor(100, 150, 240, 50)  # Light blue with alpha
+        for idx in self._search_results:
+            for col in range(self._table.columnCount()):
+                item = self._table.item(idx, col)
+                if item:
+                    item.setBackground(highlight_color)
+
+    def _clear_search_results(self) -> None:
+        """Clear search results and highlighting."""
+        self._search_results = []
+        self._current_result = -1
+
+        # Clear all row highlighting
+        for row in range(self._table.rowCount()):
+            for col in range(self._table.columnCount()):
+                item = self._table.item(row, col)
+                if item:
+                    item.setBackground(QColor(0, 0, 0, 0))  # Transparent
+
+    def _goto_result(self, index: int) -> None:
+        """Go to a specific search result."""
+        if not self._search_results:
+            return
+
+        # Wrap around if out of bounds
+        if index < 0:
+            index = len(self._search_results) - 1
+        elif index >= len(self._search_results):
+            index = 0
+
+        self._current_result = index
+        row = self._search_results[index]
+
+        # Select and scroll to row
+        self._table.selectRow(row)
+        self._table.scrollToItem(self._table.item(row, 0))
+
+        # Seek to this subtitle
+        self.seek_requested.emit(self._track[row].start_ms)
+
+        # Update result counter with current position
+        self._search_bar.update_result_count(len(self._search_results), self._current_result)
+
+    def _on_next_result(self) -> None:
+        """Go to the next search result."""
+        if self._current_result >= 0 and self._search_results:
+            self._goto_result(self._current_result + 1)
+
+    def _on_previous_result(self) -> None:
+        """Go to the previous search result."""
+        if self._current_result >= 0 and self._search_results:
+            self._goto_result(self._current_result - 1)
+
+    # --------------------------------------------------------------- Context Menu
+
     def _on_context_menu(self, pos) -> None:
         row = self._table.rowAt(pos.y())
         menu = QMenu(self)
@@ -179,6 +332,11 @@ class SubtitlePanel(QWidget):
             delete_action = menu.addAction("Delete Subtitle")
             menu.addSeparator()
             style_action = menu.addAction("Edit Style...")
+
+        # Add search option to context menu
+        menu.addSeparator()
+        search_action = menu.addAction("Find in Subtitles...")
+        search_action.triggered.connect(self._show_search_bar)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
         if action is not None and action == style_action:

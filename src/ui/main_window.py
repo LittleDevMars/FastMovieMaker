@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QSplitter,
@@ -24,7 +25,9 @@ from PySide6.QtWidgets import (
 
 from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.services.autosave import AutoSaveManager
 from src.services.subtitle_exporter import export_srt, import_srt
+from src.ui.dialogs.recovery_dialog import RecoveryDialog
 from src.ui.commands import (
     AddSegmentCommand,
     BatchShiftCommand,
@@ -52,11 +55,25 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1280, 800)
         self.resize(1440, 900)
 
+        # Enable drag & drop
+        self.setAcceptDrops(True)
+
         self._project = ProjectState()
         self._temp_video_path: Path | None = None  # for converted MKV etc.
+        self._current_project_path: Path | None = None
+
+        # Autosave manager
+        self._autosave = AutoSaveManager(self)
+        self._autosave.set_project(self._project)
+        self._autosave.save_completed.connect(self._on_autosave_completed)
+
+        # Check for crash recovery
+        self._check_recovery()
 
         # Undo stack
         self._undo_stack = QUndoStack(self)
+        # Connect to autosave for edit notification
+        self._undo_stack.indexChanged.connect(self._on_document_edited)
 
         # Media stack
         self._audio_output = QAudioOutput()
@@ -163,6 +180,11 @@ class MainWindow(QMainWindow):
         load_action.setShortcut(QKeySequence("Ctrl+L"))
         load_action.triggered.connect(self._on_load_project)
         file_menu.addAction(load_action)
+
+        # Recent files submenu
+        self._recent_menu = QMenu("Recent &Projects", self)
+        file_menu.addMenu(self._recent_menu)
+        self._update_recent_menu()
 
         file_menu.addSeparator()
 
@@ -293,6 +315,8 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
         self._subtitle_panel.refresh()
         self._timeline.refresh()
+        # Notify autosave of edits
+        self._autosave.notify_edit()
 
     def _refresh_track_selector(self) -> None:
         """Sync track selector with project state."""
@@ -640,34 +664,42 @@ class MainWindow(QMainWindow):
             self._video_widget.set_default_style(self._project.default_style)
             self.statusBar().showMessage(f"Style updated (segment {index + 1})")
 
-    def _on_import_srt(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import SRT", "", "SRT Files (*.srt);;All Files (*)"
-        )
+    def _on_import_srt(self, path=None) -> None:
         if not path:
-            return
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Import SRT", "", "SRT Files (*.srt);;All Files (*)"
+            )
+            if not path:
+                return
+
         try:
-            track = import_srt(Path(path))
+            path = Path(path) if isinstance(path, str) else path
+            track = import_srt(path)
             track.name = self._project.subtitle_track.name
             self._apply_subtitle_track(track)
+            self._autosave.notify_edit()
         except Exception as e:
             QMessageBox.critical(self, "Import Error", str(e))
 
-    def _on_import_srt_new_track(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import SRT to New Track", "", "SRT Files (*.srt);;All Files (*)"
-        )
+    def _on_import_srt_new_track(self, path=None) -> None:
         if not path:
-            return
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Import SRT to New Track", "", "SRT Files (*.srt);;All Files (*)"
+            )
+            if not path:
+                return
+
         try:
-            track = import_srt(Path(path))
-            track_name = Path(path).stem
+            path = Path(path) if isinstance(path, str) else path
+            track = import_srt(path)
+            track_name = path.stem
             track.name = track_name
             self._project.subtitle_tracks.append(track)
             self._project.active_track_index = len(self._project.subtitle_tracks) - 1
             self._undo_stack.clear()
             self._refresh_track_selector()
             self._on_track_changed(self._project.active_track_index)
+            self._autosave.notify_edit()
             self.statusBar().showMessage(f"Imported to new track: {track_name}")
         except Exception as e:
             QMessageBox.critical(self, "Import Error", str(e))
@@ -715,27 +747,39 @@ class MainWindow(QMainWindow):
             return
         try:
             from src.services.project_io import save_project
-            save_project(self._project, Path(path))
+            path = Path(path)
+            save_project(self._project, path)
+            self._current_project_path = path
+            self._autosave.set_active_file(path)
+            self._update_recent_menu()
             self.statusBar().showMessage(f"Project saved: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
-    def _on_load_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Project", "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
-        )
+    def _on_load_project(self, path=None) -> None:
         if not path:
-            return
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Project", "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
+            )
+            if not path:
+                return
+
         try:
             from src.services.project_io import load_project
-            project = load_project(Path(path))
+            path = Path(path)
+            project = load_project(path)
             self._project = project
+            self._current_project_path = path
+            self._autosave.set_project(project)
+            self._autosave.set_active_file(path)
             self._undo_stack.clear()
+
             # Load video if it exists
             if project.video_path and project.video_path.is_file():
                 self._player.setSource(QUrl.fromLocalFile(str(project.video_path)))
                 self._player.play()
                 self.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
+
             # Apply subtitles
             self._video_widget.set_default_style(project.default_style)
             self._refresh_track_selector()
@@ -744,6 +788,8 @@ class MainWindow(QMainWindow):
                 self._video_widget.set_subtitle_track(track)
                 self._subtitle_panel.set_track(track)
                 self._timeline.set_track(track)
+
+            self._update_recent_menu()
             self.statusBar().showMessage(f"Project loaded: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
@@ -774,10 +820,159 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
 
+    # ------------------------------------------------- Autosave & Recovery
+
+    def _check_recovery(self) -> None:
+        """Check for any recovery files on startup."""
+        recovery_path = self._autosave.check_for_recovery()
+        if recovery_path:
+            dialog = RecoveryDialog([recovery_path], self)
+            result = dialog.exec()
+
+            if result == 1:  # Accepted (restore)
+                try:
+                    recovery_file = dialog.get_selected_file()
+                    recovered_project = self._autosave.load_recovery(recovery_file)
+                    self._project = recovered_project
+
+                    # Load video if it exists
+                    if recovered_project.video_path and recovered_project.video_path.is_file():
+                        self._player.setSource(QUrl.fromLocalFile(str(recovered_project.video_path)))
+                        self.setWindowTitle(f"{recovered_project.video_path.name} – {APP_NAME} (Recovered)")
+
+                    # Apply subtitles
+                    if recovered_project.has_subtitles:
+                        self._video_widget.set_default_style(recovered_project.default_style)
+                        track = recovered_project.subtitle_track
+                        self._video_widget.set_subtitle_track(track)
+                        self._subtitle_panel.set_track(track)
+                        self._timeline.set_track(track)
+                        self._refresh_track_selector()
+
+                    self.statusBar().showMessage("Project recovered successfully")
+                except Exception as e:
+                    QMessageBox.critical(self, "Recovery Error", str(e))
+
+            # Clean up recovery files whether restored or discarded
+            self._autosave.cleanup_recovery_files()
+
+    def _update_recent_menu(self) -> None:
+        """Update the Recent Projects menu with latest entries."""
+        self._recent_menu.clear()
+
+        recent_files = self._autosave.get_recent_files()
+        if not recent_files:
+            no_recent = QAction("No Recent Projects", self)
+            no_recent.setEnabled(False)
+            self._recent_menu.addAction(no_recent)
+            return
+
+        for i, path in enumerate(recent_files):
+            action = QAction(f"{i+1}. {path.name}", self)
+            action.setData(str(path))
+            action.triggered.connect(self._on_open_recent)
+            self._recent_menu.addAction(action)
+
+        self._recent_menu.addSeparator()
+        clear_action = QAction("Clear Recent Projects", self)
+        clear_action.triggered.connect(self._on_clear_recent)
+        self._recent_menu.addAction(clear_action)
+
+    def _on_open_recent(self) -> None:
+        """Open a project from the recent files menu."""
+        action = self.sender()
+        if action and action.data():
+            path = Path(action.data())
+            if path.is_file():
+                self._on_load_project(path)
+            else:
+                QMessageBox.warning(
+                    self, "File Not Found",
+                    f"The file {path} no longer exists."
+                )
+                # Remove from recent list
+                self._autosave.get_recent_files()
+                self._update_recent_menu()
+
+    def _on_clear_recent(self) -> None:
+        """Clear the recent files list."""
+        self._autosave.clear_recent_files()
+        self._update_recent_menu()
+
+    def _on_autosave_completed(self, path: Path) -> None:
+        """Called when an autosave operation completes."""
+        self.statusBar().showMessage(f"Autosaved: {path.name}", 2000)
+
+    def _on_document_edited(self) -> None:
+        """Called when the document is edited (via undo stack)."""
+        self._autosave.notify_edit()
+
+    # ------------------------------------------------- Lifecycle
+
+    # ----------------------------------------------------- Drag & Drop
+
+    def dragEnterEvent(self, event) -> None:
+        """Handle drag enter events for files."""
+        if event.mimeData().hasUrls():
+            # Check if any URL is a supported file type
+            urls = event.mimeData().urls()
+            if any(self._is_supported_file(url) for url in urls):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        """Handle drop events for files."""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if not urls:
+                return
+
+            # Process only the first URL for simplicity
+            url = urls[0]
+            path = Path(url.toLocalFile())
+            if not path.is_file():
+                return
+
+            # Determine file type and handle accordingly
+            suffix = path.suffix.lower()
+
+            if suffix == ".srt":
+                # Ask if they want to create a new track or replace current
+                result = QMessageBox.question(
+                    self, "Import SRT",
+                    "Do you want to import this SRT file as a new track?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if result == QMessageBox.StandardButton.Yes:
+                    self._on_import_srt_new_track(path)
+                else:
+                    self._on_import_srt(path)
+
+            elif suffix == ".fmm.json":
+                self._on_load_project(path)
+
+            elif suffix in VIDEO_EXTENSIONS:
+                self._load_video(path)
+
+            event.acceptProposedAction()
+
+    def _is_supported_file(self, url) -> bool:
+        """Check if the URL is a supported file type."""
+        path = Path(url.toLocalFile())
+        if not path.is_file():
+            return False
+
+        suffix = path.suffix.lower()
+        return suffix in VIDEO_EXTENSIONS or suffix == ".srt" or suffix == ".fmm.json"
+
+    # ----------------------------------------------------- Lifecycle
+
     def closeEvent(self, event) -> None:
         settings = QSettings()
         settings.setValue("window_geometry", self.saveGeometry())
         settings.setValue("window_state", self.saveState())
         self._player.stop()
         self._cleanup_temp_video()
+        # Final save before closing
+        self._autosave.save_now()
         super().closeEvent(event)
