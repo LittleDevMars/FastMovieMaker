@@ -48,6 +48,7 @@ from src.ui.timeline_widget import TimelineWidget
 from src.ui.track_selector import TrackSelector
 from src.ui.video_player_widget import VideoPlayerWidget
 from src.ui.dialogs.whisper_dialog import WhisperDialog
+from src.ui.dialogs.tts_dialog import TTSDialog
 from src.utils.config import APP_NAME, APP_VERSION, VIDEO_FILTER, find_ffmpeg
 
 
@@ -238,6 +239,11 @@ class MainWindow(QMainWindow):
         gen_action.setShortcut(QKeySequence("Ctrl+G"))
         gen_action.triggered.connect(self._on_generate_subtitles)
         sub_menu.addAction(gen_action)
+
+        tts_action = QAction("Generate &Speech (TTS)...", self)
+        tts_action.setShortcut(QKeySequence("Ctrl+T"))
+        tts_action.triggered.connect(self._on_generate_tts)
+        sub_menu.addAction(tts_action)
 
         clear_action = QAction("&Clear Subtitles", self)
         clear_action.triggered.connect(self._on_clear_subtitles)
@@ -683,6 +689,52 @@ class MainWindow(QMainWindow):
             track = dialog.result_track()
             if track and len(track) > 0:
                 self._apply_subtitle_track(track)
+
+    def _on_generate_tts(self) -> None:
+        """Open TTS dialog to generate speech from script."""
+        # Check if video is loaded
+        if not self._project.has_video:
+            QMessageBox.warning(
+                self,
+                "No Video",
+                "Please load a video first before generating TTS.\n\n"
+                "TTS audio will be mixed with the video's background audio."
+            )
+            return
+
+        # Check FFmpeg
+        if not find_ffmpeg():
+            QMessageBox.critical(
+                self,
+                "FFmpeg Missing",
+                "FFmpeg is required for TTS generation but was not found."
+            )
+            return
+
+        # Get video audio path (same as video path for now)
+        video_audio_path = self._project.video_path
+
+        # Open TTS dialog
+        dialog = TTSDialog(video_audio_path=video_audio_path, parent=self)
+        if dialog.exec():
+            track = dialog.result_track()
+            audio_path = dialog.result_audio_path()
+
+            if track and len(track) > 0:
+                # Add as new track
+                track.name = f"TTS Track {len(self._project.tracks) + 1}"
+                self._project.tracks.append(track)
+                self._track_selector.add_track(track.name)
+
+                # Select the new track
+                self._track_selector.set_current_track(len(self._project.tracks) - 1)
+
+                self.statusBar().showMessage(
+                    f"TTS generated: {len(track)} segments, audio: {audio_path}"
+                )
+
+                # TODO: Store audio_path in project for future playback
+                # For now, we just notify the user where it is saved
 
     def _apply_subtitle_track(self, track: SubtitleTrack) -> None:
         self._project.subtitle_track = track

@@ -3,3 +3,4 @@ openai-whisper>=20250625
 torch>=2.3.0
 torchaudio>=2.3.0
 ffmpeg-python>=0.2.0
+edge-tts>=7.2.0

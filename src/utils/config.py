@@ -38,6 +38,21 @@ VIDEO_FILTER = "Video Files ({});;All Files (*)".format(
     " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS)
 )
 
+# TTS settings
+TTS_DEFAULT_VOICE = "ko-KR-SunHiNeural"
+TTS_DEFAULT_RATE = "+0%"
+TTS_DEFAULT_SPEED = 1.0  # 1.0 = normal speed
+TTS_VOICES = {
+    "Korean": {
+        "Female": ["ko-KR-SunHiNeural"],
+        "Male": ["ko-KR-InJoonNeural", "ko-KR-HyunsuMultilingualNeural"]
+    },
+    "English": {
+        "Female": ["en-US-JennyNeural", "en-US-AriaNeural"],
+        "Male": ["en-US-GuyNeural", "en-US-ChristopherNeural"]
+    }
+}
+
 # UI
 TIMELINE_HEIGHT = 120
 SUBTITLE_FONT_SIZE = 18

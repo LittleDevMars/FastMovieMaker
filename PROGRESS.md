@@ -2,6 +2,182 @@
 
 ---
 
+## 2026-02-08 (Day 6) 작업 요약
+
+**TTS (Text-to-Speech) 음성 생성 기능 구현 완료**
+
+### 구현 내용
+
+#### 1. 핵심 서비스 구현 (Day 1)
+- **신규:** `src/services/text_splitter.py` - 대본 분할 서비스
+  - 3가지 분할 전략: SENTENCE (문장 단위), NEWLINE (줄바꿈), FIXED_LENGTH (고정 길이)
+  - 문장 경계 인식 (마침표, 물음표, 느낌표)
+  - 단어 경계 존중 (고정 길이 분할 시)
+  - 한국어/영어 다국어 지원
+
+- **신규:** `src/services/tts_service.py` - edge-tts 통합 서비스
+  - `generate_speech()` - 단일 텍스트 음성 생성
+  - `generate_segments()` - 배치 음성 생성 (진행률 콜백)
+  - `list_voices()` - 사용 가능한 음성 목록 조회
+  - `format_rate()` - 속도 배율 → edge-tts rate 문자열 변환
+  - 비동기 처리 (asyncio/await)
+  - 타임아웃 설정 (기본 30초)
+
+- **신규:** `src/services/audio_merger.py` - FFmpeg 오디오 병합/믹싱
+  - `get_audio_duration()` - FFprobe로 오디오 길이 측정
+  - `merge_audio_files()` - 여러 오디오 파일 concat
+  - `mix_audio_tracks()` - 두 오디오 트랙 믹싱 (볼륨 조절)
+  - `has_audio_stream()` - 오디오 스트림 존재 확인
+  - 오디오 없는 비디오 처리 (TTS만 반환)
+
+- **신규:** `src/utils/ffmpeg_utils.py` - FFmpeg/FFprobe 경로 찾기
+  - `find_ffmpeg()` - ffmpeg 실행 파일 경로
+  - `find_ffprobe()` - ffprobe 실행 파일 경로
+  - 플랫폼별 경로 처리 (macOS/Windows)
+
+- **개선:** `src/utils/config.py` - TTS 설정 추가
+  - `TTS_DEFAULT_VOICE`, `TTS_DEFAULT_RATE`, `TTS_DEFAULT_SPEED`
+  - `TTS_VOICES` - 언어/성별별 음성 목록 (한국어/영어)
+
+- **개선:** `requirements.txt` - edge-tts>=7.2.0 추가
+
+#### 2. Worker + Dialog 구현 (Day 2)
+- **신규:** `src/workers/tts_worker.py` - TTS 백그라운드 워커
+  - QThread 기반 비동기 실행
+  - 대본 분할 → TTS 생성 → 병합 → 믹싱 → 자막 트랙 생성 파이프라인
+  - 진행률 시그널 (current/total 세그먼트)
+  - Cancel 기능
+  - 임시 파일 자동 정리
+  - 생성된 오디오를 `~/.fastmoviemaker/`에 영구 저장
+
+- **신규:** `src/ui/dialogs/tts_dialog.py` - TTS 설정 다이얼로그
+  - 대본 입력 (QPlainTextEdit, 여러 줄 지원)
+  - 언어 선택 (한국어/영어)
+  - 음성 선택 (성별별 음성 목록)
+  - 속도 조절 (0.5x ~ 2.0x)
+  - 분할 전략 선택 (문장/줄바꿈/고정 길이)
+  - 볼륨 조절 (배경 오디오 + TTS 오디오)
+  - 진행률 표시 (QProgressBar)
+  - 에러 처리 (QMessageBox)
+
+- **개선:** `src/ui/main_window.py` - TTS 메뉴 통합
+  - Subtitles → "Generate &Speech (TTS)..." 메뉴 추가 (Ctrl+T)
+  - `_on_generate_tts()` 핸들러 구현
+  - 비디오 로드 확인
+  - FFmpeg 확인
+  - 생성된 트랙을 멀티트랙에 추가
+  - 상태바 메시지 표시
+
+#### 3. 테스트
+- **신규:** `tests/test_text_splitter.py` - 11개 텍스트 분할 테스트
+  - 빈 텍스트, 공백 처리
+  - 문장 분할 (영어/한국어)
+  - 줄바꿈 분할 (빈 줄 무시)
+  - 고정 길이 분할 (단어 경계 존중)
+  - 에러 처리
+
+- **통합 테스트:** `test_tts_integration.py` (스크래치패드)
+  - 대본 분할 → TTS 생성 → 병합 → 자막 트랙 생성 전체 워크플로우
+  - 3개 한국어 문장 (10.42초 오디오 생성)
+  - 오디오 믹싱 (배경 없는 비디오 처리 확인)
+
+- **전체 테스트:** `pytest tests/ -v` → **96/96 passed**
+  - 기존 85개 + 신규 11개
+  - 0.13초 실행
+  - 회귀 없음
+
+### 기술 세부사항
+
+#### TTS 워크플로우
+```
+사용자 대본 입력
+    ↓
+TextSplitter: 문장/줄바꿈/고정 길이로 분할
+    ↓
+TTSService: 각 세그먼트마다 edge-tts 음성 생성
+    ↓
+AudioMerger: 모든 세그먼트 오디오 병합 (concat)
+    ↓
+AudioMerger: 비디오 오디오와 믹싱 (볼륨 조절)
+    ↓
+SubtitleTrack 생성 (오디오 길이 기반 타이밍)
+    ↓
+프로젝트에 새 트랙으로 추가
+```
+
+#### 오디오 믹싱 전략
+- **기본:** 배경 오디오 50%, TTS 오디오 100%
+- **UI 조절:** 다이얼로그에서 각 트랙 볼륨 조절 가능 (0.0-1.0)
+- **오디오 없는 비디오:** TTS 오디오만 반환 (shutil.copy2)
+
+#### 타이밍 정확성
+- FFprobe로 각 세그먼트 오디오 길이 정밀 측정 (초 단위)
+- 밀리초 단위로 SubtitleSegment 생성
+- 순차적 누적으로 정확한 타이밍 보장
+
+### 수정/생성된 파일
+
+**생성 (9개):**
+1. `src/services/text_splitter.py` - 대본 분할 (183줄)
+2. `src/services/tts_service.py` - edge-tts 통합 (164줄)
+3. `src/services/audio_merger.py` - FFmpeg 병합/믹싱 (212줄)
+4. `src/utils/ffmpeg_utils.py` - FFmpeg/FFprobe 경로 (32줄)
+5. `src/workers/tts_worker.py` - TTS 워커 (184줄)
+6. `src/ui/dialogs/tts_dialog.py` - TTS 다이얼로그 (283줄)
+7. `tests/test_text_splitter.py` - 텍스트 분할 테스트 (108줄)
+8. `scratchpad/test_tts.py` - 단위 테스트 스크립트
+9. `scratchpad/test_tts_integration.py` - 통합 테스트 스크립트
+
+**수정 (3개):**
+1. `src/utils/config.py` - TTS 설정 추가
+2. `src/ui/main_window.py` - TTS 메뉴 및 핸들러
+3. `requirements.txt` - edge-tts 추가
+
+**총 코드량:** 약 1,166줄 추가
+
+### 검증
+- [x] edge-tts 설치 및 음성 목록 조회
+- [x] 한국어/영어 TTS 생성 테스트
+- [x] 대본 분할 (3가지 전략)
+- [x] 오디오 병합 (FFmpeg concat)
+- [x] 오디오 믹싱 (볼륨 조절)
+- [x] 오디오 없는 비디오 처리
+- [x] 자막 트랙 생성 (정확한 타이밍)
+- [x] 단위 테스트 96/96 passed
+- [x] 통합 테스트 통과
+- [x] 기존 기능 회귀 없음
+
+### 수동 GUI 테스트 체크리스트 (TODO)
+- [ ] 비디오 로드 (배경음악 포함 MP4)
+- [ ] Subtitles → Generate Speech (TTS)... 메뉴 클릭
+- [ ] TTSDialog 열림 확인
+- [ ] 대본 입력 (한국어 3문장)
+- [ ] 음성/속도/분할 전략 선택
+- [ ] Generate 클릭 → 진행률 확인
+- [ ] 자막 트랙 추가 확인 (SubtitlePanel)
+- [ ] 세그먼트 타이밍 확인
+- [ ] 비디오 재생 → TTS 음성 재생 확인
+- [ ] 볼륨 균형 확인
+- [ ] 프로젝트 저장/로드
+- [ ] 에러 처리 (빈 대본, 비디오 없음)
+
+### 향후 개선 (P1/P2)
+- [ ] 실시간 볼륨 조절 (슬라이더)
+- [ ] 프리뷰 재생 (생성 전 샘플)
+- [ ] 세그먼트별 개별 설정 (음성/속도)
+- [ ] 배경음악 자동 페이드 (ducking)
+- [ ] Whisper 역방향 검증 (타이밍 자동 보정)
+- [ ] TTS 설정 프리셋 저장/로드
+- [ ] GPT 대본 자동 생성
+- [ ] 배치 생성 (여러 대본 파일)
+
+**다음 TODO:**
+1. 수동 GUI 테스트 (TTS 다이얼로그 및 음성 재생)
+2. Git commit and push
+3. Phase 4 Week 3 나머지 (Waveform, Batch Export) 또는 Phase 5 계획
+
+---
+
 ## 2026-02-07 (Day 1) 작업 요약
 
 **Phase 1 전체 코드 구현 완료 + GitHub push**
