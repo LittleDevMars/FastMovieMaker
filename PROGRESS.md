@@ -4,11 +4,30 @@
 
 ## 2026-02-08 (Day 8) 작업 요약
 
-**스크린샷 캡처 기능 추가 및 오디오 타임라인 검증**
+**스크린샷 캡처 기능 추가 및 TTS 오디오 재생 동기화 구현**
 
 ### 구현 내용
 
-#### 1. 스크린샷 캡처 기능
+#### 1. TTS 오디오 재생 자동 동기화
+- **신규:** `_sync_tts_playback()` - TTS 오디오를 비디오 재생과 동기화
+  - 현재 재생 위치가 TTS 오디오 범위(audio_start_ms ~ audio_end_ms) 내에 있으면 TTS 재생
+  - 범위를 벗어나면 TTS 자동 일시정지
+  - TTS 오디오 위치를 비디오 위치에 맞춰 자동 조정
+
+- **개선:** 모든 재생 제어에 TTS 동기화 적용
+  - `_toggle_play_pause()` - Space 키로 비디오+TTS 동시 재생/일시정지
+  - `_seek_relative()` - 좌우 화살표 시크 시 TTS 동기화
+  - `_seek_frame_relative()` - Shift+화살표 프레임 시크 시 TTS 동기화
+  - `_on_timeline_seek()` - 타임라인 클릭 시크 시 TTS 동기화
+  - `_on_position_changed_by_user()` - 재생 슬라이더 이동 시 TTS 동기화
+
+- **동작 방식:**
+  1. Space로 재생 시작 → TTS가 현재 위치에서 자동 재생
+  2. 타임라인/슬라이더로 시크 → TTS 위치도 자동 조정
+  3. TTS 범위(audio_start_ms ~ audio_end_ms)를 벗어나면 자동 일시정지
+  4. TTS 범위 안으로 들어오면 자동으로 재생 재개
+
+#### 2. 스크린샷 캡처 기능
 - **신규:** Help → Take Screenshot 메뉴 추가 (Ctrl+Shift+S)
   - `_on_take_screenshot()` 핸들러 구현
   - `QWidget.grab()` 사용하여 전체 창 캡처
@@ -31,7 +50,7 @@
   - **결론:** 오디오 타임라인 기능 완전히 작동 중
 
 ### 주요 변경 파일
-- `src/ui/main_window.py` - 스크린샷 기능 추가, 디버그 print 제거
+- `src/ui/main_window.py` - TTS 재생 동기화, 스크린샷 기능
 - `tests/test_tts_ui_integration.py` - UI 통합 테스트 3개 추가
 
 ### 테스트 결과
@@ -40,6 +59,8 @@
 - 자동화 스크린샷 테스트로 시각적 검증 완료
 
 ### 커밋
+- `0b56a7e` - TTS 오디오 재생 자동 동기화 구현
+- `34f49ff` - PROGRESS.md: Day 8 - 스크린샷 캡처 기능 및 오디오 타임라인 검증
 - `20a5b08` - Add screenshot capture feature for debugging
 
 ---
