@@ -66,6 +66,14 @@ class TimelineWidget(QWidget):
         self.setFixedHeight(TIMELINE_HEIGHT)
         self.setMouseTracking(True)
 
+        # Set explicit background and border for visibility
+        self.setStyleSheet("""
+            TimelineWidget {
+                background-color: rgb(30, 30, 30);
+                border-top: 1px solid rgb(50, 50, 50);
+            }
+        """)
+
         self._track: SubtitleTrack | None = None
         self._duration_ms: int = 0
         self._playhead_ms: int = 0
