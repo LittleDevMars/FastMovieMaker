@@ -27,3 +27,22 @@ def ms_to_srt_time(ms: int) -> str:
 def seconds_to_ms(seconds: float) -> int:
     """Convert seconds (float) to integer milliseconds."""
     return int(round(seconds * 1000))
+
+
+def srt_time_to_ms(text: str) -> int:
+    """Parse SRT time 'HH:MM:SS,mmm' → milliseconds."""
+    text = text.strip().replace(",", ".")
+    parts = text.split(":")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    sec_ms = float(parts[2])
+    return int(hours * 3_600_000 + minutes * 60_000 + sec_ms * 1000)
+
+
+def display_to_ms(text: str) -> int:
+    """Parse display time 'MM:SS.mmm' → milliseconds."""
+    text = text.strip()
+    parts = text.split(":")
+    minutes = int(parts[0])
+    sec_ms = float(parts[1])
+    return int(minutes * 60_000 + sec_ms * 1000)

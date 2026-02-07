@@ -1,5 +1,7 @@
 """Extract audio from video files using FFmpeg."""
 
+from __future__ import annotations
+
 import subprocess
 import tempfile
 from pathlib import Path

@@ -48,3 +48,20 @@ class SubtitleTrack:
 
     def __getitem__(self, index: int) -> SubtitleSegment:
         return self.segments[index]
+
+    def remove_segment(self, index: int) -> None:
+        """Remove the segment at *index*."""
+        if 0 <= index < len(self.segments):
+            self.segments.pop(index)
+
+    def update_segment_text(self, index: int, text: str) -> None:
+        """Change the text of the segment at *index*."""
+        if 0 <= index < len(self.segments):
+            self.segments[index].text = text
+
+    def update_segment_time(self, index: int, start_ms: int, end_ms: int) -> None:
+        """Change start/end of the segment at *index* and re-sort."""
+        if 0 <= index < len(self.segments):
+            self.segments[index].start_ms = start_ms
+            self.segments[index].end_ms = end_ms
+            self.segments.sort(key=lambda s: s.start_ms)

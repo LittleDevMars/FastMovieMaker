@@ -1,5 +1,7 @@
 """Background worker for Whisper transcription."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal

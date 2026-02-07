@@ -1,5 +1,7 @@
 """Application configuration constants."""
 
+from __future__ import annotations
+
 import shutil
 from pathlib import Path
 

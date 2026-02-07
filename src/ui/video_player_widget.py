@@ -1,5 +1,7 @@
 """Video player widget using QGraphicsView + QGraphicsVideoItem with subtitle overlay."""
 
+from __future__ import annotations
+
 from PySide6.QtCore import Qt, QSizeF
 from PySide6.QtGui import QColor, QFont, QResizeEvent
 from PySide6.QtMultimedia import QMediaPlayer
