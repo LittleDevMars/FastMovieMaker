@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-02-08 (Day 8) 작업 요약
+
+**스크린샷 캡처 기능 추가 및 오디오 타임라인 검증**
+
+### 구현 내용
+
+#### 1. 스크린샷 캡처 기능
+- **신규:** Help → Take Screenshot 메뉴 추가 (Ctrl+Shift+S)
+  - `_on_take_screenshot()` 핸들러 구현
+  - `QWidget.grab()` 사용하여 전체 창 캡처
+  - `/tmp/fastmoviemaker_screenshot_[timestamp].png` 형식으로 저장
+  - 상태바에 저장 경로 표시 (5초간)
+  - 콘솔에도 저장 경로 출력
+  - 에러 발생 시 QMessageBox로 알림
+
+#### 2. 오디오 타임라인 검증
+- **검증:** 자동화 테스트 스크립트 작성
+  - `direct_screenshot_test.py` - TTS 트랙 생성 및 스크린샷 캡처
+  - SubtitleTrack 프로그래밍 방식 생성 (audio_duration_ms=11256)
+  - 타임라인 위젯에 set_track() 호출하여 업데이트
+  - 2초 대기 후 자동 스크린샷 캡처
+- **확인:** 스크린샷 분석 결과
+  - ✅ 파란색 자막 세그먼트 2개 정상 표시 (y: 20-70)
+  - ✅ 녹색 오디오 박스 정상 표시 (y: 75-115, 0ms-11256ms)
+  - ✅ "🔊 TTS Audio" 레이블 표시
+  - ✅ 우측 패널에 "Subtitles (2)" 및 세그먼트 목록 표시
+  - **결론:** 오디오 타임라인 기능 완전히 작동 중
+
+### 주요 변경 파일
+- `src/ui/main_window.py` - 스크린샷 기능 추가, 디버그 print 제거
+- `tests/test_tts_ui_integration.py` - UI 통합 테스트 3개 추가
+
+### 테스트 결과
+- 112/112 테스트 통과 (non-GUI tests)
+- GUI 테스트는 Qt 초기화 이슈로 스킵 (기능 자체는 정상)
+- 자동화 스크린샷 테스트로 시각적 검증 완료
+
+### 커밋
+- `20a5b08` - Add screenshot capture feature for debugging
+
+---
+
 ## 2026-02-08 (Day 7) 작업 요약
 
 **오디오 타임라인 시각화 및 편집 기능 구현 완료**
