@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -34,13 +35,20 @@ def export_video(
     try:
         export_srt(track, tmp_srt)
 
-        # Escape backslashes and colons for FFmpeg subtitles filter path (Windows)
-        srt_escaped = str(tmp_srt).replace("\\", "/").replace(":", "\\:")
+        # Escape path for FFmpeg subtitles filter
+        srt_str = str(tmp_srt).replace("\\", "/")
+        if sys.platform == "win32":
+            srt_str = srt_str.replace(":", "\\:")
+            srt_filter = f"subtitles='{srt_str}'"
+        else:
+            # On macOS/Linux, escape colons and use without quotes
+            srt_str = srt_str.replace(":", "\\:")
+            srt_filter = f"subtitles={srt_str}"
 
         cmd = [
             ffmpeg,
             "-i", str(video_path),
-            "-vf", f"subtitles='{srt_escaped}'",
+            "-vf", srt_filter,
             "-c:a", "copy",
             "-y",
             "-progress", "pipe:1",
