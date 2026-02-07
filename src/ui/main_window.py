@@ -692,16 +692,6 @@ class MainWindow(QMainWindow):
 
     def _on_generate_tts(self) -> None:
         """Open TTS dialog to generate speech from script."""
-        # Check if video is loaded
-        if not self._project.has_video:
-            QMessageBox.warning(
-                self,
-                "No Video",
-                "Please load a video first before generating TTS.\n\n"
-                "TTS audio will be mixed with the video's background audio."
-            )
-            return
-
         # Check FFmpeg
         if not find_ffmpeg():
             QMessageBox.critical(
@@ -711,8 +701,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Get video audio path (same as video path for now)
-        video_audio_path = self._project.video_path
+        # Get video audio path if video is loaded (optional for mixing)
+        video_audio_path = self._project.video_path if self._project.has_video else None
 
         # Open TTS dialog
         dialog = TTSDialog(video_audio_path=video_audio_path, parent=self)
@@ -722,12 +712,19 @@ class MainWindow(QMainWindow):
 
             if track and len(track) > 0:
                 # Add as new track
-                track.name = f"TTS Track {len(self._project.tracks) + 1}"
-                self._project.tracks.append(track)
-                self._track_selector.add_track(track.name)
+                track.name = f"TTS Track {len(self._project.subtitle_tracks)}"
+                self._project.subtitle_tracks.append(track)
 
-                # Select the new track
-                self._track_selector.set_current_track(len(self._project.tracks) - 1)
+                # Update track selector with new track list
+                track_names = [t.name for t in self._project.subtitle_tracks]
+                new_track_index = len(self._project.subtitle_tracks) - 1
+                self._track_selector.set_tracks(track_names, new_track_index)
+
+                # Update active track index
+                self._project.active_track_index = new_track_index
+
+                # Refresh UI to show the new track
+                self._refresh_all_widgets()
 
                 self.statusBar().showMessage(
                     f"TTS generated: {len(track)} segments, audio: {audio_path}"
