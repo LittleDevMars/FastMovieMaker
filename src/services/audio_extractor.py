@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -43,12 +44,11 @@ def extract_audio_to_wav(video_path: Path, output_path: Path | None = None) -> P
         str(output_path),
     ]
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    kwargs = dict(capture_output=True, text=True)
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    result = subprocess.run(cmd, **kwargs)
 
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg failed:\n{result.stderr[:500]}")
