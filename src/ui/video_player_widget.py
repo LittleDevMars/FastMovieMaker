@@ -67,6 +67,8 @@ class VideoPlayerWidget(QGraphicsView):
 
     def set_subtitle_track(self, track: SubtitleTrack | None) -> None:
         self._subtitle_track = track
+        # Force update by clearing cache
+        self._current_subtitle_text = ""
         try:
             self._update_subtitle(self._player.position())
         except RuntimeError:
