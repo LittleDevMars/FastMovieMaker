@@ -22,9 +22,16 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.subtitle import SubtitleTrack
+from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
 from src.services.tts_service import TTSService
-from src.utils.config import TTS_DEFAULT_VOICE, TTS_DEFAULT_SPEED, TTS_VOICES
+from src.utils.config import (
+    ELEVENLABS_DEFAULT_VOICES,
+    TTS_DEFAULT_VOICE,
+    TTS_DEFAULT_SPEED,
+    TTS_VOICES,
+    TTSEngine,
+)
 from src.workers.tts_worker import TTSWorker
 
 
@@ -67,6 +74,13 @@ class TTSDialog(QDialog):
         # Settings group
         settings_group = QGroupBox("Settings")
         settings_layout = QFormLayout()
+
+        # Engine selector
+        self._engine_combo = QComboBox()
+        self._engine_combo.addItem("Edge-TTS (무료)", TTSEngine.EDGE_TTS)
+        self._engine_combo.addItem("ElevenLabs (프리미엄)", TTSEngine.ELEVENLABS)
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        settings_layout.addRow("엔진:", self._engine_combo)
 
         # Language selector
         self._lang_combo = QComboBox()
@@ -163,6 +177,22 @@ class TTSDialog(QDialog):
         if default_index >= 0:
             self._voice_combo.setCurrentIndex(default_index)
 
+    def _on_engine_changed(self, index: int) -> None:
+        """Handle TTS engine selection change."""
+        engine = self._engine_combo.currentData()
+        if engine == TTSEngine.ELEVENLABS:
+            self._lang_combo.setEnabled(False)
+            self._populate_elevenlabs_voices()
+        else:
+            self._lang_combo.setEnabled(True)
+            self._populate_voices(self._lang_combo.currentText())
+
+    def _populate_elevenlabs_voices(self) -> None:
+        """Populate voice combo with ElevenLabs voices."""
+        self._voice_combo.clear()
+        for display_name, voice_id in ELEVENLABS_DEFAULT_VOICES.items():
+            self._voice_combo.addItem(display_name, voice_id)
+
     def _on_language_changed(self, language: str) -> None:
         """Handle language selection change."""
         self._populate_voices(language)
@@ -178,9 +208,24 @@ class TTSDialog(QDialog):
             )
             return
 
+        engine = self._engine_combo.currentData()
+
+        # Validate API key for ElevenLabs
+        if engine == TTSEngine.ELEVENLABS:
+            api_key = SettingsManager().get_elevenlabs_api_key()
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    "API 키 필요",
+                    "ElevenLabs를 사용하려면 API 키가 필요합니다.\n\n"
+                    "Edit > Preferences > API Keys에서 설정하세요.",
+                )
+                return
+
         # Disable controls
         self._generate_btn.setEnabled(False)
         self._script_edit.setEnabled(False)
+        self._engine_combo.setEnabled(False)
         self._lang_combo.setEnabled(False)
         self._voice_combo.setEnabled(False)
         self._speed_spin.setEnabled(False)
@@ -196,9 +241,14 @@ class TTSDialog(QDialog):
         # Get settings
         voice_data = self._voice_combo.currentData()
         speed = self._speed_spin.value()
-        rate = TTSService.format_rate(speed)
         strategy = self._strategy_combo.currentData()
         language = self._lang_combo.currentText().lower()[:2]  # "Korean" -> "ko"
+
+        # Rate format differs by engine
+        if engine == TTSEngine.ELEVENLABS:
+            rate = str(speed)
+        else:
+            rate = TTSService.format_rate(speed)
 
         bg_volume = self._bg_volume_spin.value() if self._bg_volume_spin else 0.5
         tts_volume = self._tts_volume_spin.value() if self._tts_volume_spin else 1.0
@@ -213,7 +263,8 @@ class TTSDialog(QDialog):
             language=language,
             video_audio_path=self._video_audio_path,
             bg_volume=bg_volume,
-            tts_volume=tts_volume
+            tts_volume=tts_volume,
+            engine=engine,
         )
         self._worker.moveToThread(self._thread)
 
@@ -258,10 +309,13 @@ class TTSDialog(QDialog):
         # Re-enable controls
         self._generate_btn.setEnabled(True)
         self._script_edit.setEnabled(True)
-        self._lang_combo.setEnabled(True)
+        self._engine_combo.setEnabled(True)
         self._voice_combo.setEnabled(True)
         self._speed_spin.setEnabled(True)
         self._strategy_combo.setEnabled(True)
+        # Re-enable language only if edge-tts is selected
+        engine = self._engine_combo.currentData()
+        self._lang_combo.setEnabled(engine != TTSEngine.ELEVENLABS)
         if self._bg_volume_spin:
             self._bg_volume_spin.setEnabled(True)
         if self._tts_volume_spin:

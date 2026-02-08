@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from src.models.subtitle import SubtitleTrack
@@ -229,6 +230,21 @@ def export_video(
             errors="replace",
         )
 
+        # Drain stderr in a background thread to prevent pipe buffer deadlock.
+        # FFmpeg writes verbose per-frame stats to stderr; if the pipe buffer
+        # fills up (4 KB on Windows), FFmpeg blocks and stdout stalls too.
+        stderr_chunks: list[str] = []
+
+        def _drain_stderr():
+            try:
+                for line in process.stderr:
+                    stderr_chunks.append(line)
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
         # Parse -progress output for duration tracking
         total_duration = _get_video_duration(ffmpeg, video_path)
 
@@ -245,8 +261,10 @@ def export_video(
                         pass
 
         process.wait()
+        stderr_thread.join(timeout=10)
+
         if process.returncode != 0:
-            stderr = process.stderr.read() if process.stderr else ""
+            stderr = "".join(stderr_chunks)
             raise RuntimeError(f"FFmpeg failed (code {process.returncode}): {stderr[:500]}")
 
     finally:

@@ -235,10 +235,29 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(openai_group)
 
+        # ElevenLabs group
+        elevenlabs_group = QGroupBox("ElevenLabs (Text-to-Speech)")
+        elevenlabs_layout = QVBoxLayout(elevenlabs_group)
+
+        elevenlabs_info = QLabel(
+            "Get your API key at: https://elevenlabs.io/app/settings/api-keys"
+        )
+        elevenlabs_info.setOpenExternalLinks(True)
+        elevenlabs_info.setStyleSheet("color: gray; font-style: italic;")
+        elevenlabs_layout.addWidget(elevenlabs_info)
+
+        self._elevenlabs_key = QLineEdit()
+        self._elevenlabs_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._elevenlabs_key.setPlaceholderText("Enter ElevenLabs API key...")
+        elevenlabs_layout.addWidget(self._elevenlabs_key)
+
+        layout.addWidget(elevenlabs_group)
+
         # Info label
         info_label = QLabel(
             "Note: API keys are stored securely in your system settings.\n"
-            "Google Translate does not require an API key."
+            "Google Translate does not require an API key.\n"
+            "Edge-TTS is free and does not require an API key."
         )
         info_label.setStyleSheet("color: gray; font-style: italic; margin-top: 20px;")
         info_label.setWordWrap(True)
@@ -271,6 +290,7 @@ class PreferencesDialog(QDialog):
         # API Keys
         self._deepl_key.setText(self._settings.get_deepl_api_key())
         self._openai_key.setText(self._settings.get_openai_api_key())
+        self._elevenlabs_key.setText(self._settings.get_elevenlabs_api_key())
 
     def _save_and_accept(self):
         """Save settings and close dialog."""
@@ -296,6 +316,7 @@ class PreferencesDialog(QDialog):
         # API Keys
         self._settings.set_deepl_api_key(self._deepl_key.text().strip())
         self._settings.set_openai_api_key(self._openai_key.text().strip())
+        self._settings.set_elevenlabs_api_key(self._elevenlabs_key.text().strip())
 
         # Sync to disk
         self._settings.sync()

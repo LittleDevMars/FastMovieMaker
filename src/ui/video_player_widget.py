@@ -242,6 +242,11 @@ class VideoPlayerWidget(QGraphicsView):
         self._selected_pip_index = -1
         if self._pip_selection_border:
             self._pip_selection_border.setVisible(False)
+        # Immediately render overlays at current position
+        try:
+            self._update_image_overlays(self._player.position())
+        except RuntimeError:
+            pass
 
     def _update_image_overlays(self, position_ms: int) -> None:
         """Show/hide PIP image overlays based on playhead position."""
@@ -437,7 +442,7 @@ class VideoPlayerWidget(QGraphicsView):
                 ov = track[self._selected_pip_index]
                 delta = event.angleDelta().y()
                 step = 2.0 if delta > 0 else -2.0
-                new_scale = max(5.0, min(100.0, ov.scale_percent + step))
+                new_scale = max(5.0, min(200.0, ov.scale_percent + step))
                 if new_scale != ov.scale_percent:
                     ov.scale_percent = new_scale
                     # Re-render at new scale

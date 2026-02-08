@@ -13,6 +13,7 @@ from src.models.subtitle import SubtitleTrack, SubtitleSegment
 from src.services.text_splitter import TextSplitter, SplitStrategy
 from src.services.tts_service import TTSService
 from src.services.audio_merger import AudioMerger
+from src.utils.config import TTSEngine
 
 
 class TTSWorker(QObject):
@@ -39,20 +40,22 @@ class TTSWorker(QObject):
         language: str = "ko",
         video_audio_path: Optional[Path] = None,
         bg_volume: float = 0.5,
-        tts_volume: float = 1.0
+        tts_volume: float = 1.0,
+        engine: str = TTSEngine.EDGE_TTS,
     ):
         """
         Initialize TTS worker.
 
         Args:
             script: Text script to convert to speech
-            voice: TTS voice name (e.g., "ko-KR-SunHiNeural")
-            rate: Speech rate (e.g., "+0%")
+            voice: TTS voice name or ElevenLabs voice_id
+            rate: Speech rate (e.g., "+0%" for edge-tts, "1.0" for ElevenLabs)
             strategy: Text splitting strategy
             language: Language code (e.g., "ko", "en")
             video_audio_path: Optional path to video audio for mixing
             bg_volume: Background audio volume (0.0-1.0)
             tts_volume: TTS audio volume (0.0-1.0)
+            engine: TTS engine to use (TTSEngine.EDGE_TTS or TTSEngine.ELEVENLABS)
         """
         super().__init__()
         self._script = script
@@ -63,6 +66,7 @@ class TTSWorker(QObject):
         self._video_audio_path = video_audio_path
         self._bg_volume = bg_volume
         self._tts_volume = tts_volume
+        self._engine = engine
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -106,14 +110,35 @@ class TTSWorker(QObject):
 
             segments_data = [(seg.text, seg.index) for seg in text_segments]
 
-            audio_segments = await TTSService.generate_segments(
-                segments=segments_data,
-                voice=self._voice,
-                rate=self._rate,
-                output_dir=temp_dir,
-                on_progress=on_progress,
-                timeout=30.0
-            )
+            if self._engine == TTSEngine.ELEVENLABS:
+                from src.services.settings_manager import SettingsManager
+                from src.services.elevenlabs_tts_service import ElevenLabsTTSService
+
+                api_key = SettingsManager().get_elevenlabs_api_key()
+                el_service = ElevenLabsTTSService(api_key)
+                speed = 1.0
+                try:
+                    speed = float(self._rate)
+                except ValueError:
+                    pass
+
+                audio_segments = el_service.generate_segments(
+                    segments=segments_data,
+                    voice_id=self._voice,
+                    speed=speed,
+                    output_dir=temp_dir,
+                    on_progress=on_progress,
+                    timeout=60.0,
+                )
+            else:
+                audio_segments = await TTSService.generate_segments(
+                    segments=segments_data,
+                    voice=self._voice,
+                    rate=self._rate,
+                    output_dir=temp_dir,
+                    on_progress=on_progress,
+                    timeout=30.0,
+                )
 
             if self._cancelled:
                 return

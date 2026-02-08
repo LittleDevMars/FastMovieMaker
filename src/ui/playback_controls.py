@@ -1,4 +1,4 @@
-"""Playback controls: play/stop, seek bar, time display, volume."""
+"""재생 컨트롤: 재생/정지, 시크 바, 시간 표시, 볼륨."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -14,9 +14,12 @@ from src.utils.time_utils import ms_to_display
 
 
 class PlaybackControls(QWidget):
-    """Transport bar: play/stop, seek slider, time labels, volume."""
+    """트랜스포트 바: 재생/정지, 시크 슬라이더, 현재/총 시간 라벨, 볼륨."""
 
+    # 사용자가 슬라이더로 시크했을 때 발생 (밀리초)
     position_changed_by_user = Signal(int)  # ms
+    play_toggled = Signal()   # 재생/일시정지 토글 요청
+    stop_requested = Signal()  # 정지 요청
 
     def __init__(self, player: QMediaPlayer, audio_output: QAudioOutput, parent=None):
         super().__init__(parent)
@@ -25,7 +28,7 @@ class PlaybackControls(QWidget):
         self._tts_audio_output: QAudioOutput | None = None
         self._is_seeking = False
 
-        # --- Widgets ---
+        # --- 위젯 구성 ---
         self._play_btn = QPushButton("▶")
         self._play_btn.setFixedWidth(36)
         self._stop_btn = QPushButton("■")
@@ -42,14 +45,24 @@ class PlaybackControls(QWidget):
         self._duration_label.setFixedWidth(90)
         self._duration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._volume_label = QLabel("\U0001f50a")
-        self._volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._volume_slider.setRange(0, 100)
-        self._volume_slider.setValue(70)
-        self._volume_slider.setFixedWidth(80)
+        # Video volume
+        self._video_vol_label = QLabel("🎬")
+        self._video_vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self._video_vol_slider.setRange(0, 100)
+        self._video_vol_slider.setValue(70)
+        self._video_vol_slider.setFixedWidth(80)
+        self._video_vol_slider.setToolTip("Video volume")
         self._audio_output.setVolume(0.7)
 
-        # --- Layout ---
+        # TTS volume
+        self._tts_vol_label = QLabel("🎤")
+        self._tts_vol_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_vol_slider.setRange(0, 100)
+        self._tts_vol_slider.setValue(100)
+        self._tts_vol_slider.setFixedWidth(80)
+        self._tts_vol_slider.setToolTip("TTS volume")
+
+        # --- 레이아웃 ---
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.addWidget(self._play_btn)
@@ -57,10 +70,12 @@ class PlaybackControls(QWidget):
         layout.addWidget(self._time_label)
         layout.addWidget(self._seek_slider, 1)
         layout.addWidget(self._duration_label)
-        layout.addWidget(self._volume_label)
-        layout.addWidget(self._volume_slider)
+        layout.addWidget(self._video_vol_label)
+        layout.addWidget(self._video_vol_slider)
+        layout.addWidget(self._tts_vol_label)
+        layout.addWidget(self._tts_vol_slider)
 
-        # --- Connections ---
+        # --- 시그널 연결 ---
         self._play_btn.clicked.connect(self._on_play)
         self._stop_btn.clicked.connect(self._on_stop)
 
@@ -68,22 +83,20 @@ class PlaybackControls(QWidget):
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
         self._seek_slider.sliderMoved.connect(self._on_seek_moved)
 
-        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+        self._video_vol_slider.valueChanged.connect(self._on_video_volume_changed)
+        self._tts_vol_slider.valueChanged.connect(self._on_tts_volume_changed)
 
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.playbackStateChanged.connect(self._on_state_changed)
 
-    # --- Slots ---
+    # --- 슬롯 ---
 
     def _on_play(self) -> None:
-        if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self._player.pause()
-        else:
-            self._player.play()
+        self.play_toggled.emit()
 
     def _on_stop(self) -> None:
-        self._player.stop()
+        self.stop_requested.emit()
 
     def _on_seek_pressed(self) -> None:
         self._is_seeking = True
@@ -98,15 +111,19 @@ class PlaybackControls(QWidget):
         self._time_label.setText(ms_to_display(value))
 
     def set_tts_audio_output(self, tts_audio_output: QAudioOutput) -> None:
-        """Set TTS audio output so volume slider controls both."""
         self._tts_audio_output = tts_audio_output
-        tts_audio_output.setVolume(self._audio_output.volume())
+        tts_audio_output.setVolume(self._tts_vol_slider.value() / 100.0)
 
-    def _on_volume_changed(self, value: int) -> None:
-        vol = value / 100.0
-        self._audio_output.setVolume(vol)
+    def get_tts_volume(self) -> float:
+        """Return current TTS volume from slider (0.0 to 1.0)."""
+        return self._tts_vol_slider.value() / 100.0
+
+    def _on_video_volume_changed(self, value: int) -> None:
+        self._audio_output.setVolume(value / 100.0)
+
+    def _on_tts_volume_changed(self, value: int) -> None:
         if self._tts_audio_output:
-            self._tts_audio_output.setVolume(vol)
+            self._tts_audio_output.setVolume(value / 100.0)
 
     def _on_position_changed(self, position: int) -> None:
         if not self._is_seeking:
@@ -124,5 +141,4 @@ class PlaybackControls(QWidget):
             self._play_btn.setText("▶")
 
     def seek_to(self, position_ms: int) -> None:
-        """Programmatic seek (used by timeline/panel clicks)."""
         self._player.setPosition(position_ms)

@@ -5,17 +5,77 @@
 ## 다음 단계 (Next Session)
 
 **현재 상태**
-- Day 10 완료: 이미지 오버레이(PIP) 전체 구현 + 미디어 라이브러리 개선 + PIP 비디오 위 위치 조정
+- Day 11 완료: 버그 수정 다수 + ElevenLabs TTS + 이미지 리사이즈 프리셋 + 재생 제어 통일
 
 **즉시 할 일**
-1. **수동 GUI 테스트**
-   - 이미지 삽입 → 타임라인 보라색 블록 표시 → 재생 시 PIP 표시
-   - PIP 클릭 선택 → 드래그 이동 → 마우스 휠 크기 조절
-   - 내보내기 시 이미지 오버레이 합성 확인
+1. **수동 GUI 테스트** — 이번 세션 수정사항 확인
 2. **Phase 5** 계획 검토 (필요 시)
 
 **참고**
 - 가상환경: Python 3.13 사용 (3.9 호환성 고려 불필요)
+
+---
+
+## 2026-02-08 (Day 11) 작업 요약
+
+**버그 수정 + ElevenLabs TTS + 이미지 리사이즈 + 재생 제어 통일**
+
+### 1. Export Video 데드락 수정 (`video_exporter.py`)
+- 원인: `stdout=PIPE` + `stderr=PIPE`에서 stdout만 읽어 stderr 4KB 버퍼 오버플로 → FFmpeg 블록
+- 수정: `threading.Thread`로 stderr를 백그라운드에서 drain
+
+### 2. 타임라인 미반영 수정 (비디오 없이 TTS/이미지 추가 시)
+- 원인: `_duration_ms == 0`이면 paintEvent에서 "No video loaded" 반환
+- 수정: `_ensure_timeline_duration()` 헬퍼 — TTS/이미지 끝 시간으로 duration 자동 계산
+- 적용: TTS 생성, 이미지 삽입 3곳, 오디오 재생성 경로
+
+### 3. 이미지 오버레이 겹침 구분 (`timeline_widget.py`)
+- 문제: 겹치는 이미지가 같은 y좌표에 그려져 구분 불가 + 비디오 없을 때 "Loading waveform..." 표시
+- 수정: row stacking 알고리즘 + 행별 다른 색상 (보라/초록/주황) + `_has_video` 플래그
+
+### 4. TIMELINE_HEIGHT 증가
+- 210px → 260px — 비디오+웨이브폼+이미지 2행 수용
+
+### 5. TTS 재생 동기화 수정
+- 세그먼트 클릭 시 비디오 재생 상태 확인 후 TTS 시작 (불필요한 자동재생 방지)
+
+### 6. 볼륨 슬라이더 반영 수정
+- `_on_tts_position_changed`에서 `seg.volume * slider_vol`로 곱하기
+- `PlaybackControls.get_tts_volume()` 메서드 추가
+
+### 7. 플레이/스톱 버튼과 스페이스바 동작 통일
+- `PlaybackControls`에 `play_toggled` / `stop_requested` 시그널 추가
+- 버튼 클릭 → 시그널 → `MainWindow._toggle_play_pause()` / `_on_stop_all()` 라우팅
+- 스페이스바/플레이 버튼/스톱 버튼 모두 동일한 코드 경로
+
+### 8. 이미지 드래그 불가 수정
+- 원인: 이미지가 타임라인 전체를 채워 clamping이 이동을 차단
+- 수정: 드래그 시 `_duration_ms` 자동 확장 (IMAGE_MOVE, IMAGE_RESIZE_RIGHT)
+
+### 9. 이미지 리사이즈 프리셋 확장
+- 기존: Fit Width, Full Screen, 16:9, 9:16
+- 추가: **화면에 맞춤 (비율 유지)**, **화면 높이에 맞춤**
+- 컨텍스트 메뉴 한글화
+- 마우스 휠 스케일 상한: 100% → 200%
+
+### 10. ElevenLabs TTS 엔진 추가
+- `src/services/elevenlabs_tts_service.py` (신규) — REST API 클라이언트
+- `src/utils/config.py` — TTSEngine 클래스, ELEVENLABS_DEFAULT_VOICES
+- `src/services/settings_manager.py` — ElevenLabs API 키 저장
+- `src/ui/dialogs/preferences_dialog.py` — API Keys 탭에 ElevenLabs 필드
+- `src/ui/dialogs/tts_dialog.py` — 엔진 선택 콤보, 동적 음성 목록
+- `src/workers/tts_worker.py` — 엔진별 분기 (edge-tts vs ElevenLabs)
+- `tests/test_elevenlabs_tts_service.py` (신규) — 유닛 테스트
+
+### 11. `_seek_frame_relative` 이중 호출 수정
+- `_sync_tts_playback()` 중복 호출 제거
+
+### 파일 변경 요약
+- **신규 (3):** `elevenlabs_tts_service.py`, `test_elevenlabs_tts_service.py`, `run.bat`
+- **수정 (11):** main_window.py, timeline_widget.py, playback_controls.py, video_player_widget.py, video_exporter.py, config.py, settings_manager.py, preferences_dialog.py, tts_dialog.py, tts_worker.py, media_library_panel.py
+
+### 테스트 결과
+- 229/229 passed (GUI 테스트 제외)
 
 ---
 

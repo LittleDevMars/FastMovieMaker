@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor, QMouseEvent, QPixmap
+from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl, Signal
+from PySide6.QtGui import QCursor, QDrag, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -86,8 +86,36 @@ class _ThumbnailWidget(QWidget):
             return QPixmap(self._item.thumbnail_path)
         return None
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if not hasattr(self, '_drag_start_pos') or self._drag_start_pos is None:
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < 20:
+            return
+        # Start drag
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(self._item.file_path)])
+        mime.setData("application/x-fmm-media-type", self._item.media_type.encode())
+        drag.setMimeData(mime)
+        # Use thumbnail as drag pixmap
+        thumb_pix = self._thumb_label.pixmap()
+        if thumb_pix and not thumb_pix.isNull():
+            scaled = thumb_pix.scaled(80, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            drag.setPixmap(scaled)
+            drag.setHotSpot(QPoint(scaled.width() // 2, scaled.height() // 2))
+        drag.exec(Qt.DropAction.CopyAction)
+        self._drag_start_pos = None
+
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = None
             self.clicked.emit(self._item.item_id)
         super().mouseReleaseEvent(event)
 

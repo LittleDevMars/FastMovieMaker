@@ -426,7 +426,7 @@ class MainWindow(QMainWindow):
         )
 
         if is_playing:
-            # Pause both players
+            # Pause both players (video state change handler will also pause TTS)
             self._player.pause()
             self._tts_player.pause()
         else:
@@ -445,8 +445,17 @@ class MainWindow(QMainWindow):
                             self._tts_player.setSource(QUrl.fromLocalFile(str(audio_path)))
                         self._tts_player.play()
 
+    def _on_stop_all(self) -> None:
+        """Stop both video and TTS players."""
+        self._player.stop()
+        self._tts_player.stop()
+
     def _sync_tts_playback(self) -> None:
-        """Synchronize TTS audio playback with video position."""
+        """Synchronize TTS audio playback with video position.
+
+        Only starts TTS audio if the video player is actually playing.
+        When video is paused (e.g. seek), TTS position is updated but not played.
+        """
         try:
             track = self._project.subtitle_track
 
@@ -458,6 +467,10 @@ class MainWindow(QMainWindow):
             audio_path = Path(track.audio_path)
             if not audio_path.exists():
                 return
+
+            video_is_playing = (
+                self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            )
 
             # Get current playback position
             current_pos_ms = self._player.position()
@@ -477,20 +490,24 @@ class MainWindow(QMainWindow):
                 if not current_source.isValid() or current_source != new_source:
                     self._tts_player.setSource(new_source)
 
-                # Set position and play
+                # Set position
                 self._tts_player.setPosition(tts_pos_ms)
 
-                # Only call play() if not already playing
-                if self._tts_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
-                    self._tts_player.play()
+                # Only play TTS if video is actually playing
+                if video_is_playing:
+                    if self._tts_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+                        self._tts_player.play()
+                else:
+                    # Video is paused — don't start TTS
+                    if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                        self._tts_player.pause()
             else:
                 # Outside TTS audio range, stop TTS playback
                 if self._tts_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
                     self._tts_player.pause()
 
         except Exception as e:
-            # Silently handle TTS sync errors to avoid disrupting playback
-            print(f"Warning: TTS sync error: {e}")
+            pass
 
     def _seek_relative(self, delta_ms: int) -> None:
         pos = max(0, self._player.position() + delta_ms)
@@ -514,7 +531,6 @@ class MainWindow(QMainWindow):
         ms_delta = frame_to_ms(frame_delta, fps)
 
         self._seek_relative(ms_delta)
-        self._sync_tts_playback()
 
     def _on_delete_selected_subtitle(self) -> None:
         # Check if an image overlay is selected in timeline
@@ -534,6 +550,8 @@ class MainWindow(QMainWindow):
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.positionChanged.connect(self._on_player_position_changed)
         self._player.errorOccurred.connect(self._on_player_error)
+        self._controls.play_toggled.connect(self._toggle_play_pause)
+        self._controls.stop_requested.connect(self._on_stop_all)
         self._controls.position_changed_by_user.connect(self._timeline.set_playhead)
         self._controls.position_changed_by_user.connect(self._on_position_changed_by_user)
 
@@ -561,6 +579,7 @@ class MainWindow(QMainWindow):
         self._timeline.insert_image_requested.connect(self._on_insert_image_overlay)
         self._timeline.image_overlay_moved.connect(self._on_image_overlay_moved)
         self._timeline.image_overlay_selected.connect(self._on_image_overlay_selected)
+        self._timeline.image_overlay_resize.connect(self._on_image_overlay_resize)
 
         # PIP drag on video player
         self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
@@ -577,6 +596,12 @@ class MainWindow(QMainWindow):
         )
         self._media_panel.image_insert_to_timeline.connect(
             self._on_media_image_insert_to_timeline
+        )
+
+        # Timeline drag-and-drop signals
+        self._timeline.image_file_dropped.connect(self._on_image_file_dropped)
+        self._timeline.video_file_dropped.connect(
+            lambda path: self._load_video(Path(path))
         )
 
         # Template signals
@@ -600,6 +625,32 @@ class MainWindow(QMainWindow):
         self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
         # Notify autosave of edits
         self._autosave.notify_edit()
+
+    def _ensure_timeline_duration(self) -> None:
+        """Ensure the timeline has a non-zero duration even without a video.
+
+        Calculates the required duration from all tracks (subtitles, TTS audio,
+        image overlays) and updates both the project and timeline if needed.
+        """
+        if self._project.has_video and self._project.duration_ms > 0:
+            return  # Video provides the duration
+
+        needed_ms = 0
+
+        # From subtitle/TTS tracks
+        for t in self._project.subtitle_tracks:
+            if t.audio_duration_ms > 0:
+                needed_ms = max(needed_ms, t.audio_duration_ms)
+            if len(t) > 0:
+                needed_ms = max(needed_ms, t[-1].end_ms)
+
+        # From image overlays
+        for ov in self._project.image_overlay_track:
+            needed_ms = max(needed_ms, ov.end_ms)
+
+        if needed_ms > 0:
+            self._project.duration_ms = max(self._project.duration_ms, needed_ms)
+            self._timeline.set_duration(self._project.duration_ms)
 
     def _refresh_track_selector(self) -> None:
         """Sync track selector with project state."""
@@ -649,6 +700,11 @@ class MainWindow(QMainWindow):
     def _on_timeline_segment_selected(self, index: int) -> None:
         if self._project.has_subtitles and 0 <= index < len(self._project.subtitle_track):
             self._subtitle_panel._table.selectRow(index)
+            # Play only this segment's individual audio
+            seg = self._project.subtitle_track[index]
+            if seg.audio_file and Path(seg.audio_file).exists():
+                self._tts_player.setSource(QUrl.fromLocalFile(seg.audio_file))
+                self._tts_player.play()
 
     def _on_timeline_segment_moved(self, index: int, new_start: int, new_end: int) -> None:
         track = self._project.subtitle_track
@@ -700,6 +756,7 @@ class MainWindow(QMainWindow):
         self._project.image_overlay_track.add_overlay(overlay)
 
         io_track = self._project.image_overlay_track
+        self._ensure_timeline_duration()
         self._timeline.set_image_overlay_track(io_track)
         self._video_widget.set_image_overlay_track(io_track)
         self._autosave.notify_edit()
@@ -712,6 +769,7 @@ class MainWindow(QMainWindow):
             ov = io_track[index]
             ov.start_ms = new_start
             ov.end_ms = new_end
+            self._ensure_timeline_duration()
             self._timeline.update()
             self._autosave.notify_edit()
             self.statusBar().showMessage(f"Image overlay {index + 1} moved")
@@ -720,6 +778,109 @@ class MainWindow(QMainWindow):
         """Handle image overlay selection in timeline."""
         self._video_widget.select_pip(index)
         self.statusBar().showMessage(f"Image overlay {index + 1} selected")
+
+    def _on_image_overlay_resize(self, index: int, mode: str) -> None:
+        """Resize an image overlay to a preset (fit_width, full, 16:9, 9:16)."""
+        io_track = self._project.image_overlay_track
+        if not (0 <= index < len(io_track)):
+            return
+        ov = io_track[index]
+
+        # Get video dimensions (fallback to 16:9 default)
+        vw = self._video_widget.viewport().width() or 1920
+        vh = self._video_widget.viewport().height() or 1080
+
+        # Get image dimensions
+        from PySide6.QtGui import QPixmap
+        pixmap = QPixmap(ov.image_path)
+        if pixmap.isNull():
+            return
+        iw, ih = pixmap.width(), pixmap.height()
+
+        if mode == "fit":
+            # Fit within video (contain), no cropping, centered
+            scale_w = vw / iw
+            scale_h = vh / ih
+            scale = min(scale_w, scale_h)
+            ov.scale_percent = scale * iw / vw * 100
+            scaled_w = iw * scale
+            scaled_h = ih * scale
+            ov.x_percent = (vw - scaled_w) / 2 / vw * 100
+            ov.y_percent = (vh - scaled_h) / 2 / vh * 100
+        elif mode == "fit_width":
+            # Image fills video width, centered vertically
+            ov.scale_percent = 100.0
+            ov.x_percent = 0.0
+            scaled_h = ih * vw / iw
+            ov.y_percent = (vh - scaled_h) / 2 / vh * 100
+        elif mode == "fit_height":
+            # Image fills video height, centered horizontally
+            scale = vh / ih
+            ov.scale_percent = scale * iw / vw * 100
+            scaled_w = iw * scale
+            ov.x_percent = (vw - scaled_w) / 2 / vw * 100
+            ov.y_percent = 0.0
+        elif mode == "full":
+            # Image covers entire video (may crop)
+            scale_w = vw / iw
+            scale_h = vh / ih
+            scale = max(scale_w, scale_h)
+            ov.scale_percent = scale * iw / vw * 100
+            scaled_w = iw * scale
+            scaled_h = ih * scale
+            ov.x_percent = -(scaled_w - vw) / 2 / vw * 100
+            ov.y_percent = -(scaled_h - vh) / 2 / vh * 100
+        elif mode == "16:9":
+            # Fit image into a 16:9 box (full width, height = width*9/16)
+            box_w = vw
+            box_h = vw * 9 / 16
+            scale_w = box_w / iw
+            scale_h = box_h / ih
+            scale = min(scale_w, scale_h)
+            ov.scale_percent = scale * iw / vw * 100
+            scaled_w = iw * scale
+            scaled_h = ih * scale
+            ov.x_percent = (vw - scaled_w) / 2 / vw * 100
+            ov.y_percent = (vh - scaled_h) / 2 / vh * 100
+        elif mode == "9:16":
+            # Fit image into a 9:16 box (centered portrait)
+            box_w = vh * 9 / 16
+            box_h = vh
+            scale_w = box_w / iw
+            scale_h = box_h / ih
+            scale = min(scale_w, scale_h)
+            ov.scale_percent = scale * iw / vw * 100
+            scaled_w = iw * scale
+            scaled_h = ih * scale
+            ov.x_percent = (vw - scaled_w) / 2 / vw * 100
+            ov.y_percent = (vh - scaled_h) / 2 / vh * 100
+
+        # Refresh display
+        self._video_widget.set_image_overlay_track(io_track)
+        self._timeline.update()
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Image overlay {index + 1}: {mode}")
+
+    def _on_image_file_dropped(self, file_path: str, position_ms: int) -> None:
+        """Handle image file dropped onto the timeline from media library."""
+        duration = 5000
+        end_ms = position_ms + duration
+        if self._project.duration_ms > 0:
+            end_ms = min(end_ms, self._project.duration_ms)
+
+        overlay = ImageOverlay(
+            start_ms=position_ms,
+            end_ms=end_ms,
+            image_path=str(Path(file_path).resolve()),
+        )
+        self._project.image_overlay_track.add_overlay(overlay)
+
+        io_track = self._project.image_overlay_track
+        self._ensure_timeline_duration()
+        self._timeline.set_image_overlay_track(io_track)
+        self._video_widget.set_image_overlay_track(io_track)
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Image overlay dropped: {Path(file_path).name}")
 
     def _on_media_image_insert_to_timeline(self, file_path: str) -> None:
         """Insert an image from the media library onto the timeline at the playhead."""
@@ -737,6 +898,7 @@ class MainWindow(QMainWindow):
         self._project.image_overlay_track.add_overlay(overlay)
 
         io_track = self._project.image_overlay_track
+        self._ensure_timeline_duration()
         self._timeline.set_image_overlay_track(io_track)
         self._video_widget.set_image_overlay_track(io_track)
         self._autosave.notify_edit()
@@ -911,10 +1073,21 @@ class MainWindow(QMainWindow):
     _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v"}
 
     def _load_video(self, path: Path) -> None:
+        # Preserve existing tracks when loading video
+        existing_tracks = [t for t in self._project.subtitle_tracks if len(t) > 0]
+        existing_overlays = self._project.image_overlay_track
+
         self._project.reset()
         self._undo_stack.clear()
         self._cleanup_temp_video()
         self._project.video_path = path
+
+        # Restore non-empty tracks
+        if existing_tracks:
+            self._project.subtitle_tracks = existing_tracks
+            self._project.active_track_index = 0
+        if len(existing_overlays) > 0:
+            self._project.image_overlay_track = existing_overlays
 
         playback_path = path
         if sys.platform == "darwin" and path.suffix.lower() in self._NEEDS_CONVERT:
@@ -939,11 +1112,7 @@ class MainWindow(QMainWindow):
         self._player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._player.play()
 
-        self._video_widget.set_subtitle_track(None)
-        self._subtitle_panel.set_track(None)
-        self._timeline.set_track(None)
-        self._timeline.set_image_overlay_track(None)
-        self._video_widget.set_image_overlay_track(None)
+        self._refresh_all_widgets()
         self._refresh_track_selector()
 
         # Start waveform generation in background
@@ -1032,7 +1201,10 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._project.duration_ms = duration_ms
-        self._timeline.set_duration(duration_ms)
+        # Only update timeline if duration > 0; ignore durationChanged(0)
+        # which would overwrite a TTS-derived timeline duration.
+        if duration_ms > 0:
+            self._timeline.set_duration(duration_ms, has_video=True)
 
     def _on_generate_subtitles(self) -> None:
         if not self._project.has_video:
@@ -1098,12 +1270,12 @@ class MainWindow(QMainWindow):
                 # Update active track index
                 self._project.active_track_index = new_track_index
 
+                # Set timeline duration BEFORE refreshing widgets so timeline
+                # can render segments on the first paint.
+                self._ensure_timeline_duration()
+
                 # Refresh UI to show the new track
                 self._refresh_all_widgets()
-
-                # Set timeline duration to TTS audio length if no video
-                if not self._project.has_video and track.audio_duration_ms > 0:
-                    self._timeline.set_duration(track.audio_duration_ms)
 
                 self.statusBar().showMessage(
                     f"TTS generated: {len(track)} segments, audio: {audio_path}"
@@ -1212,8 +1384,7 @@ class MainWindow(QMainWindow):
             current_track.audio_duration_ms = total_duration_ms
 
             # Update timeline
-            if not self._project.has_video:
-                self._timeline.set_duration(total_duration_ms)
+            self._ensure_timeline_duration()
 
             self._refresh_all_widgets()
 
@@ -1577,12 +1748,13 @@ class MainWindow(QMainWindow):
         if track and track.audio_path:
             timeline_pos = track.audio_start_ms + position_ms
 
-            # Apply per-segment volume
+            # Apply per-segment volume multiplied by slider volume
+            slider_vol = self._controls.get_tts_volume()
             seg = track.segment_at(timeline_pos)
             if seg:
-                self._tts_audio_output.setVolume(seg.volume)
+                self._tts_audio_output.setVolume(seg.volume * slider_vol)
             else:
-                self._tts_audio_output.setVolume(1.0)
+                self._tts_audio_output.setVolume(slider_vol)
 
             # If no video, use TTS position for timeline
             if not self._project.has_video:

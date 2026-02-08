@@ -66,7 +66,22 @@ TTS_VOICES = {
     }
 }
 
+# TTS Engine types
+class TTSEngine:
+    EDGE_TTS = "edge_tts"
+    ELEVENLABS = "elevenlabs"
+
+# ElevenLabs default voices (official starter voices)
+ELEVENLABS_DEFAULT_VOICES = {
+    "Rachel (Female)": "21m00Tcm4TlvDq8ikWAM",
+    "Bella (Female)": "EXAVITQu4vr4xnSDxMaL",
+    "Antoni (Male)": "ErXwobaYiN019PkySvjV",
+    "Josh (Male)": "TxGEqnHWrfWFTfGW9XjX",
+    "Adam (Male)": "pNInz6obpgDQGcFmaJgB",
+    "Sam (Male)": "yoZ06aMxZJJ28mfd3POQ",
+}
+
 # UI
-TIMELINE_HEIGHT = 210  # Accommodates ruler + subtitles + TTS audio + video waveform + image overlays
+TIMELINE_HEIGHT = 260  # Accommodates ruler + subtitles + TTS audio + video waveform + image overlays (multi-row)
 SUBTITLE_FONT_SIZE = 18
 SUBTITLE_OVERLAY_MARGIN_BOTTOM = 40

@@ -110,6 +110,14 @@ class SettingsManager:
         """Set the OpenAI API key."""
         self._settings.setValue("api_keys/openai", key)
 
+    def get_elevenlabs_api_key(self) -> str:
+        """Get the ElevenLabs API key."""
+        return self._settings.value("api_keys/elevenlabs", "", str)
+
+    def set_elevenlabs_api_key(self, key: str) -> None:
+        """Set the ElevenLabs API key."""
+        self._settings.setValue("api_keys/elevenlabs", key)
+
     # ---------------------------------------------------- UI Settings
 
     def get_theme(self) -> str:

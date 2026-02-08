@@ -1,4 +1,4 @@
-"""Custom-painted timeline widget showing subtitle blocks and playhead."""
+"""커스텀 페인팅 타임라인 위젯: 자막 블록, 플레이헤드, 오디오/이미지 오버레이 표시."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QCursor,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QFont,
     QImage,
     QMouseEvent,
@@ -29,38 +33,43 @@ from src.utils.time_utils import ms_to_display
 
 
 class _DragMode(Enum):
+    """드래그 종류: 없음, 시크, 자막 이동/리사이즈, 오디오, 플레이헤드, 뷰 팬, 이미지 오버레이."""
     NONE = auto()
-    SEEK = auto()
-    MOVE = auto()
-    RESIZE_LEFT = auto()
-    RESIZE_RIGHT = auto()
+    SEEK = auto()           # 빈 공간 클릭·드래그 → 시크
+    MOVE = auto()           # 자막 블록 본문 드래그
+    RESIZE_LEFT = auto()    # 자막 왼쪽 가장자리
+    RESIZE_RIGHT = auto()   # 자막 오른쪽 가장자리
     AUDIO_MOVE = auto()
     AUDIO_RESIZE_LEFT = auto()
     AUDIO_RESIZE_RIGHT = auto()
-    PLAYHEAD_DRAG = auto()  # Dragging the playhead
-    PAN_VIEW = auto()  # Dragging timeline view to scroll
+    PLAYHEAD_DRAG = auto()  # 플레이헤드 드래그
+    PAN_VIEW = auto()       # 중단/Shift+드래그로 타임라인 스크롤
     IMAGE_MOVE = auto()
     IMAGE_RESIZE_LEFT = auto()
     IMAGE_RESIZE_RIGHT = auto()
 
 
-_EDGE_PX = 6  # pixels from segment edge that trigger resize
-_PLAYHEAD_HIT_PX = 20  # pixels from playhead that trigger drag (wider for easier clicking)
+# 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
+_EDGE_PX = 6
+# 플레이헤드 드래그로 인식하는 픽셀 거리 (클릭 쉽게 넓게)
+_PLAYHEAD_HIT_PX = 20
 
 
 class TimelineWidget(QWidget):
-    """Timeline bar showing subtitle segments with zoom, scroll, click-to-seek,
-    and drag-move / drag-resize of segments."""
+    """타임라인 바: 자막/오디오/이미지 오버레이 세그먼트, 줌·스크롤, 클릭 시크, 드래그 이동·리사이즈."""
 
     seek_requested = Signal(int)  # ms
-    segment_selected = Signal(int)  # segment index
+    segment_selected = Signal(int)  # 세그먼트 인덱스
     segment_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
     audio_moved = Signal(int, int)  # (new_start_ms, new_duration_ms)
-    image_overlay_selected = Signal(int)  # overlay index
+    image_overlay_selected = Signal(int)  # 오버레이 인덱스
     image_overlay_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
-    insert_image_requested = Signal(int)  # playhead ms position for insertion
+    image_overlay_resize = Signal(int, str)  # (index, mode: "fit_width"/"full"/"16:9"/"9:16")
+    insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
+    image_file_dropped = Signal(str, int)  # (file_path, position_ms)
+    video_file_dropped = Signal(str)  # (file_path)
 
-    # Colors
+    # 색상 상수
     _BG_COLOR = QColor(30, 30, 30)
     _RULER_COLOR = QColor(100, 100, 100)
     _RULER_TEXT_COLOR = QColor(170, 170, 170)
@@ -86,9 +95,10 @@ class TimelineWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(TIMELINE_HEIGHT)
-        self.setMouseTracking(True)
+        self.setMouseTracking(True)  # 마우스 무버 without 버튼으로도 hover 처리
+        self.setAcceptDrops(True)  # 미디어 라이브러리에서 드래그 앤 드롭
 
-        # Set explicit background and border for visibility
+        # 배경·테두리 명시 (가독성)
         self.setStyleSheet("""
             TimelineWidget {
                 background-color: rgb(30, 30, 30);
@@ -97,18 +107,19 @@ class TimelineWidget(QWidget):
         """)
 
         self._track: SubtitleTrack | None = None
-        self._duration_ms: int = 0
-        self._playhead_ms: int = 0
+        self._duration_ms: int = 0   # 비디오 총 길이(ms)
+        self._has_video: bool = False  # 비디오 로드 여부
+        self._playhead_ms: int = 0   # 현재 재생 위치(ms)
 
-        # Zoom/scroll
+        # 줌/스크롤: 화면에 보이는 시간 범위
         self._visible_start_ms: float = 0.0
-        self._px_per_ms: float = 0.0
+        self._px_per_ms: float = 0.0  # 픽셀당 밀리초 (줌 레벨)
 
-        # Selection
+        # 선택 상태
         self._selected_index: int = -1
         self._audio_selected: bool = False
 
-        # Drag state
+        # 드래그 상태
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index: int = -1
         self._drag_start_x: float = 0.0
@@ -117,29 +128,34 @@ class TimelineWidget(QWidget):
         self._drag_orig_audio_start_ms: int = 0
         self._drag_orig_audio_duration_ms: int = 0
 
-        # Image overlay track
+        # 이미지 오버레이 트랙
         self._image_overlay_track: ImageOverlayTrack | None = None
         self._selected_overlay_index: int = -1
 
-        # Waveform data
+        # 웨이브폼: 비디오 오디오 파형 (캐시로 그리기 부담 감소)
         self._waveform_data = None  # WaveformData or None
         self._waveform_image_cache: QImage | None = None
         self._waveform_cache_key: tuple | None = None
 
-    # -------------------------------------------------------- Public API
+        # 드롭 표시
+        self._drop_indicator_x: float = -1
+
+    # -------------------------------------------------------- 공개 API
 
     def set_track(self, track: SubtitleTrack | None) -> None:
         self._track = track
         self._selected_index = -1
         self.update()
 
-    def set_duration(self, duration_ms: int) -> None:
+    def set_duration(self, duration_ms: int, has_video: bool | None = None) -> None:
         self._duration_ms = duration_ms
+        if has_video is not None:
+            self._has_video = has_video
         self._visible_start_ms = 0
         self.update()
 
     def set_playhead(self, position_ms: int) -> None:
-        # Don't update playhead during drag to avoid conflicts
+        # 플레이헤드 드래그 중에는 외부 갱신 무시 (충돌 방지)
         if self._drag_mode == _DragMode.PLAYHEAD_DRAG:
             return
 
@@ -153,7 +169,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def refresh(self) -> None:
-        """Repaint after external model changes."""
+        """외부에서 모델 변경 후 다시 그리기."""
         self.update()
 
     def select_segment(self, index: int) -> None:
@@ -169,24 +185,24 @@ class TimelineWidget(QWidget):
         self._selected_overlay_index = index
         self.update()
 
-    # -------------------------------------------------------- Zoom API
+    # -------------------------------------------------------- 줌 API
 
-    zoom_changed = Signal(int)  # zoom percent
+    zoom_changed = Signal(int)  # 줌 퍼센트 (100 = 전체 맞춤)
 
     def zoom_in(self) -> None:
-        """Zoom into the timeline (show less time range)."""
+        """타임라인 확대 (더 짧은 시간 범위 표시)."""
         if self._duration_ms <= 0:
             return
         self._apply_zoom(0.6)
 
     def zoom_out(self) -> None:
-        """Zoom out of the timeline (show more time range)."""
+        """타임라인 축소 (더 긴 시간 범위 표시)."""
         if self._duration_ms <= 0:
             return
         self._apply_zoom(1.6)
 
     def zoom_fit(self) -> None:
-        """Reset zoom to fit the entire duration."""
+        """줌 초기화: 전체 길이에 맞춤."""
         if self._duration_ms <= 0:
             return
         self._visible_start_ms = 0
@@ -195,7 +211,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def _apply_zoom(self, factor: float) -> None:
-        """Apply zoom factor centered on the current playhead position."""
+        """현재 플레이헤드 위치를 중심으로 줌 배율 적용."""
         old_range = self._visible_range_ms()
         new_range = max(1000, min(self._duration_ms, old_range * factor))
         # Center zoom on playhead
@@ -207,7 +223,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def get_zoom_percent(self) -> int:
-        """Return current zoom level as a percentage (100% = fit all)."""
+        """현재 줌 레벨을 퍼센트로 반환 (100% = 전체 맞춤)."""
         if self._duration_ms <= 0:
             return 100
         fit_range = float(self._duration_ms)
@@ -217,20 +233,20 @@ class TimelineWidget(QWidget):
         return max(1, int(fit_range / visible * 100))
 
     def set_waveform(self, waveform_data) -> None:
-        """Set pre-computed waveform data for display."""
+        """미리 계산된 웨이브폼 데이터 설정 후 표시."""
         self._waveform_data = waveform_data
         self._waveform_image_cache = None
         self._waveform_cache_key = None
         self.update()
 
     def clear_waveform(self) -> None:
-        """Remove waveform display."""
+        """웨이브폼 제거."""
         self._waveform_data = None
         self._waveform_image_cache = None
         self._waveform_cache_key = None
         self.update()
 
-    # ----------------------------------------------------------- Paint
+    # ----------------------------------------------------------- 그리기
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -258,9 +274,11 @@ class TimelineWidget(QWidget):
             self._draw_segments(painter, h)
         self._draw_image_overlays(painter, h)
         self._draw_playhead(painter, h)
+        self._draw_drop_indicator(painter, h)
         painter.end()
 
     def _draw_ruler(self, painter: QPainter, w: int, h: int, visible_ms: float) -> None:
+        """상단 눈금자: 보이는 범위에 맞춰 틱 간격 계산 후 시간 라벨 그리기."""
         painter.setPen(QPen(self._RULER_COLOR, 1))
         painter.setFont(QFont("Arial", 8))
         tick_ms = self._nice_tick_interval(visible_ms)
@@ -279,8 +297,8 @@ class TimelineWidget(QWidget):
             t += tick_ms
 
     def _draw_video_audio(self, painter: QPainter, w: int, h: int) -> None:
-        """Draw video audio waveform or fallback indicator bar."""
-        if self._duration_ms <= 0:
+        """비디오 오디오 웨이브폼 또는 로딩 중일 때 대체 바 그리기."""
+        if self._duration_ms <= 0 or not self._has_video:
             return
 
         if self._waveform_data is not None and self._waveform_data.duration_ms > 0:
@@ -289,7 +307,7 @@ class TimelineWidget(QWidget):
             self._draw_video_audio_fallback(painter, w)
 
     def _draw_waveform(self, painter: QPainter, w: int) -> None:
-        """Draw waveform using cached QImage for performance."""
+        """캐시된 QImage로 웨이브폼 그리기 (성능)."""
         wf = self._waveform_data
         if wf is None or wf.duration_ms <= 0:
             return
@@ -315,7 +333,7 @@ class TimelineWidget(QWidget):
             painter.drawText(label_x, waveform_y + 10, "Video Audio")
 
     def _render_waveform_image(self, w: int, h: int) -> QImage:
-        """Render waveform to a QImage for efficient blitting."""
+        """웨이브폼을 QImage로 렌더링하여 빠르게 블릿."""
         wf = self._waveform_data
         img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
         img.fill(QColor(0, 0, 0, 0))
@@ -363,7 +381,7 @@ class TimelineWidget(QWidget):
         return img
 
     def _draw_video_audio_fallback(self, painter: QPainter, w: int) -> None:
-        """Fallback: draw simple bar when waveform data is not available."""
+        """웨이브폼 데이터 없을 때 단순 바 + 'Loading waveform...' 표시."""
         video_audio_y = 120
         video_audio_h = 45
 
@@ -385,7 +403,7 @@ class TimelineWidget(QWidget):
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Loading waveform...")
 
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
-        """Draw individual audio segments for each subtitle segment."""
+        """세그먼트별 TTS 오디오 구간을 녹색 박스로 그림."""
         if not self._track:
             return
 
@@ -428,6 +446,7 @@ class TimelineWidget(QWidget):
                 )
 
     def _draw_segments(self, painter: QPainter, h: int) -> None:
+        """자막 세그먼트를 파란 박스로 그리기 (선택 시 하이라이트, 텍스트 일부 표시)."""
         seg_y = 20
         seg_h = 50
 
@@ -459,13 +478,64 @@ class TimelineWidget(QWidget):
                     ),
                 )
 
+    # ---- 이미지 오버레이 레이아웃 상수 & 헬퍼 ----
+    _IMG_ROW_H = 28
+    _IMG_ROW_GAP = 2
+
+    def _img_overlay_base_y(self) -> int:
+        """이미지 오버레이 트랙의 기준 y 좌표."""
+        return 120 if not self._has_video else 170
+
+    def _compute_overlay_rows(self) -> list[int]:
+        """각 오버레이의 row 인덱스를 계산 (시간 겹침 → 다음 row)."""
+        if not self._image_overlay_track:
+            return []
+        rows: list[int] = []
+        row_ends: list[float] = []
+        for ov in self._image_overlay_track:
+            placed = False
+            for r, end_ms in enumerate(row_ends):
+                if ov.start_ms >= end_ms:
+                    rows.append(r)
+                    row_ends[r] = ov.end_ms
+                    placed = True
+                    break
+            if not placed:
+                rows.append(len(row_ends))
+                row_ends.append(ov.end_ms)
+        return rows
+
+    def _img_overlay_total_h(self, rows: list[int]) -> int:
+        """이미지 오버레이 트랙의 총 높이."""
+        if not rows:
+            return self._IMG_ROW_H
+        max_row = max(rows)
+        return (max_row + 1) * (self._IMG_ROW_H + self._IMG_ROW_GAP)
+
     def _draw_image_overlays(self, painter: QPainter, h: int) -> None:
-        """Draw image overlay segments on the timeline."""
+        """이미지 오버레이 세그먼트를 타임라인에 그림 (겹치면 세로로 쌓기)."""
         if not self._image_overlay_track or len(self._image_overlay_track) == 0:
             return
 
-        img_y = 170
-        img_h = 35
+        img_base_y = self._img_overlay_base_y()
+        img_h = self._IMG_ROW_H
+        img_gap = self._IMG_ROW_GAP
+
+        rows = self._compute_overlay_rows()
+
+        # 색상 팔레트: 각 row별 다른 색상
+        palette = [
+            self._IMG_OVERLAY_COLOR,
+            QColor(120, 80, 180, 180),   # 보라
+            QColor(80, 160, 120, 180),   # 초록
+            QColor(180, 120, 80, 180),   # 주황
+        ]
+        border_palette = [
+            self._IMG_OVERLAY_BORDER,
+            QColor(160, 120, 220),
+            QColor(120, 200, 160),
+            QColor(220, 160, 120),
+        ]
 
         for i, ov in enumerate(self._image_overlay_track):
             x1 = self._ms_to_x(ov.start_ms)
@@ -473,14 +543,17 @@ class TimelineWidget(QWidget):
             if x2 < 0 or x1 > self.width():
                 continue
 
-            rect = QRectF(x1, img_y, max(x2 - x1, 2), img_h)
+            row = rows[i]
+            y = img_base_y + row * (img_h + img_gap)
+            rect = QRectF(x1, y, max(x2 - x1, 2), img_h)
 
+            color_idx = row % len(palette)
             if i == self._selected_overlay_index:
                 painter.setPen(QPen(self._IMG_OVERLAY_SELECTED_BORDER, 2))
                 painter.setBrush(QBrush(self._IMG_OVERLAY_SELECTED_COLOR))
             else:
-                painter.setPen(QPen(self._IMG_OVERLAY_BORDER, 1))
-                painter.setBrush(QBrush(self._IMG_OVERLAY_COLOR))
+                painter.setPen(QPen(border_palette[color_idx], 1))
+                painter.setBrush(QBrush(palette[color_idx]))
             painter.drawRoundedRect(rect, 3, 3)
 
             if rect.width() > 30:
@@ -496,6 +569,7 @@ class TimelineWidget(QWidget):
                 )
 
     def _draw_playhead(self, painter: QPainter, h: int) -> None:
+        """현재 재생 위치 세로선 + 상단 삼각형."""
         x = self._ms_to_x(self._playhead_ms)
         if 0 <= x <= self.width():
             painter.setPen(QPen(self._PLAYHEAD_COLOR, 2))
@@ -507,7 +581,7 @@ class TimelineWidget(QWidget):
                 QPoint(int(x), 7),
             ]))
 
-    # ----------------------------------------------------------- Mouse
+    # ----------------------------------------------------------- 마우스
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._duration_ms <= 0 or self._px_per_ms <= 0:
@@ -516,7 +590,7 @@ class TimelineWidget(QWidget):
         x = event.position().x()
         y = event.position().y()
 
-        # Middle mouse button → Pan view
+        # 휠 버튼(중간) → 뷰 팬
         if event.button() == Qt.MouseButton.MiddleButton:
             self._drag_mode = _DragMode.PAN_VIEW
             self._drag_start_x = x
@@ -524,7 +598,7 @@ class TimelineWidget(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             return
 
-        # Shift + Left click on empty space → Pan view
+        # Shift + 왼쪽 클릭(빈 공간) → 뷰 팬
         if event.button() == Qt.MouseButton.LeftButton:
             modifiers = event.modifiers()
 
@@ -538,12 +612,12 @@ class TimelineWidget(QWidget):
                 self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
                 return
 
-            # Check if clicking on playhead
+            # 플레이헤드 클릭 → 플레이헤드 드래그
             if hit == "playhead":
                 self._drag_mode = _DragMode.PLAYHEAD_DRAG
                 self._seek_to_x(x)
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-            # Image overlay hits
+            # 이미지 오버레이 영역
             elif hit == "img_left_edge":
                 self._selected_overlay_index = seg_idx
                 self._selected_index = -1
@@ -559,7 +633,7 @@ class TimelineWidget(QWidget):
                 self._selected_index = -1
                 self._start_image_drag(_DragMode.IMAGE_MOVE, seg_idx, x)
                 self.image_overlay_selected.emit(seg_idx)
-            # Audio segments now share the same hit zones as subtitle segments (linked movement)
+            # 자막/오디오 세그먼트: 같은 hit 영역(연동 이동)
             elif hit == "left_edge":
                 self._audio_selected = False
                 self._selected_overlay_index = -1
@@ -587,17 +661,17 @@ class TimelineWidget(QWidget):
         x = event.position().x()
         y = event.position().y()
 
-        # Handle pan view drag
+        # 뷰 팬 드래그 처리
         if self._drag_mode == _DragMode.PAN_VIEW:
             self._handle_pan_view(x)
             return
 
-        # Handle playhead drag
+        # 플레이헤드 드래그 처리
         if self._drag_mode == _DragMode.PLAYHEAD_DRAG:
             self._seek_to_x(x)
             return
 
-        # Handle seek (click and drag anywhere)
+        # 빈 공간 시크 드래그
         if self._drag_mode == _DragMode.SEEK:
             self._seek_to_x(x)
             return
@@ -610,7 +684,7 @@ class TimelineWidget(QWidget):
             self._handle_image_drag(x)
             return
 
-        # Update cursor based on hover (including playhead)
+        # 호버 시 커서 변경 (플레이헤드·가장자리·본문)
         if self._drag_mode == _DragMode.NONE:
             seg_idx, hit = self._hit_test(x, y)
             if hit == "playhead":
@@ -639,24 +713,47 @@ class TimelineWidget(QWidget):
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def contextMenuEvent(self, event) -> None:
-        """Right-click context menu for image overlay operations."""
+        """우클릭: 이미지 오버레이 삭제 또는 현재 위치에 삽입."""
         if self._duration_ms <= 0:
             return
         x = event.pos().x()
         y = event.pos().y()
         menu = QMenu(self)
 
-        img_y = 170
-        img_h = 35
-        if img_y <= y <= img_y + img_h:
+        img_base_y = self._img_overlay_base_y()
+        rows = self._compute_overlay_rows()
+        total_h = self._img_overlay_total_h(rows)
+        if img_base_y <= y <= img_base_y + total_h:
             seg_idx, hit = self._hit_test(x, y)
             if hit.startswith("img_"):
-                delete_action = menu.addAction("Delete Image Overlay")
+                # Size presets submenu
+                size_menu = menu.addMenu("크기 조정")
+                fit_act = size_menu.addAction("화면에 맞춤 (비율 유지)")
+                fit_width_act = size_menu.addAction("화면 넓이에 맞춤")
+                fit_height_act = size_menu.addAction("화면 높이에 맞춤")
+                full_act = size_menu.addAction("전체 화면 채움 (잘림 가능)")
+                size_menu.addSeparator()
+                ratio_16_9_act = size_menu.addAction("16:9 (가로)")
+                ratio_9_16_act = size_menu.addAction("9:16 (세로)")
+                menu.addSeparator()
+                delete_action = menu.addAction("이미지 오버레이 삭제")
                 action = menu.exec(event.globalPos())
                 if action == delete_action:
                     self._image_overlay_track.remove_overlay(seg_idx)
                     self._selected_overlay_index = -1
                     self.update()
+                elif action == fit_act:
+                    self.image_overlay_resize.emit(seg_idx, "fit")
+                elif action == fit_width_act:
+                    self.image_overlay_resize.emit(seg_idx, "fit_width")
+                elif action == fit_height_act:
+                    self.image_overlay_resize.emit(seg_idx, "fit_height")
+                elif action == full_act:
+                    self.image_overlay_resize.emit(seg_idx, "full")
+                elif action == ratio_16_9_act:
+                    self.image_overlay_resize.emit(seg_idx, "16:9")
+                elif action == ratio_9_16_act:
+                    self.image_overlay_resize.emit(seg_idx, "9:16")
                 return
 
         insert_action = menu.addAction("Insert Image Overlay")
@@ -666,10 +763,17 @@ class TimelineWidget(QWidget):
             self.insert_image_requested.emit(ms)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
+        """휠: 줌, Ctrl+휠: 스크롤."""
         if self._duration_ms <= 0 or self._px_per_ms <= 0:
             return
         delta = event.angleDelta().y()
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+휠: 가로 스크롤
+            shift = self._visible_range_ms() * 0.1 * (-1 if delta > 0 else 1)
+            self._visible_start_ms += shift
+            self._clamp_visible_start(self._visible_range_ms())
+        else:
+            # 휠: 마우스 위치 기준 줌
             factor = 0.8 if delta > 0 else 1.25
             mouse_ms = self._x_to_ms(event.position().x())
             old_range = self._visible_range_ms()
@@ -678,13 +782,9 @@ class TimelineWidget(QWidget):
             self._visible_start_ms = max(0, mouse_ms - new_range * mouse_frac)
             self._clamp_visible_start(new_range)
             self.zoom_changed.emit(self.get_zoom_percent())
-        else:
-            shift = self._visible_range_ms() * 0.1 * (-1 if delta > 0 else 1)
-            self._visible_start_ms += shift
-            self._clamp_visible_start(self._visible_range_ms())
         self.update()
 
-    # -------------------------------------------------------- Drag helpers
+    # -------------------------------------------------------- 드래그 헬퍼
 
     def _start_drag(self, mode: _DragMode, seg_idx: int, x: float) -> None:
         self._drag_mode = mode
@@ -721,7 +821,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def _handle_pan_view(self, x: float) -> None:
-        """Handle panning the timeline view by dragging."""
+        """드래그로 타임라인 뷰 스크롤(팬)."""
         if self._px_per_ms <= 0:
             return
 
@@ -742,7 +842,7 @@ class TimelineWidget(QWidget):
         self.update()
 
     def _start_image_drag(self, mode: _DragMode, seg_idx: int, x: float) -> None:
-        """Start dragging an image overlay segment."""
+        """이미지 오버레이 세그먼트 드래그 시작."""
         self._drag_mode = mode
         self._drag_seg_index = seg_idx
         self._drag_start_x = x
@@ -752,7 +852,7 @@ class TimelineWidget(QWidget):
             self._drag_orig_end_ms = ov.end_ms
 
     def _handle_image_drag(self, x: float) -> None:
-        """Handle image overlay drag/resize."""
+        """이미지 오버레이 이동/리사이즈 처리."""
         if not self._image_overlay_track or self._drag_seg_index < 0:
             return
         if self._drag_seg_index >= len(self._image_overlay_track):
@@ -764,23 +864,26 @@ class TimelineWidget(QWidget):
         if self._drag_mode == _DragMode.IMAGE_MOVE:
             new_start = max(0, self._drag_orig_start_ms + dx_ms)
             duration = self._drag_orig_end_ms - self._drag_orig_start_ms
-            if new_start + duration > self._duration_ms:
-                new_start = self._duration_ms - duration
             ov.start_ms = new_start
             ov.end_ms = new_start + duration
+            # Auto-extend timeline when dragging past the end
+            if ov.end_ms > self._duration_ms:
+                self._duration_ms = ov.end_ms
         elif self._drag_mode == _DragMode.IMAGE_RESIZE_LEFT:
             new_start = max(0, self._drag_orig_start_ms + dx_ms)
             new_start = min(new_start, ov.end_ms - 100)
             ov.start_ms = new_start
         elif self._drag_mode == _DragMode.IMAGE_RESIZE_RIGHT:
             new_end = max(ov.start_ms + 100, self._drag_orig_end_ms + dx_ms)
-            new_end = min(new_end, self._duration_ms)
             ov.end_ms = new_end
+            # Auto-extend timeline when resizing past the end
+            if ov.end_ms > self._duration_ms:
+                self._duration_ms = ov.end_ms
 
         self.update()
 
     def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
-        """Start dragging audio track."""
+        """오디오 트랙 드래그 시작."""
         self._drag_mode = mode
         self._drag_start_x = x
         if self._track:
@@ -788,7 +891,7 @@ class TimelineWidget(QWidget):
             self._drag_orig_audio_duration_ms = self._track.audio_duration_ms
 
     def _handle_audio_drag(self, x: float) -> None:
-        """Handle audio track drag/resize."""
+        """오디오 트랙 이동/리사이즈 처리."""
         if not self._track:
             return
 
@@ -813,32 +916,38 @@ class TimelineWidget(QWidget):
         self.update()
 
     def _hit_test(self, x: float, y: float) -> tuple[int, str]:
-        """Return (segment_index, hit_zone) or (-1, '') if nothing hit."""
-        # Check playhead first (highest priority, wider hit zone for easier dragging)
+        """(x,y)에 해당하는 (세그먼트 인덱스, 히트 영역) 반환. 없으면 (-1, '')."""
+        # 플레이헤드 우선 (클릭 편하게 넓은 히트 영역)
         playhead_x = self._ms_to_x(self._playhead_ms)
         if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
             return -3, "playhead"
 
-        # Check image overlay segments
-        img_y = 170
-        img_h = 35
-        if img_y <= y <= img_y + img_h and self._image_overlay_track:
-            for i, ov in enumerate(self._image_overlay_track):
-                x1 = self._ms_to_x(ov.start_ms)
-                x2 = self._ms_to_x(ov.end_ms)
-                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                    continue
-                if abs(x - x1) <= _EDGE_PX:
-                    return i, "img_left_edge"
-                if abs(x - x2) <= _EDGE_PX:
-                    return i, "img_right_edge"
-                if x1 <= x <= x2:
-                    return i, "img_body"
+        # 이미지 오버레이 세그먼트 (row 별 y 좌표 계산)
+        if self._image_overlay_track and len(self._image_overlay_track) > 0:
+            img_base_y = self._img_overlay_base_y()
+            rows = self._compute_overlay_rows()
+            total_h = self._img_overlay_total_h(rows)
+            if img_base_y <= y <= img_base_y + total_h:
+                for i, ov in enumerate(self._image_overlay_track):
+                    row = rows[i]
+                    ov_y = img_base_y + row * (self._IMG_ROW_H + self._IMG_ROW_GAP)
+                    if not (ov_y <= y <= ov_y + self._IMG_ROW_H):
+                        continue
+                    x1 = self._ms_to_x(ov.start_ms)
+                    x2 = self._ms_to_x(ov.end_ms)
+                    if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                        continue
+                    if abs(x - x1) <= _EDGE_PX:
+                        return i, "img_left_edge"
+                    if abs(x - x2) <= _EDGE_PX:
+                        return i, "img_right_edge"
+                    if x1 <= x <= x2:
+                        return i, "img_body"
 
         if not self._track:
             return -1, ""
 
-        # Check audio segments (below subtitles) - treat as linked to subtitle segments
+        # 오디오 세그먼트 (자막과 동일 인덱스로 연동)
         audio_y = 75
         audio_h = 40
         if audio_y <= y <= audio_y + audio_h:
@@ -856,7 +965,7 @@ class TimelineWidget(QWidget):
                 if x1 <= x <= x2:
                     return i, "body"
 
-        # Check subtitle segments
+        # 자막 세그먼트
         seg_y = 20
         seg_h = 50
         if seg_y <= y <= seg_y + seg_h:
@@ -873,7 +982,7 @@ class TimelineWidget(QWidget):
                     return i, "body"
         return -1, ""
 
-    # ----------------------------------------------------------- Helpers
+    # ----------------------------------------------------------- 유틸
 
     def _visible_range_ms(self) -> float:
         if self._px_per_ms > 0:
@@ -885,7 +994,7 @@ class TimelineWidget(QWidget):
 
     def _x_to_ms(self, x: float) -> float:
         if self._px_per_ms <= 0:
-            # Return current playhead position instead of 0 to avoid unwanted seeking
+            # 0 반환 시 의도치 않은 시크 방지 → 현재 플레이헤드 반환
             return float(self._playhead_ms)
         return self._visible_start_ms + x / self._px_per_ms
 
@@ -912,3 +1021,71 @@ class TimelineWidget(QWidget):
             if c >= raw:
                 return c
         return candidates[-1]
+
+    # -------------------------------------------------------- 드래그 앤 드롭
+
+    def _is_valid_media_drop(self, event) -> bool:
+        """미디어 드롭 가능 여부 확인."""
+        if self._duration_ms <= 0:
+            return False
+        mime = event.mimeData()
+        if mime.hasUrls() and mime.urls():
+            return True
+        return False
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._is_valid_media_drop(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._is_valid_media_drop(event):
+            self._drop_indicator_x = event.position().x()
+            self.update()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._drop_indicator_x = -1
+        self.update()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drop_indicator_x = -1
+        mime = event.mimeData()
+        if not mime.hasUrls() or not mime.urls():
+            event.ignore()
+            return
+
+        from pathlib import Path
+        from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+
+        url = mime.urls()[0]
+        file_path = url.toLocalFile()
+        if not file_path:
+            event.ignore()
+            return
+
+        suffix = Path(file_path).suffix.lower()
+        position_ms = int(max(0, min(self._duration_ms, self._x_to_ms(event.position().x()))))
+
+        if suffix in IMAGE_EXTENSIONS:
+            self.image_file_dropped.emit(file_path, position_ms)
+            event.acceptProposedAction()
+        elif suffix in VIDEO_EXTENSIONS:
+            self.video_file_dropped.emit(file_path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+        self.update()
+
+    def _draw_drop_indicator(self, painter: QPainter, h: int) -> None:
+        """드롭 위치 표시 (세로 점선)."""
+        if self._drop_indicator_x < 0:
+            return
+        pen = QPen(QColor(0, 188, 212), 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        x = int(self._drop_indicator_x)
+        painter.drawLine(x, 0, x, h)
