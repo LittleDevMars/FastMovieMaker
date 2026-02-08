@@ -1259,8 +1259,19 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Error", str(e))
 
     def _on_timeline_seek(self, position_ms: int) -> None:
-        self._player.setPosition(position_ms)
-        self._sync_tts_playback()
+        if self._project.has_video:
+            self._player.setPosition(position_ms)
+            self._sync_tts_playback()
+        else:
+            # No video - directly seek TTS player
+            track = self._project.subtitle_track
+            if track and track.audio_path and track.audio_duration_ms > 0:
+                audio_start = track.audio_start_ms
+                audio_end = audio_start + track.audio_duration_ms
+                if audio_start <= position_ms < audio_end:
+                    tts_pos = position_ms - audio_start
+                    self._tts_player.setPosition(tts_pos)
+            self._timeline.set_playhead(position_ms)
 
     def _on_position_changed_by_user(self, position_ms: int) -> None:
         """Handle position change from playback controls slider."""

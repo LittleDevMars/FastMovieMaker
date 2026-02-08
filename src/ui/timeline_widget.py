@@ -572,6 +572,8 @@ class TimelineWidget(QWidget):
 
     def _seek_to_x(self, x: float) -> None:
         ms = int(max(0, min(self._duration_ms, self._x_to_ms(x))))
+        self._playhead_ms = ms
+        self.update()
         self.seek_requested.emit(ms)
 
     def _clamp_visible_start(self, visible_range: float) -> None:
