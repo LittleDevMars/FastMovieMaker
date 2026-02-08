@@ -113,6 +113,10 @@ class TimelineWidget(QWidget):
         self.update()
 
     def set_playhead(self, position_ms: int) -> None:
+        # Don't update playhead during drag to avoid conflicts
+        if self._drag_mode == _DragMode.PLAYHEAD_DRAG:
+            return
+
         self._playhead_ms = position_ms
         visible_range = self._visible_range_ms()
         if visible_range > 0:
