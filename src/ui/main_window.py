@@ -14,10 +14,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.audio_merger import AudioMerger
@@ -47,6 +50,7 @@ from src.ui.commands import (
     SplitCommand,
 )
 from src.ui.media_library_panel import MediaLibraryPanel
+from src.ui.templates_panel import TemplatesPanel
 from src.ui.playback_controls import PlaybackControls
 from src.ui.subtitle_panel import SubtitlePanel
 from src.ui.timeline_widget import TimelineWidget
@@ -142,10 +146,17 @@ class MainWindow(QMainWindow):
         # Media library tab
         self._media_panel = MediaLibraryPanel()
 
+        # Templates tab
+        self._templates_panel = TemplatesPanel()
+
+        # Overlay state
+        self._overlay_template = None  # OverlayTemplate | None
+
         # Right tabs
         self._right_tabs = QTabWidget()
         self._right_tabs.addTab(subtitle_tab, "Subtitles")
         self._right_tabs.addTab(self._media_panel, "Media")
+        self._right_tabs.addTab(self._templates_panel, "Templates")
 
         # Top splitter: video | right tabs
         self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -162,12 +173,54 @@ class MainWindow(QMainWindow):
         # Timeline
         self._timeline = TimelineWidget()
 
+        # Timeline zoom toolbar
+        self._zoom_toolbar = QWidget()
+        self._zoom_toolbar.setFixedHeight(28)
+        self._zoom_toolbar.setStyleSheet("background-color: rgb(40, 40, 40); border-top: 1px solid rgb(60, 60, 60);")
+        zoom_layout = QHBoxLayout(self._zoom_toolbar)
+        zoom_layout.setContentsMargins(6, 2, 6, 2)
+        zoom_layout.setSpacing(4)
+
+        btn_style = "QPushButton { background: rgb(60,60,60); color: white; border: 1px solid rgb(80,80,80); border-radius: 3px; padding: 1px 8px; font-size: 12px; } QPushButton:hover { background: rgb(80,80,80); }"
+
+        self._zoom_fit_btn = QPushButton("Fit")
+        self._zoom_fit_btn.setFixedWidth(36)
+        self._zoom_fit_btn.setStyleSheet(btn_style)
+        self._zoom_fit_btn.setToolTip("Fit entire timeline (Ctrl+0)")
+        self._zoom_fit_btn.clicked.connect(self._timeline.zoom_fit)
+
+        self._zoom_out_btn = QPushButton("-")
+        self._zoom_out_btn.setFixedWidth(28)
+        self._zoom_out_btn.setStyleSheet(btn_style)
+        self._zoom_out_btn.setToolTip("Zoom out (Ctrl+-)")
+        self._zoom_out_btn.clicked.connect(self._timeline.zoom_out)
+
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setFixedWidth(50)
+        self._zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._zoom_label.setStyleSheet("color: rgb(180,180,180); font-size: 11px; border: none;")
+
+        self._zoom_in_btn = QPushButton("+")
+        self._zoom_in_btn.setFixedWidth(28)
+        self._zoom_in_btn.setStyleSheet(btn_style)
+        self._zoom_in_btn.setToolTip("Zoom in (Ctrl++)")
+        self._zoom_in_btn.clicked.connect(self._timeline.zoom_in)
+
+        zoom_layout.addWidget(self._zoom_fit_btn)
+        zoom_layout.addWidget(self._zoom_out_btn)
+        zoom_layout.addWidget(self._zoom_label)
+        zoom_layout.addWidget(self._zoom_in_btn)
+        zoom_layout.addStretch()
+
+        self._timeline.zoom_changed.connect(lambda pct: self._zoom_label.setText(f"{pct}%"))
+
         # Main layout
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         main_layout.addWidget(self._top_splitter, 1)
         main_layout.addWidget(self._controls)
+        main_layout.addWidget(self._zoom_toolbar)
         main_layout.addWidget(self._timeline)
 
         # Status bar
@@ -351,6 +404,20 @@ class MainWindow(QMainWindow):
         sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
         sc_del.activated.connect(self._on_delete_selected_subtitle)
 
+        # Ctrl+Plus → Zoom in timeline
+        sc_zoom_in = QShortcut(QKeySequence("Ctrl+="), self)
+        sc_zoom_in.activated.connect(self._timeline.zoom_in)
+        sc_zoom_in2 = QShortcut(QKeySequence("Ctrl++"), self)
+        sc_zoom_in2.activated.connect(self._timeline.zoom_in)
+
+        # Ctrl+Minus → Zoom out timeline
+        sc_zoom_out = QShortcut(QKeySequence("Ctrl+-"), self)
+        sc_zoom_out.activated.connect(self._timeline.zoom_out)
+
+        # Ctrl+0 → Zoom fit timeline
+        sc_zoom_fit = QShortcut(QKeySequence("Ctrl+0"), self)
+        sc_zoom_fit.activated.connect(self._timeline.zoom_fit)
+
     def _toggle_play_pause(self) -> None:
         # Check if we're currently playing
         is_playing = (
@@ -450,6 +517,13 @@ class MainWindow(QMainWindow):
         self._sync_tts_playback()
 
     def _on_delete_selected_subtitle(self) -> None:
+        # Check if an image overlay is selected in timeline
+        sel_img = self._timeline._selected_overlay_index
+        if sel_img >= 0:
+            self._on_delete_image_overlay(sel_img)
+            self._timeline.select_image_overlay(-1)
+            return
+
         rows = self._subtitle_panel._table.selectionModel().selectedRows()
         if rows and self._project.has_subtitles:
             index = rows[0].row()
@@ -483,6 +557,14 @@ class MainWindow(QMainWindow):
         self._timeline.segment_moved.connect(self._on_timeline_segment_moved)
         self._timeline.audio_moved.connect(self._on_timeline_audio_moved)
 
+        # Image overlay signals
+        self._timeline.insert_image_requested.connect(self._on_insert_image_overlay)
+        self._timeline.image_overlay_moved.connect(self._on_image_overlay_moved)
+        self._timeline.image_overlay_selected.connect(self._on_image_overlay_selected)
+
+        # PIP drag on video player
+        self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
+
         # Track selector signals
         self._track_selector.track_changed.connect(self._on_track_changed)
         self._track_selector.track_added.connect(self._on_track_added)
@@ -493,6 +575,13 @@ class MainWindow(QMainWindow):
         self._media_panel.video_open_requested.connect(
             lambda path: self._load_video(Path(path))
         )
+        self._media_panel.image_insert_to_timeline.connect(
+            self._on_media_image_insert_to_timeline
+        )
+
+        # Template signals
+        self._templates_panel.template_applied.connect(self._on_template_applied)
+        self._templates_panel.template_cleared.connect(self._on_template_cleared)
 
         # Undo stack
         self._undo_stack.indexChanged.connect(lambda _: self._refresh_all_widgets())
@@ -505,6 +594,10 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
         self._subtitle_panel.set_track(track if len(track) > 0 else None)
         self._timeline.set_track(track if len(track) > 0 else None)
+        # Sync image overlay track
+        io_track = self._project.image_overlay_track
+        self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
+        self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
         # Notify autosave of edits
         self._autosave.notify_edit()
 
@@ -582,6 +675,92 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Audio track adjusted: {new_start_ms}ms ~ {new_start_ms + new_duration_ms}ms"
             )
+
+    # --------------------------------------------- Image Overlay handlers
+
+    def _on_insert_image_overlay(self, position_ms: int) -> None:
+        """Handle timeline request to insert an image overlay at position."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Image for Overlay", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)",
+        )
+        if not path:
+            return
+
+        duration = 5000  # 5 seconds default
+        end_ms = position_ms + duration
+        if self._project.duration_ms > 0:
+            end_ms = min(end_ms, self._project.duration_ms)
+
+        overlay = ImageOverlay(
+            start_ms=position_ms,
+            end_ms=end_ms,
+            image_path=str(Path(path).resolve()),
+        )
+        self._project.image_overlay_track.add_overlay(overlay)
+
+        io_track = self._project.image_overlay_track
+        self._timeline.set_image_overlay_track(io_track)
+        self._video_widget.set_image_overlay_track(io_track)
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Image overlay inserted: {Path(path).name}")
+
+    def _on_image_overlay_moved(self, index: int, new_start: int, new_end: int) -> None:
+        """Handle image overlay drag/resize in timeline."""
+        io_track = self._project.image_overlay_track
+        if 0 <= index < len(io_track):
+            ov = io_track[index]
+            ov.start_ms = new_start
+            ov.end_ms = new_end
+            self._timeline.update()
+            self._autosave.notify_edit()
+            self.statusBar().showMessage(f"Image overlay {index + 1} moved")
+
+    def _on_image_overlay_selected(self, index: int) -> None:
+        """Handle image overlay selection in timeline."""
+        self._video_widget.select_pip(index)
+        self.statusBar().showMessage(f"Image overlay {index + 1} selected")
+
+    def _on_media_image_insert_to_timeline(self, file_path: str) -> None:
+        """Insert an image from the media library onto the timeline at the playhead."""
+        position_ms = self._player.position()
+        duration = 5000
+        end_ms = position_ms + duration
+        if self._project.duration_ms > 0:
+            end_ms = min(end_ms, self._project.duration_ms)
+
+        overlay = ImageOverlay(
+            start_ms=position_ms,
+            end_ms=end_ms,
+            image_path=str(Path(file_path).resolve()),
+        )
+        self._project.image_overlay_track.add_overlay(overlay)
+
+        io_track = self._project.image_overlay_track
+        self._timeline.set_image_overlay_track(io_track)
+        self._video_widget.set_image_overlay_track(io_track)
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Image overlay inserted from library: {Path(file_path).name}")
+
+    def _on_delete_image_overlay(self, index: int) -> None:
+        """Delete an image overlay by index."""
+        io_track = self._project.image_overlay_track
+        if 0 <= index < len(io_track):
+            io_track.remove_overlay(index)
+            self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
+            self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
+            self._autosave.notify_edit()
+            self.statusBar().showMessage("Image overlay deleted")
+
+    def _on_pip_position_changed(self, index: int, x_pct: float, y_pct: float, scale_pct: float) -> None:
+        """Handle PIP image dragged/scaled on video player."""
+        io_track = self._project.image_overlay_track
+        if 0 <= index < len(io_track):
+            ov = io_track[index]
+            ov.x_percent = round(x_pct, 2)
+            ov.y_percent = round(y_pct, 2)
+            ov.scale_percent = round(scale_pct, 2)
+            self._autosave.notify_edit()
 
     # --------------------------------------------- Split / Merge / Batch Shift
 
@@ -763,6 +942,8 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(None)
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
+        self._timeline.set_image_overlay_track(None)
+        self._video_widget.set_image_overlay_track(None)
         self._refresh_track_selector()
 
         # Start waveform generation in background
@@ -1250,11 +1431,18 @@ class MainWindow(QMainWindow):
             return
 
         from src.ui.dialogs.export_dialog import ExportDialog
+        overlay_path = None
+        if self._overlay_template:
+            overlay_path = Path(self._overlay_template.image_path)
+        io_track = self._project.image_overlay_track
+        img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
         dialog = ExportDialog(
             self._project.video_path,
             self._project.subtitle_track,
             parent=self,
             video_has_audio=self._project.video_has_audio,
+            overlay_path=overlay_path,
+            image_overlays=img_overlays,
         )
         dialog.exec()
 
@@ -1277,6 +1465,20 @@ class MainWindow(QMainWindow):
             video_has_audio=self._project.video_has_audio,
         )
         dialog.exec()
+
+    # ------------------------------------------------------------ Templates
+
+    def _on_template_applied(self, template) -> None:
+        """Apply an overlay template to the video player."""
+        self._overlay_template = template
+        self._video_widget.set_overlay(template.image_path, template.opacity)
+        self.statusBar().showMessage(f"Template applied: {template.name}")
+
+    def _on_template_cleared(self) -> None:
+        """Remove the overlay template from the video player."""
+        self._overlay_template = None
+        self._video_widget.clear_overlay()
+        self.statusBar().showMessage("Template cleared")
 
     def _on_save_project(self) -> None:
         if not self._project.has_video:
@@ -1330,6 +1532,12 @@ class MainWindow(QMainWindow):
                 self._video_widget.set_subtitle_track(track)
                 self._subtitle_panel.set_track(track)
                 self._timeline.set_track(track)
+
+            # Apply image overlays
+            io_track = project.image_overlay_track
+            if len(io_track) > 0:
+                self._timeline.set_image_overlay_track(io_track)
+                self._video_widget.set_image_overlay_track(io_track)
 
             self._update_recent_menu()
             self.statusBar().showMessage(f"Project loaded: {path}")

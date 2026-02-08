@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -104,6 +105,7 @@ class MediaLibraryPanel(QWidget):
 
     video_open_requested = Signal(str)
     image_selected = Signal(str)
+    image_insert_to_timeline = Signal(str)  # file_path
 
     GRID_COLUMNS = 2
 
@@ -169,10 +171,23 @@ class MediaLibraryPanel(QWidget):
         self._scroll.setWidget(self._grid_container)
         layout.addWidget(self._scroll, 1)
 
-        # Item count label
+        # Bottom row: item count + clear all button
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
         self._count_label = QLabel("내 미디어 (0)")
         self._count_label.setStyleSheet("color: #999; font-size: 11px; padding: 2px;")
-        layout.addWidget(self._count_label)
+        bottom_row.addWidget(self._count_label)
+        bottom_row.addStretch()
+
+        clear_btn = QPushButton("모두 비우기")
+        clear_btn.setStyleSheet(
+            "QPushButton { background: #444; color: #ccc; border: 1px solid #555; "
+            "border-radius: 3px; padding: 3px 8px; font-size: 11px; }"
+            "QPushButton:hover { background: #c0392b; color: white; border-color: #e74c3c; }"
+        )
+        clear_btn.clicked.connect(self._on_clear_all)
+        bottom_row.addWidget(clear_btn)
+        layout.addLayout(bottom_row)
 
     # ------------------------------------------------------------------ Actions
 
@@ -220,6 +235,13 @@ class MediaLibraryPanel(QWidget):
             )
             menu.addSeparator()
 
+        if item.media_type == "image":
+            insert_action = menu.addAction("타임라인에 삽입")
+            insert_action.triggered.connect(
+                lambda: self.image_insert_to_timeline.emit(item.file_path)
+            )
+            menu.addSeparator()
+
         fav_text = "즐겨찾기 해제" if item.favorite else "즐겨찾기"
         fav_action = menu.addAction(fav_text)
         fav_action.triggered.connect(lambda: self._toggle_favorite(item_id))
@@ -238,6 +260,20 @@ class MediaLibraryPanel(QWidget):
     def _remove_item(self, item_id: str) -> None:
         self._service.remove_item(item_id)
         self._refresh()
+
+    def _on_clear_all(self) -> None:
+        items = self._service.list_items()
+        if not items:
+            return
+        reply = QMessageBox.question(
+            self, "모두 비우기",
+            f"미디어 라이브러리의 {len(items)}개 항목을 모두 삭제하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._service.clear_all()
+            self._refresh()
 
     # ------------------------------------------------------------------ Refresh
 

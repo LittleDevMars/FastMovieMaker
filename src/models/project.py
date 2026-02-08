@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleTrack
 
@@ -19,6 +20,7 @@ class ProjectState:
     duration_ms: int = 0
     default_style: SubtitleStyle = field(default_factory=SubtitleStyle)
     video_has_audio: bool = False  # Whether video file has audio track
+    image_overlay_track: ImageOverlayTrack = field(default_factory=ImageOverlayTrack)
 
     @property
     def subtitle_track(self) -> SubtitleTrack:
@@ -50,3 +52,4 @@ class ProjectState:
         self.active_track_index = 0
         self.duration_ms = 0
         self.default_style = SubtitleStyle()
+        self.image_overlay_track = ImageOverlayTrack()

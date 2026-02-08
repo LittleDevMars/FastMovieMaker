@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
@@ -86,6 +87,9 @@ def save_project(project: ProjectState, path: Path) -> None:
             "segments": [_segment_to_dict(seg) for seg in track],
         })
 
+    # Image overlays
+    image_overlays_data = [ov.to_dict() for ov in project.image_overlay_track]
+
     data = {
         "version": PROJECT_VERSION,
         "video_path": str(project.video_path) if project.video_path else None,
@@ -93,6 +97,7 @@ def save_project(project: ProjectState, path: Path) -> None:
         "default_style": _style_to_dict(project.default_style),
         "active_track_index": project.active_track_index,
         "tracks": tracks_data,
+        "image_overlays": image_overlays_data,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -142,5 +147,11 @@ def load_project(path: Path) -> ProjectState:
         project.subtitle_tracks = [track]
         project.active_track_index = 0
         project.default_style = SubtitleStyle()
+
+    # Image overlays (backward-compatible: key may not exist)
+    io_track = ImageOverlayTrack()
+    for ov_data in data.get("image_overlays", []):
+        io_track.add_overlay(ImageOverlay.from_dict(ov_data))
+    project.image_overlay_track = io_track
 
     return project

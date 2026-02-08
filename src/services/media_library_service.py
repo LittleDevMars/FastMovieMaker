@@ -26,6 +26,13 @@ def _get_thumbnail_dir() -> Path:
     return thumb_dir
 
 
+def _get_converted_dir() -> Path:
+    """Return the directory for converted files (e.g. GIF to MP4)."""
+    conv_dir = _get_library_dir() / "converted"
+    conv_dir.mkdir(parents=True, exist_ok=True)
+    return conv_dir
+
+
 class MediaLibraryService:
     """Manages a persistent media library with thumbnails."""
 
@@ -56,14 +63,29 @@ class MediaLibraryService:
     # ------------------------------------------------------------------ CRUD
 
     def add_item(self, file_path: str | Path) -> MediaItem | None:
-        """Add a media file to the library. Returns the new item or None on error."""
+        """Add a media file to the library. Returns the new item or None on error.
+
+        GIF files are automatically converted to MP4 video.
+        """
         file_path = Path(file_path)
         if not file_path.exists():
             return None
 
         # Detect media type
         ext = file_path.suffix.lower()
-        if ext in VIDEO_EXTENSIONS:
+        original_name = file_path.name
+
+        # GIF → MP4 conversion
+        if ext == ".gif":
+            converted = self._convert_gif_to_mp4(file_path)
+            if converted:
+                file_path = converted
+                ext = ".mp4"
+                media_type = "video"
+            else:
+                # Conversion failed, treat as static image
+                media_type = "image"
+        elif ext in VIDEO_EXTENSIONS:
             media_type = "video"
         elif ext in IMAGE_EXTENSIONS:
             media_type = "image"
@@ -99,7 +121,7 @@ class MediaLibraryService:
         item = MediaItem(
             item_id=item_id,
             file_path=abs_path,
-            file_name=file_path.name,
+            file_name=original_name,
             media_type=media_type,
             added_at=now,
             thumbnail_path=str(thumb_path) if thumb_path else "",
@@ -126,6 +148,18 @@ class MediaLibraryService:
                 return True
         return False
 
+    def clear_all(self) -> int:
+        """Remove all items and their thumbnails. Returns count removed."""
+        count = len(self._items)
+        for item in self._items:
+            if item.thumbnail_path:
+                thumb = Path(item.thumbnail_path)
+                if thumb.exists():
+                    thumb.unlink(missing_ok=True)
+        self._items.clear()
+        self.save()
+        return count
+
     def list_items(self, media_type: str | None = None) -> list[MediaItem]:
         """List items, optionally filtered by media type."""
         if media_type is None:
@@ -149,6 +183,38 @@ class MediaLibraryService:
 
     def get_favorites(self) -> list[MediaItem]:
         return [item for item in self._items if item.favorite]
+
+    # ------------------------------------------------------------------ GIF Conversion
+
+    def _convert_gif_to_mp4(self, gif_path: Path) -> Path | None:
+        """Convert an animated GIF to MP4 using FFmpeg. Returns the MP4 path or None."""
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            return None
+
+        conv_dir = _get_converted_dir()
+        mp4_name = f"{gif_path.stem}_{uuid.uuid4().hex[:8]}.mp4"
+        mp4_path = conv_dir / mp4_name
+
+        cmd = [
+            ffmpeg,
+            "-i", str(gif_path),
+            "-movflags", "faststart",
+            "-pix_fmt", "yuv420p",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-y",
+            str(mp4_path),
+        ]
+        try:
+            subprocess.run(
+                cmd, capture_output=True, timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+            if mp4_path.exists() and mp4_path.stat().st_size > 0:
+                return mp4_path
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------ Thumbnails
 

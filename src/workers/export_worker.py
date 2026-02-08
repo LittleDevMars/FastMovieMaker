@@ -29,12 +29,16 @@ class ExportWorker(QObject):
         track: SubtitleTrack,
         output_path: Path,
         audio_path: Path | None = None,
+        overlay_path: Path | None = None,
+        image_overlays: list | None = None,
     ):
         super().__init__()
         self._video_path = video_path
         self._track = track
         self._output_path = output_path
         self._audio_path = audio_path
+        self._overlay_path = overlay_path
+        self._image_overlays = image_overlays
 
     def run(self) -> None:
         try:
@@ -44,6 +48,8 @@ class ExportWorker(QObject):
                 self._output_path,
                 on_progress=lambda total, cur: self.progress.emit(total, cur),
                 audio_path=self._audio_path,
+                overlay_path=self._overlay_path,
+                image_overlays=self._image_overlays,
             )
             self.finished.emit(str(self._output_path))
         except Exception as e:

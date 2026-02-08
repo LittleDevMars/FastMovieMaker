@@ -2,23 +2,31 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSizeF
-from PySide6.QtGui import QColor, QFont, QResizeEvent
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QSizeF, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap, QResizeEvent, QWheelEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
+    QGraphicsPixmapItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsTextItem,
     QGraphicsView,
 )
 
+from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 
 
 class VideoPlayerWidget(QGraphicsView):
     """Displays video with subtitle text overlay."""
+
+    # Emitted when user drags/scales a PIP overlay: (index, x%, y%, scale%)
+    pip_position_changed = Signal(int, float, float, float)
 
     def __init__(self, player: QMediaPlayer, parent=None):
         super().__init__(parent)
@@ -40,6 +48,24 @@ class VideoPlayerWidget(QGraphicsView):
         self._scene.addItem(self._video_item)
         self._player.setVideoOutput(self._video_item)
         self._video_item.nativeSizeChanged.connect(self._on_native_size_changed)
+
+        # Overlay template layer (between video and subtitle)
+        self._overlay_item = QGraphicsPixmapItem()
+        self._overlay_item.setZValue(5)
+        self._overlay_item.setVisible(False)
+        self._scene.addItem(self._overlay_item)
+        self._overlay_path: str | None = None
+
+        # PIP image overlays (zValue=7, between template=5 and subtitle=10)
+        self._image_overlay_track: ImageOverlayTrack | None = None
+        self._pip_items: dict[int, QGraphicsPixmapItem] = {}
+        self._pip_active_indices: set[int] = set()
+
+        # PIP selection and dragging
+        self._selected_pip_index: int = -1
+        self._pip_drag_active = False
+        self._pip_drag_start_pos = None
+        self._pip_selection_border: QGraphicsRectItem | None = None
 
         # Subtitle overlay
         self._subtitle_item = QGraphicsTextItem()
@@ -84,6 +110,7 @@ class VideoPlayerWidget(QGraphicsView):
 
     def _on_position_changed(self, position_ms: int) -> None:
         self._update_subtitle(position_ms)
+        self._update_image_overlays(position_ms)
 
     def _update_subtitle(self, position_ms: int) -> None:
         if not self._subtitle_track:
@@ -175,10 +202,118 @@ class VideoPlayerWidget(QGraphicsView):
     def _on_native_size_changed(self, size: QSizeF) -> None:
         self._fit_video()
 
+    def set_overlay(self, image_path: str | None, opacity: float = 1.0) -> None:
+        """Set or update the overlay template image on top of the video."""
+        if image_path and Path(image_path).exists():
+            self._overlay_path = image_path
+            pixmap = QPixmap(image_path)
+            view_size = self.viewport().size()
+            scaled = pixmap.scaled(
+                view_size.width(), view_size.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._overlay_item.setPixmap(scaled)
+            self._overlay_item.setOpacity(opacity)
+            self._overlay_item.setVisible(True)
+            # Center the overlay
+            x = (view_size.width() - scaled.width()) / 2
+            y = (view_size.height() - scaled.height()) / 2
+            self._overlay_item.setPos(x, y)
+        else:
+            self._overlay_path = None
+            self._overlay_item.setVisible(False)
+
+    def clear_overlay(self) -> None:
+        """Remove the overlay template."""
+        self._overlay_path = None
+        self._overlay_item.setVisible(False)
+
+    # -------------------------------------------------------- PIP Image Overlays
+
+    def set_image_overlay_track(self, track: ImageOverlayTrack | None) -> None:
+        """Set the image overlay track for PIP display."""
+        self._image_overlay_track = track
+        # Clear existing PIP items
+        for item in self._pip_items.values():
+            self._scene.removeItem(item)
+        self._pip_items.clear()
+        self._pip_active_indices.clear()
+        self._selected_pip_index = -1
+        if self._pip_selection_border:
+            self._pip_selection_border.setVisible(False)
+
+    def _update_image_overlays(self, position_ms: int) -> None:
+        """Show/hide PIP image overlays based on playhead position."""
+        if not self._image_overlay_track:
+            # Hide all
+            for item in self._pip_items.values():
+                item.setVisible(False)
+            self._pip_active_indices.clear()
+            return
+
+        active = self._image_overlay_track.overlays_at(position_ms)
+        active_indices = set()
+        for ov in active:
+            idx = self._image_overlay_track.overlays.index(ov)
+            active_indices.add(idx)
+
+            if idx not in self._pip_items:
+                pip = QGraphicsPixmapItem()
+                pip.setZValue(7)
+                self._scene.addItem(pip)
+                self._pip_items[idx] = pip
+
+            pip = self._pip_items[idx]
+            if idx not in self._pip_active_indices:
+                # Newly activated: load and position
+                pixmap = QPixmap(ov.image_path)
+                if pixmap.isNull():
+                    pip.setVisible(False)
+                    continue
+                view_w = self.viewport().width()
+                view_h = self.viewport().height()
+                target_w = max(1, int(view_w * ov.scale_percent / 100))
+                scaled = pixmap.scaledToWidth(target_w, Qt.TransformationMode.SmoothTransformation)
+                pip.setPixmap(scaled)
+                pip.setOpacity(ov.opacity)
+                pip.setPos(view_w * ov.x_percent / 100, view_h * ov.y_percent / 100)
+                pip.setVisible(True)
+
+        # Hide deactivated overlays
+        for idx in self._pip_active_indices - active_indices:
+            if idx in self._pip_items:
+                self._pip_items[idx].setVisible(False)
+
+        self._pip_active_indices = active_indices
+
+        # Update selection border if selected PIP is visible
+        if self._selected_pip_index >= 0:
+            self._update_pip_selection_border()
+
+    def _fit_overlay(self) -> None:
+        """Resize the overlay to match the current view size."""
+        if not self._overlay_path or not self._overlay_item.isVisible():
+            return
+        pixmap = QPixmap(self._overlay_path)
+        if pixmap.isNull():
+            return
+        view_size = self.viewport().size()
+        scaled = pixmap.scaled(
+            view_size.width(), view_size.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._overlay_item.setPixmap(scaled)
+        x = (view_size.width() - scaled.width()) / 2
+        y = (view_size.height() - scaled.height()) / 2
+        self._overlay_item.setPos(x, y)
+
     def _fit_video(self) -> None:
         view_size = self.viewport().size()
         self._video_item.setSize(QSizeF(view_size.width(), view_size.height()))
         self._scene.setSceneRect(0, 0, view_size.width(), view_size.height())
+        self._fit_overlay()
         self._position_subtitle()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -236,3 +371,125 @@ class VideoPlayerWidget(QGraphicsView):
             if self._edit_mode:
                 self._update_edit_border()
         return super().eventFilter(obj, event)
+
+    # ------------------------------------------------- PIP Selection / Dragging
+
+    def select_pip(self, index: int) -> None:
+        """Select a PIP overlay by index (or -1 to deselect)."""
+        self._selected_pip_index = index
+        self._update_pip_selection_border()
+
+    def _pip_item_at_pos(self, view_pos) -> int:
+        """Return the PIP item index at view position, or -1."""
+        scene_pos = self.mapToScene(view_pos)
+        items = self._scene.items(scene_pos)
+        for item in items:
+            for idx, pip in self._pip_items.items():
+                if item is pip and pip.isVisible():
+                    return idx
+        return -1
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self._pip_item_at_pos(event.pos())
+            if idx >= 0:
+                self._selected_pip_index = idx
+                self._pip_drag_active = True
+                self._pip_drag_start_pos = self.mapToScene(event.pos())
+                self._update_pip_selection_border()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+            elif self._selected_pip_index >= 0 and not self._edit_mode:
+                # Click elsewhere → deselect PIP
+                self._selected_pip_index = -1
+                self._update_pip_selection_border()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._pip_drag_active and self._selected_pip_index >= 0:
+            pip = self._pip_items.get(self._selected_pip_index)
+            if pip and self._pip_drag_start_pos is not None:
+                scene_pos = self.mapToScene(event.pos())
+                delta = scene_pos - self._pip_drag_start_pos
+                pip.setPos(pip.pos() + delta)
+                self._pip_drag_start_pos = scene_pos
+                self._update_pip_selection_border()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._pip_drag_active:
+            self._pip_drag_active = False
+            self._pip_drag_start_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self._emit_pip_position()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if self._selected_pip_index >= 0:
+            pip = self._pip_items.get(self._selected_pip_index)
+            track = self._image_overlay_track
+            if pip and pip.isVisible() and track and 0 <= self._selected_pip_index < len(track):
+                ov = track[self._selected_pip_index]
+                delta = event.angleDelta().y()
+                step = 2.0 if delta > 0 else -2.0
+                new_scale = max(5.0, min(100.0, ov.scale_percent + step))
+                if new_scale != ov.scale_percent:
+                    ov.scale_percent = new_scale
+                    # Re-render at new scale
+                    pixmap = QPixmap(ov.image_path)
+                    if not pixmap.isNull():
+                        view_w = self.viewport().width()
+                        target_w = max(1, int(view_w * new_scale / 100))
+                        scaled = pixmap.scaledToWidth(target_w, Qt.TransformationMode.SmoothTransformation)
+                        pip.setPixmap(scaled)
+                    self._update_pip_selection_border()
+                    self._emit_pip_position()
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    def _emit_pip_position(self) -> None:
+        """Convert current PIP pixel position to percentages and emit signal."""
+        idx = self._selected_pip_index
+        pip = self._pip_items.get(idx)
+        track = self._image_overlay_track
+        if pip is None or track is None or idx < 0 or idx >= len(track):
+            return
+        view_w = self.viewport().width()
+        view_h = self.viewport().height()
+        if view_w <= 0 or view_h <= 0:
+            return
+        x_pct = pip.pos().x() / view_w * 100.0
+        y_pct = pip.pos().y() / view_h * 100.0
+        scale_pct = track[idx].scale_percent
+        self.pip_position_changed.emit(idx, x_pct, y_pct, scale_pct)
+
+    def _update_pip_selection_border(self) -> None:
+        """Show/hide/reposition the PIP selection border."""
+        if self._selected_pip_index < 0:
+            if self._pip_selection_border:
+                self._pip_selection_border.setVisible(False)
+            return
+
+        pip = self._pip_items.get(self._selected_pip_index)
+        if pip is None or not pip.isVisible():
+            if self._pip_selection_border:
+                self._pip_selection_border.setVisible(False)
+            return
+
+        if self._pip_selection_border is None:
+            self._pip_selection_border = QGraphicsRectItem()
+            self._pip_selection_border.setZValue(8)
+            self._pip_selection_border.setPen(QPen(QColor(0, 188, 212), 2, Qt.PenStyle.DashLine))
+            self._pip_selection_border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            self._scene.addItem(self._pip_selection_border)
+
+        rect = pip.boundingRect()
+        self._pip_selection_border.setRect(rect.adjusted(-3, -3, 3, 3))
+        self._pip_selection_border.setPos(pip.pos())
+        self._pip_selection_border.setVisible(True)

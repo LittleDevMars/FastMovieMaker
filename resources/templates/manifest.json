@@ -1,0 +1,64 @@
+{
+  "templates": [
+    {
+      "template_id": "youtube_frame",
+      "name": "YouTube Frame",
+      "image_path": "youtube_frame.png",
+      "thumbnail_path": "youtube_frame_thumb.png",
+      "category": "frame",
+      "aspect_ratio": "16:9",
+      "opacity": 1.0,
+      "is_builtin": true
+    },
+    {
+      "template_id": "rec_frame",
+      "name": "REC Frame",
+      "image_path": "rec_frame.png",
+      "thumbnail_path": "rec_frame_thumb.png",
+      "category": "frame",
+      "aspect_ratio": "16:9",
+      "opacity": 1.0,
+      "is_builtin": true
+    },
+    {
+      "template_id": "minimal_border",
+      "name": "Minimal Border",
+      "image_path": "minimal_border.png",
+      "thumbnail_path": "minimal_border_thumb.png",
+      "category": "frame",
+      "aspect_ratio": "16:9",
+      "opacity": 1.0,
+      "is_builtin": true
+    },
+    {
+      "template_id": "shorts_frame",
+      "name": "Shorts Frame",
+      "image_path": "shorts_frame.png",
+      "thumbnail_path": "shorts_frame_thumb.png",
+      "category": "frame",
+      "aspect_ratio": "9:16",
+      "opacity": 1.0,
+      "is_builtin": true
+    },
+    {
+      "template_id": "channel_badge",
+      "name": "Channel Badge",
+      "image_path": "channel_badge.png",
+      "thumbnail_path": "channel_badge_thumb.png",
+      "category": "lower_third",
+      "aspect_ratio": "9:16",
+      "opacity": 1.0,
+      "is_builtin": true
+    },
+    {
+      "template_id": "recording_vertical",
+      "name": "Recording Vertical",
+      "image_path": "recording_vertical.png",
+      "thumbnail_path": "recording_vertical_thumb.png",
+      "category": "frame",
+      "aspect_ratio": "9:16",
+      "opacity": 1.0,
+      "is_builtin": true
+    }
+  ]
+}

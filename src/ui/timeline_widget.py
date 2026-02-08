@@ -20,8 +20,9 @@ from PySide6.QtGui import (
 )
 
 import numpy as np
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMenu, QWidget
 
+from src.models.image_overlay import ImageOverlayTrack
 from src.models.subtitle import SubtitleTrack
 from src.utils.config import TIMELINE_HEIGHT
 from src.utils.time_utils import ms_to_display
@@ -38,6 +39,9 @@ class _DragMode(Enum):
     AUDIO_RESIZE_RIGHT = auto()
     PLAYHEAD_DRAG = auto()  # Dragging the playhead
     PAN_VIEW = auto()  # Dragging timeline view to scroll
+    IMAGE_MOVE = auto()
+    IMAGE_RESIZE_LEFT = auto()
+    IMAGE_RESIZE_RIGHT = auto()
 
 
 _EDGE_PX = 6  # pixels from segment edge that trigger resize
@@ -52,6 +56,9 @@ class TimelineWidget(QWidget):
     segment_selected = Signal(int)  # segment index
     segment_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
     audio_moved = Signal(int, int)  # (new_start_ms, new_duration_ms)
+    image_overlay_selected = Signal(int)  # overlay index
+    image_overlay_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
+    insert_image_requested = Signal(int)  # playhead ms position for insertion
 
     # Colors
     _BG_COLOR = QColor(30, 30, 30)
@@ -71,6 +78,10 @@ class TimelineWidget(QWidget):
     _WAVEFORM_FILL = QColor(255, 150, 50, 100)  # Semi-transparent orange
     _WAVEFORM_EDGE = QColor(255, 180, 80, 180)  # Brighter orange peaks
     _WAVEFORM_CENTER = QColor(255, 150, 50, 40)  # Subtle center line
+    _IMG_OVERLAY_COLOR = QColor(180, 100, 220, 180)  # Image overlay - purple
+    _IMG_OVERLAY_BORDER = QColor(200, 130, 240)
+    _IMG_OVERLAY_SELECTED_COLOR = QColor(210, 150, 255, 200)
+    _IMG_OVERLAY_SELECTED_BORDER = QColor(230, 180, 255)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,6 +116,10 @@ class TimelineWidget(QWidget):
         self._drag_orig_end_ms: int = 0
         self._drag_orig_audio_start_ms: int = 0
         self._drag_orig_audio_duration_ms: int = 0
+
+        # Image overlay track
+        self._image_overlay_track: ImageOverlayTrack | None = None
+        self._selected_overlay_index: int = -1
 
         # Waveform data
         self._waveform_data = None  # WaveformData or None
@@ -144,6 +159,62 @@ class TimelineWidget(QWidget):
     def select_segment(self, index: int) -> None:
         self._selected_index = index
         self.update()
+
+    def set_image_overlay_track(self, track: ImageOverlayTrack | None) -> None:
+        self._image_overlay_track = track
+        self._selected_overlay_index = -1
+        self.update()
+
+    def select_image_overlay(self, index: int) -> None:
+        self._selected_overlay_index = index
+        self.update()
+
+    # -------------------------------------------------------- Zoom API
+
+    zoom_changed = Signal(int)  # zoom percent
+
+    def zoom_in(self) -> None:
+        """Zoom into the timeline (show less time range)."""
+        if self._duration_ms <= 0:
+            return
+        self._apply_zoom(0.6)
+
+    def zoom_out(self) -> None:
+        """Zoom out of the timeline (show more time range)."""
+        if self._duration_ms <= 0:
+            return
+        self._apply_zoom(1.6)
+
+    def zoom_fit(self) -> None:
+        """Reset zoom to fit the entire duration."""
+        if self._duration_ms <= 0:
+            return
+        self._visible_start_ms = 0
+        self._px_per_ms = self.width() / float(self._duration_ms)
+        self.zoom_changed.emit(self.get_zoom_percent())
+        self.update()
+
+    def _apply_zoom(self, factor: float) -> None:
+        """Apply zoom factor centered on the current playhead position."""
+        old_range = self._visible_range_ms()
+        new_range = max(1000, min(self._duration_ms, old_range * factor))
+        # Center zoom on playhead
+        center_ms = self._playhead_ms
+        self._visible_start_ms = max(0, center_ms - new_range / 2)
+        self._px_per_ms = self.width() / new_range
+        self._clamp_visible_start(new_range)
+        self.zoom_changed.emit(self.get_zoom_percent())
+        self.update()
+
+    def get_zoom_percent(self) -> int:
+        """Return current zoom level as a percentage (100% = fit all)."""
+        if self._duration_ms <= 0:
+            return 100
+        fit_range = float(self._duration_ms)
+        visible = self._visible_range_ms()
+        if visible <= 0:
+            return 100
+        return max(1, int(fit_range / visible * 100))
 
     def set_waveform(self, waveform_data) -> None:
         """Set pre-computed waveform data for display."""
@@ -185,6 +256,7 @@ class TimelineWidget(QWidget):
         if self._track:
             self._draw_audio_track(painter, h)  # TTS audio track
             self._draw_segments(painter, h)
+        self._draw_image_overlays(painter, h)
         self._draw_playhead(painter, h)
         painter.end()
 
@@ -387,6 +459,42 @@ class TimelineWidget(QWidget):
                     ),
                 )
 
+    def _draw_image_overlays(self, painter: QPainter, h: int) -> None:
+        """Draw image overlay segments on the timeline."""
+        if not self._image_overlay_track or len(self._image_overlay_track) == 0:
+            return
+
+        img_y = 170
+        img_h = 35
+
+        for i, ov in enumerate(self._image_overlay_track):
+            x1 = self._ms_to_x(ov.start_ms)
+            x2 = self._ms_to_x(ov.end_ms)
+            if x2 < 0 or x1 > self.width():
+                continue
+
+            rect = QRectF(x1, img_y, max(x2 - x1, 2), img_h)
+
+            if i == self._selected_overlay_index:
+                painter.setPen(QPen(self._IMG_OVERLAY_SELECTED_BORDER, 2))
+                painter.setBrush(QBrush(self._IMG_OVERLAY_SELECTED_COLOR))
+            else:
+                painter.setPen(QPen(self._IMG_OVERLAY_BORDER, 1))
+                painter.setBrush(QBrush(self._IMG_OVERLAY_COLOR))
+            painter.drawRoundedRect(rect, 3, 3)
+
+            if rect.width() > 30:
+                painter.setPen(QColor("white"))
+                painter.setFont(QFont("Arial", 8))
+                text_rect = rect.adjusted(4, 2, -4, -2)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    painter.fontMetrics().elidedText(
+                        ov.file_name, Qt.TextElideMode.ElideRight, int(text_rect.width())
+                    ),
+                )
+
     def _draw_playhead(self, painter: QPainter, h: int) -> None:
         x = self._ms_to_x(self._playhead_ms)
         if 0 <= x <= self.width():
@@ -435,21 +543,41 @@ class TimelineWidget(QWidget):
                 self._drag_mode = _DragMode.PLAYHEAD_DRAG
                 self._seek_to_x(x)
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            # Image overlay hits
+            elif hit == "img_left_edge":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_RESIZE_LEFT, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
+            elif hit == "img_right_edge":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_RESIZE_RIGHT, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
+            elif hit == "img_body":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_MOVE, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
             # Audio segments now share the same hit zones as subtitle segments (linked movement)
             elif hit == "left_edge":
                 self._audio_selected = False
+                self._selected_overlay_index = -1
                 self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
             elif hit == "right_edge":
                 self._audio_selected = False
+                self._selected_overlay_index = -1
                 self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
             elif hit == "body":
                 self._audio_selected = False
+                self._selected_overlay_index = -1
                 self._selected_index = seg_idx
                 self.segment_selected.emit(seg_idx)
                 self._start_drag(_DragMode.MOVE, seg_idx, x)
             else:
                 self._audio_selected = False
                 self._selected_index = -1
+                self._selected_overlay_index = -1
                 self._drag_mode = _DragMode.SEEK
                 self._seek_to_x(x)
 
@@ -478,29 +606,64 @@ class TimelineWidget(QWidget):
             self._handle_drag(x)
             return
 
+        if self._drag_mode in (_DragMode.IMAGE_MOVE, _DragMode.IMAGE_RESIZE_LEFT, _DragMode.IMAGE_RESIZE_RIGHT):
+            self._handle_image_drag(x)
+            return
+
         # Update cursor based on hover (including playhead)
         if self._drag_mode == _DragMode.NONE:
             seg_idx, hit = self._hit_test(x, y)
             if hit == "playhead":
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-                return  # Don't process other hit zones
-            elif hit in ("left_edge", "right_edge", "audio_left_edge", "audio_right_edge"):
+                return
+            elif hit in ("left_edge", "right_edge", "img_left_edge", "img_right_edge"):
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-            elif hit in ("body", "audio_body"):
+            elif hit in ("body", "audio_body", "img_body"):
                 self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
             else:
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
-            # Emit final position (for both subtitle and linked audio)
             if self._track and 0 <= self._drag_seg_index < len(self._track):
                 seg = self._track[self._drag_seg_index]
                 if seg.start_ms != self._drag_orig_start_ms or seg.end_ms != self._drag_orig_end_ms:
                     self.segment_moved.emit(self._drag_seg_index, seg.start_ms, seg.end_ms)
+        elif self._drag_mode in (_DragMode.IMAGE_MOVE, _DragMode.IMAGE_RESIZE_LEFT, _DragMode.IMAGE_RESIZE_RIGHT):
+            if self._image_overlay_track and 0 <= self._drag_seg_index < len(self._image_overlay_track):
+                ov = self._image_overlay_track[self._drag_seg_index]
+                if ov.start_ms != self._drag_orig_start_ms or ov.end_ms != self._drag_orig_end_ms:
+                    self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index = -1
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+
+    def contextMenuEvent(self, event) -> None:
+        """Right-click context menu for image overlay operations."""
+        if self._duration_ms <= 0:
+            return
+        x = event.pos().x()
+        y = event.pos().y()
+        menu = QMenu(self)
+
+        img_y = 170
+        img_h = 35
+        if img_y <= y <= img_y + img_h:
+            seg_idx, hit = self._hit_test(x, y)
+            if hit.startswith("img_"):
+                delete_action = menu.addAction("Delete Image Overlay")
+                action = menu.exec(event.globalPos())
+                if action == delete_action:
+                    self._image_overlay_track.remove_overlay(seg_idx)
+                    self._selected_overlay_index = -1
+                    self.update()
+                return
+
+        insert_action = menu.addAction("Insert Image Overlay")
+        action = menu.exec(event.globalPos())
+        if action == insert_action:
+            ms = int(max(0, min(self._duration_ms, self._x_to_ms(x))))
+            self.insert_image_requested.emit(ms)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self._duration_ms <= 0 or self._px_per_ms <= 0:
@@ -512,9 +675,9 @@ class TimelineWidget(QWidget):
             old_range = self._visible_range_ms()
             new_range = max(1000, min(self._duration_ms, old_range * factor))
             mouse_frac = event.position().x() / max(self.width(), 1)
-            # Immediately clamp to prevent negative values
             self._visible_start_ms = max(0, mouse_ms - new_range * mouse_frac)
             self._clamp_visible_start(new_range)
+            self.zoom_changed.emit(self.get_zoom_percent())
         else:
             shift = self._visible_range_ms() * 0.1 * (-1 if delta > 0 else 1)
             self._visible_start_ms += shift
@@ -578,6 +741,44 @@ class TimelineWidget(QWidget):
         self._visible_start_ms = new_visible_start
         self.update()
 
+    def _start_image_drag(self, mode: _DragMode, seg_idx: int, x: float) -> None:
+        """Start dragging an image overlay segment."""
+        self._drag_mode = mode
+        self._drag_seg_index = seg_idx
+        self._drag_start_x = x
+        if self._image_overlay_track and 0 <= seg_idx < len(self._image_overlay_track):
+            ov = self._image_overlay_track[seg_idx]
+            self._drag_orig_start_ms = ov.start_ms
+            self._drag_orig_end_ms = ov.end_ms
+
+    def _handle_image_drag(self, x: float) -> None:
+        """Handle image overlay drag/resize."""
+        if not self._image_overlay_track or self._drag_seg_index < 0:
+            return
+        if self._drag_seg_index >= len(self._image_overlay_track):
+            return
+
+        dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+        ov = self._image_overlay_track[self._drag_seg_index]
+
+        if self._drag_mode == _DragMode.IMAGE_MOVE:
+            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            duration = self._drag_orig_end_ms - self._drag_orig_start_ms
+            if new_start + duration > self._duration_ms:
+                new_start = self._duration_ms - duration
+            ov.start_ms = new_start
+            ov.end_ms = new_start + duration
+        elif self._drag_mode == _DragMode.IMAGE_RESIZE_LEFT:
+            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            new_start = min(new_start, ov.end_ms - 100)
+            ov.start_ms = new_start
+        elif self._drag_mode == _DragMode.IMAGE_RESIZE_RIGHT:
+            new_end = max(ov.start_ms + 100, self._drag_orig_end_ms + dx_ms)
+            new_end = min(new_end, self._duration_ms)
+            ov.end_ms = new_end
+
+        self.update()
+
     def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
         """Start dragging audio track."""
         self._drag_mode = mode
@@ -618,6 +819,22 @@ class TimelineWidget(QWidget):
         if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
             return -3, "playhead"
 
+        # Check image overlay segments
+        img_y = 170
+        img_h = 35
+        if img_y <= y <= img_y + img_h and self._image_overlay_track:
+            for i, ov in enumerate(self._image_overlay_track):
+                x1 = self._ms_to_x(ov.start_ms)
+                x2 = self._ms_to_x(ov.end_ms)
+                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                    continue
+                if abs(x - x1) <= _EDGE_PX:
+                    return i, "img_left_edge"
+                if abs(x - x2) <= _EDGE_PX:
+                    return i, "img_right_edge"
+                if x1 <= x <= x2:
+                    return i, "img_body"
+
         if not self._track:
             return -1, ""
 
@@ -632,7 +849,6 @@ class TimelineWidget(QWidget):
                 x2 = self._ms_to_x(seg.end_ms)
                 if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
                     continue
-                # Audio segments use same hit zones as subtitles (linked movement)
                 if abs(x - x1) <= _EDGE_PX:
                     return i, "left_edge"
                 if abs(x - x2) <= _EDGE_PX:

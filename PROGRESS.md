@@ -5,25 +5,73 @@
 ## 다음 단계 (Next Session)
 
 **현재 상태**
-- Day 9 완료: TTS 오디오 + 자막 통합 내보내기 (Export 옵션, 세그먼트별 볼륨)
-- **Waveform** 이미 구현됨 (비디오 로드 시 오디오 파형 배경 생성) — 커밋 대기
-  - `src/services/waveform_service.py`, `src/workers/waveform_worker.py`, `tests/test_waveform_service.py`
-  - 타임라인: `set_waveform` / `clear_waveform`, 캐시된 QImage로 그리기
+- Day 10 완료: 이미지 오버레이(PIP) 전체 구현 + 미디어 라이브러리 개선 + PIP 비디오 위 위치 조정
 
 **즉시 할 일**
-1. **수동 GUI 테스트** (선택)
-   - 비디오 로드 → Waveform 로딩 표시 확인
-   - TTS 생성 → 내보내기 시 "TTS 오디오 포함" 옵션 동작 확인
-   - TESTING.md / PROGRESS.md 수동 체크리스트 참고
-2. **Git commit and push**
-   - Day 9 변경분 + Waveform 신규 파일 스테이징 후 커밋
-3. **Phase 4 Week 3 나머지** (우선순위 선택)
-   - **Batch Export**: 여러 프로젝트/트랙 일괄 내보내기
-   - **키보드 커스터마이징**: 단축키 사용자 설정
-4. **Phase 5** 계획 검토 (필요 시)
+1. **수동 GUI 테스트**
+   - 이미지 삽입 → 타임라인 보라색 블록 표시 → 재생 시 PIP 표시
+   - PIP 클릭 선택 → 드래그 이동 → 마우스 휠 크기 조절
+   - 내보내기 시 이미지 오버레이 합성 확인
+2. **Phase 5** 계획 검토 (필요 시)
 
 **참고**
 - 가상환경: Python 3.13 사용 (3.9 호환성 고려 불필요)
+
+---
+
+## 2026-02-08 (Day 10) 작업 요약
+
+**이미지 오버레이 (PIP) 전체 구현 + 미디어 라이브러리 개선 + PIP 위치 조정**
+
+### 1. ImageOverlay 모델 (`src/models/image_overlay.py`) — 신규
+- `ImageOverlay` dataclass: start_ms, end_ms, image_path, x_percent, y_percent, scale_percent, opacity
+- `ImageOverlayTrack`: 정렬된 오버레이 목록, overlays_at(), add/remove
+- to_dict() / from_dict() 직렬화
+
+### 2. 프로젝트 연동
+- `src/models/project.py` — image_overlay_track 필드 추가, reset() 시 초기화
+- `src/services/project_io.py` — 이미지 오버레이 직렬화/역직렬화 (하위 호환)
+
+### 3. 타임라인 (`src/ui/timeline_widget.py`)
+- Y=170~205 보라색 이미지 오버레이 레인 추가
+- DragMode: IMAGE_MOVE, IMAGE_RESIZE_LEFT, IMAGE_RESIZE_RIGHT
+- 시그널: image_overlay_selected, image_overlay_moved, insert_image_requested
+- 우클릭 컨텍스트 메뉴: "이미지 삽입", "이미지 삭제"
+
+### 4. 비디오 재생 PIP (`src/ui/video_player_widget.py`)
+- QGraphicsPixmapItem (zValue=7)으로 PIP 표시
+- overlays_at()으로 시간 기반 표시/숨김
+- **PIP 위치 조정 기능**: 클릭 선택 → 드래그 이동 → 마우스 휠 크기 조절
+- 청록색 점선 선택 테두리 (zValue=8)
+- pip_position_changed 시그널로 모델에 위치/크기 반영
+
+### 5. FFmpeg 내보내기 (`src/services/video_exporter.py`)
+- filter_complex로 시간 기반 overlay+enable 합성
+- 퍼센트 → 픽셀 변환, opacity 지원
+- template overlay + PIP + subtitles 체인
+
+### 6. 내보내기 연동
+- `src/workers/export_worker.py` — image_overlays 파라미터
+- `src/ui/dialogs/export_dialog.py` — image_overlays 전달
+
+### 7. MainWindow 통합 (`src/ui/main_window.py`)
+- 삽입 흐름: 타임라인 우클릭 + 미디어 라이브러리 "타임라인에 삽입"
+- Delete 키로 선택된 이미지 오버레이 삭제
+- PIP 드래그/스케일 시 모델 자동 업데이트
+
+### 8. 미디어 라이브러리 개선 (`src/ui/media_library_panel.py`)
+- "모두 비우기" 버튼 + 확인 다이얼로그
+- `MediaLibraryService.clear_all()` 메서드 추가
+
+### 9. 테스트 (`tests/test_image_overlay.py`) — 20개
+- 모델 필드, 직렬화, 라운드트립, 트랙 연산, 프로젝트 I/O, 하위 호환, 내보내기 시그니처
+
+### 파일 변경 요약
+- **신규 (2):** `src/models/image_overlay.py`, `tests/test_image_overlay.py`
+- **수정 (9):** project.py, project_io.py, config.py, timeline_widget.py, video_player_widget.py, video_exporter.py, export_worker.py, export_dialog.py, main_window.py, media_library_panel.py, media_library_service.py
+
+### 테스트 결과
+- 전체 테스트 통과 (기존 1개 TTS GUI 테스트 실패 제외 — 이전부터 존재)
 
 ---
 
