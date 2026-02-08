@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -119,3 +120,27 @@ class TestBatchExportWorkerSignature:
         track = SubtitleTrack(segments=[])
         worker = BatchExportWorker(Path("/tmp/test.mp4"), track, [])
         assert worker._video_path == Path("/tmp/test.mp4")
+
+    def test_worker_accepts_overlay_and_image_overlays(self):
+        """Worker stores overlay_path and image_overlays for export_video (single-export parity)."""
+        from src.workers.batch_export_worker import BatchExportWorker
+
+        track = SubtitleTrack(segments=[])
+        overlay = Path("/tmp/overlay.png")
+        worker = BatchExportWorker(
+            Path("/tmp/test.mp4"),
+            track,
+            [],
+            overlay_path=overlay,
+            image_overlays=[MagicMock()],
+        )
+        assert worker._overlay_path == overlay
+        assert len(worker._image_overlays) == 1
+
+    def test_worker_default_no_overlay(self):
+        from src.workers.batch_export_worker import BatchExportWorker
+
+        track = SubtitleTrack(segments=[])
+        worker = BatchExportWorker(Path("/tmp/test.mp4"), track, [])
+        assert worker._overlay_path is None
+        assert worker._image_overlays is None

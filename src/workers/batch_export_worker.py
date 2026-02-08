@@ -26,12 +26,16 @@ class BatchExportWorker(QObject):
         track: SubtitleTrack,
         jobs: list[BatchExportJob],
         audio_path: Path | None = None,
+        overlay_path: Path | None = None,
+        image_overlays: list | None = None,
     ):
         super().__init__()
         self._video_path = video_path
         self._track = track
         self._jobs = jobs
         self._audio_path = audio_path
+        self._overlay_path = overlay_path
+        self._image_overlays = image_overlays
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -59,6 +63,8 @@ class BatchExportWorker(QObject):
                     scale_width=job.preset.width,
                     scale_height=job.preset.height,
                     codec=job.preset.codec,
+                    overlay_path=self._overlay_path,
+                    image_overlays=self._image_overlays,
                 )
                 job.status = "completed"
                 succeeded += 1

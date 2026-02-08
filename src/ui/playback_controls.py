@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.utils.time_utils import ms_to_display
+from src.utils.time_utils import ms_to_display, ms_to_frame, ms_to_timecode_frames
 
 
 class PlaybackControls(QWidget):
@@ -27,6 +27,7 @@ class PlaybackControls(QWidget):
         self._audio_output = audio_output
         self._tts_audio_output: QAudioOutput | None = None
         self._is_seeking = False
+        self._display_fps: int = 30
 
         # --- 위젯 구성 ---
         self._play_btn = QPushButton("▶")
@@ -37,6 +38,11 @@ class PlaybackControls(QWidget):
         self._time_label = QLabel("00:00.000")
         self._time_label.setFixedWidth(90)
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._frame_label = QLabel("F:0")
+        self._frame_label.setFixedWidth(70)
+        self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._frame_label.setToolTip("00:00:00:00")
 
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setRange(0, 0)
@@ -68,6 +74,7 @@ class PlaybackControls(QWidget):
         layout.addWidget(self._play_btn)
         layout.addWidget(self._stop_btn)
         layout.addWidget(self._time_label)
+        layout.addWidget(self._frame_label)
         layout.addWidget(self._seek_slider, 1)
         layout.addWidget(self._duration_label)
         layout.addWidget(self._video_vol_label)
@@ -109,6 +116,18 @@ class PlaybackControls(QWidget):
 
     def _on_seek_moved(self, value: int) -> None:
         self._time_label.setText(ms_to_display(value))
+        self._update_frame_label(value)
+
+    def set_display_fps(self, fps: int) -> None:
+        """Set FPS for frame number display."""
+        self._display_fps = fps
+
+    def _update_frame_label(self, position_ms: int) -> None:
+        frame = ms_to_frame(position_ms, self._display_fps)
+        self._frame_label.setText(f"F:{frame}")
+        self._frame_label.setToolTip(
+            ms_to_timecode_frames(position_ms, self._display_fps)
+        )
 
     def set_tts_audio_output(self, tts_audio_output: QAudioOutput) -> None:
         self._tts_audio_output = tts_audio_output
@@ -129,6 +148,7 @@ class PlaybackControls(QWidget):
         if not self._is_seeking:
             self._seek_slider.setValue(position)
             self._time_label.setText(ms_to_display(position))
+            self._update_frame_label(position)
 
     def _on_duration_changed(self, duration: int) -> None:
         self._seek_slider.setRange(0, duration)

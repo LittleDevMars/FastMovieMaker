@@ -45,6 +45,8 @@ class BatchExportDialog(QDialog):
         track: SubtitleTrack,
         parent=None,
         video_has_audio: bool = False,
+        overlay_path: Path | None = None,
+        image_overlays: list | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Batch Export")
@@ -54,6 +56,8 @@ class BatchExportDialog(QDialog):
         self._video_path = video_path
         self._track = track
         self._video_has_audio = video_has_audio
+        self._overlay_path = overlay_path
+        self._image_overlays = image_overlays
         self._thread: QThread | None = None
         self._worker: BatchExportWorker | None = None
         self._temp_audio_path: Path | None = None
@@ -305,6 +309,8 @@ class BatchExportDialog(QDialog):
             self._track,
             self._jobs,
             audio_path=audio_path,
+            overlay_path=self._overlay_path,
+            image_overlays=self._image_overlays,
         )
         self._worker.moveToThread(self._thread)
 

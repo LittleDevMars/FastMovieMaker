@@ -2,17 +2,127 @@
 
 ---
 
-## 다음 단계 (Next Session)
+## 현재 상태 및 미구현 사항
 
-**현재 상태**
-- Day 11 완료: 버그 수정 다수 + ElevenLabs TTS + 이미지 리사이즈 프리셋 + 재생 제어 통일
+**현재 상태:** Day 13 완료 (2026-02-08)
 
-**즉시 할 일**
-1. **수동 GUI 테스트** — 이번 세션 수정사항 확인
-2. **Phase 5** 계획 검토 (필요 시)
+**참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
-**참고**
-- 가상환경: Python 3.13 사용 (3.9 호환성 고려 불필요)
+---
+
+### 구현 완료 요약
+
+| 기능 | 상태 |
+|------|------|
+| Phase 1: 비디오 재생, Whisper 자막 생성, SRT 내보내기 | 완료 |
+| Phase 3: 다크 테마, 키보드 단축키, 자막 스타일, Undo/Redo, 멀티트랙, Split/Merge | 완료 |
+| Phase 4 Week 1: 자동 저장, 복구, 드래그앤드롭, 자막 검색 | 완료 |
+| Phase 4 Week 2: 번역 (DeepL/GPT/Google), 설정 다이얼로그, 스타일 프리셋 | 완료 |
+| Phase 4 Week 3 일부: 타임코드 정밀 편집, 프레임 단위 시크 | 완료 |
+| TTS: edge-tts + ElevenLabs 엔진 | 완료 |
+| 이미지 오버레이 (PIP): 삽입, 드래그, 리사이즈, 프리셋, 내보내기 | 완료 |
+| 비디오 내보내기: 자막 하드번 + TTS 오디오 + 이미지 합성 | 완료 |
+| 세그먼트별 볼륨 조절 + 내보내기 반영 | 완료 |
+| HW 가속 인코딩 (NVENC/QSV/AMF 자동 감지) | 완료 |
+| Phase 4 Week 3 잔여: Waveform 시각화, Batch Export (이미지 오버레이/템플릿 지원) | 완료 (Day 12) |
+| P1 타임코드 향상: 프레임 스냅, 프레임 번호 표시, Jump to Frame | 완료 (Day 13) |
+
+---
+
+### 미구현 사항
+
+#### P1 — TTS 향상
+| 항목 | 설명 |
+|------|------|
+| 프리뷰 재생 | TTS 생성 전 샘플 음성 미리듣기 |
+| 세그먼트별 개별 TTS 설정 | 구간마다 다른 음성/속도 지정 |
+| 배경음악 자동 페이드 (ducking) | TTS 구간에서 배경음 자동 감소 |
+| TTS 설정 프리셋 저장/로드 | 자주 쓰는 TTS 설정 저장 |
+
+#### P2 — 고급 기능
+| 항목 | 설명 |
+|------|------|
+| Whisper 역방향 검증 | 생성된 TTS를 Whisper로 재전사하여 타이밍 자동 보정 |
+| GPT 대본 자동 생성 | OpenAI API로 대본 자동 작성 |
+| 배치 TTS 생성 | 여러 대본 파일 일괄 TTS 변환 |
+
+#### 미실행 — 수동 GUI 테스트
+- Day 6 수동 테스트 체크리스트 항목 다수 미확인 (PROGRESS.md Day 6 섹션 참조)
+
+---
+
+### 다음 단계 (Next Session)
+- **즉시:** 수동 GUI 테스트 (TESTING.md / Day 6 체크리스트), Git commit and push
+- **선택:** P1 (타임코드 향상, TTS 향상) 또는 키보드 커스터마이징, Phase 5 계획
+
+---
+
+## 2026-02-08 (Day 13) 작업 요약
+
+**P1 타임코드 향상 — 프레임 스냅, 프레임 번호 표시, Jump to Frame**
+
+### 1. 타임라인 프레임 스냅 (`src/ui/timeline_widget.py`)
+- `set_snap_fps(fps)` / `_snap_ms(ms)` 헬퍼 추가
+- 자막 드래그 (MOVE, RESIZE_LEFT, RESIZE_RIGHT) 프레임 경계 스냅
+- 이미지 오버레이 드래그 (IMAGE_MOVE, IMAGE_RESIZE_LEFT, IMAGE_RESIZE_RIGHT) 프레임 경계 스냅
+- 오디오 드래그 (AUDIO_MOVE, AUDIO_RESIZE_LEFT) 프레임 경계 스냅
+- FPS=0이면 스냅 비활성화 (기본)
+
+### 2. 프레임 번호 실시간 표시 (`src/ui/playback_controls.py`)
+- `F:0` 프레임 라벨 추가 (시간 라벨 옆)
+- 툴팁에 HH:MM:SS:FF 타임코드 표시
+- 재생 중/시크 중 실시간 업데이트
+- `set_display_fps(fps)` 메서드로 FPS 설정
+
+### 3. Jump to Frame 다이얼로그 (`src/ui/dialogs/jump_to_frame_dialog.py`) — 신규
+- 현재 위치를 HH:MM:SS:FF로 프리필
+- 4가지 타임코드 형식 지원 (HH:MM:SS:FF, HH:MM:SS.mmm, MM:SS.mmm, F:숫자)
+- 범위 검증 (0 ~ duration)
+- 에러 메시지 표시
+
+### 4. 메뉴/단축키 연동 (`src/ui/main_window.py`)
+- Edit 메뉴에 "Jump to Frame..." 추가 (`Ctrl+J`)
+- `_apply_frame_fps()`: SettingsManager에서 FPS 가져와 타임라인/컨트롤에 전달
+- `_on_jump_to_frame()`: 다이얼로그 열고 결과 위치로 시크
+
+### 5. 테스트 (`tests/test_frame_snap.py`) — 신규 35개
+- snap_to_frame: 24/30/60fps 경계 스냅 (7개)
+- TimelineWidget: set_snap_fps, _snap_ms 활성화/비활성화 (3개)
+- parse_flexible_timecode: 4가지 형식, 에러 처리 (11개)
+- ms_to_timecode_frames: 포맷팅 검증 (6개)
+- JumpToFrameDialog: 입력 검증, 범위 초과, 프리필 (8개)
+
+### 수정 파일
+- **신규 (2):** `src/ui/dialogs/jump_to_frame_dialog.py`, `tests/test_frame_snap.py`
+- **수정 (3):** `src/ui/timeline_widget.py`, `src/ui/playback_controls.py`, `src/ui/main_window.py`
+
+### 테스트 결과
+- 266/266 passed (기존 231 + 신규 35)
+
+---
+
+## 2026-02-08 (Day 12) 작업 요약
+
+**P0 Phase 4 Week 3 잔여 — Waveform 완성 정리, Batch Export 이미지 오버레이/템플릿 지원**
+
+### 1. Waveform 시각화 — 통합 완료 정리
+- 기존 통합 유지: 비디오 로드 시 `_start_waveform_generation()`, 타임라인 `set_waveform`/`clear_waveform`, 오디오 없음/실패 시 `_on_waveform_error`로 상태바 메시지.
+- 미구현 P0 표에서 제거 후 구현 완료 요약에 반영.
+
+### 2. Batch Export — 단일 내보내기와 동일 옵션
+- **MainWindow** `_on_batch_export()`: 오버레이 템플릿(`overlay_path`), 이미지 오버레이 트랙(`image_overlays`) 계산 후 `BatchExportDialog`에 전달.
+- **BatchExportDialog**: 생성자에 `overlay_path`, `image_overlays` 추가; `_start_batch_export()`에서 `BatchExportWorker`에 전달.
+- **BatchExportWorker**: `overlay_path`, `image_overlays` 인자 추가; `export_video()` 호출 시 전달하여 단일 Export Video와 동일하게 PIP·템플릿 포함.
+
+### 3. 테스트
+- `tests/test_batch_export.py`: `test_worker_accepts_overlay_and_image_overlays`, `test_worker_default_no_overlay` 추가.
+
+### 수정 파일
+- `src/ui/main_window.py` — Batch Export 시 overlay_path, image_overlays 전달
+- `src/ui/dialogs/batch_export_dialog.py` — overlay_path, image_overlays 수신 및 Worker 전달
+- `src/workers/batch_export_worker.py` — overlay_path, image_overlays 인자 및 export_video 전달
+- `tests/test_batch_export.py` — Worker overlay/image_overlays 테스트 2개
+- `PROGRESS.md` — P0 완료 처리, Day 12 요약 추가
 
 ---
 
@@ -635,7 +745,7 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 **다음 TODO:**
 1. 수동 GUI 테스트 (TTS 다이얼로그 및 음성 재생)
 2. Git commit and push
-3. Phase 4 Week 3 나머지 (Waveform, Batch Export) 또는 Phase 5 계획
+3. ~~Phase 4 Week 3 나머지 (Waveform, Batch Export)~~ → Day 12 완료. Phase 5 계획 또는 P1 진행
 
 ---
 
@@ -870,7 +980,7 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 
 **다음 TODO:**
 1. ~~Phase 4 Week 2 나머지: 자막 스타일 프리셋~~ → 완료
-2. Phase 4 Week 3: Timecode 정밀 편집, Waveform, Batch Export, 키보드 커스터마이징
+2. ~~Phase 4 Week 3: Timecode 정밀 편집, Waveform, Batch Export~~ → 타임코드 Day 5, Waveform·Batch Export Day 12 완료. 키보드 커스터마이징 또는 Phase 5
 
 ---
 
@@ -1015,7 +1125,7 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 
 **다음 TODO:**
 1. 수동 GUI 테스트 (프레임 시크 및 타임코드 입력)
-2. Phase 4 Week 3 나머지 기능 (Waveform, Batch Export) 또는 Phase 5 계획
+2. ~~Phase 4 Week 3 나머지 기능 (Waveform, Batch Export)~~ → Day 12 완료. Phase 5 계획 또는 P1
 
 ---
 

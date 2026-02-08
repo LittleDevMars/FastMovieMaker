@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._setup_shortcuts()
         self._connect_signals()
+        self._apply_frame_fps()
         self._restore_geometry()
 
         # FFmpeg check
@@ -312,6 +313,13 @@ class MainWindow(QMainWindow):
         batch_shift_action = QAction("&Batch Shift Timing...", self)
         batch_shift_action.triggered.connect(self._on_batch_shift)
         edit_menu.addAction(batch_shift_action)
+
+        edit_menu.addSeparator()
+
+        jump_frame_action = QAction("&Jump to Frame...", self)
+        jump_frame_action.setShortcut(QKeySequence("Ctrl+J"))
+        jump_frame_action.triggered.connect(self._on_jump_to_frame)
+        edit_menu.addAction(jump_frame_action)
 
         edit_menu.addSeparator()
 
@@ -531,6 +539,32 @@ class MainWindow(QMainWindow):
         ms_delta = frame_to_ms(frame_delta, fps)
 
         self._seek_relative(ms_delta)
+
+    def _apply_frame_fps(self) -> None:
+        """Apply FPS setting to timeline snap and playback controls frame display."""
+        from src.services.settings_manager import SettingsManager
+        fps = SettingsManager().get_frame_seek_fps()
+        self._timeline.set_snap_fps(fps)
+        self._controls.set_display_fps(fps)
+
+    def _on_jump_to_frame(self) -> None:
+        """Open Jump to Frame dialog and seek to the specified position."""
+        from src.services.settings_manager import SettingsManager
+        from src.ui.dialogs.jump_to_frame_dialog import JumpToFrameDialog
+
+        fps = SettingsManager().get_frame_seek_fps()
+        current_ms = self._player.position() if self._project.has_video else 0
+        duration_ms = (
+            self._player.duration()
+            if self._project.has_video
+            else self._timeline._duration_ms
+        )
+
+        dialog = JumpToFrameDialog(current_ms, fps, duration_ms, parent=self)
+        if dialog.exec() == JumpToFrameDialog.DialogCode.Accepted:
+            target = dialog.target_ms()
+            if target is not None:
+                self._on_timeline_seek(target)
 
     def _on_delete_selected_subtitle(self) -> None:
         # Check if an image overlay is selected in timeline
@@ -1628,12 +1662,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "FFmpeg Missing", "FFmpeg is required for video export.")
             return
 
+        overlay_path = None
+        if self._overlay_template:
+            overlay_path = Path(self._overlay_template.image_path)
+        io_track = self._project.image_overlay_track
+        img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
+
         from src.ui.dialogs.batch_export_dialog import BatchExportDialog
         dialog = BatchExportDialog(
             self._project.video_path,
             self._project.subtitle_track,
             parent=self,
             video_has_audio=self._project.video_has_audio,
+            overlay_path=overlay_path,
+            image_overlays=img_overlays,
         )
         dialog.exec()
 

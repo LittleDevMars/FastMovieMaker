@@ -132,6 +132,9 @@ class TimelineWidget(QWidget):
         self._image_overlay_track: ImageOverlayTrack | None = None
         self._selected_overlay_index: int = -1
 
+        # 프레임 스냅 FPS (0 = 비활성화)
+        self._snap_fps: int = 0
+
         # 웨이브폼: 비디오 오디오 파형 (캐시로 그리기 부담 감소)
         self._waveform_data = None  # WaveformData or None
         self._waveform_image_cache: QImage | None = None
@@ -141,6 +144,17 @@ class TimelineWidget(QWidget):
         self._drop_indicator_x: float = -1
 
     # -------------------------------------------------------- 공개 API
+
+    def set_snap_fps(self, fps: int) -> None:
+        """Set FPS for frame snapping during drag. 0 = disabled."""
+        self._snap_fps = fps
+
+    def _snap_ms(self, ms: int) -> int:
+        """Snap milliseconds to nearest frame boundary if snap is enabled."""
+        if self._snap_fps > 0:
+            from src.utils.time_utils import snap_to_frame
+            return snap_to_frame(ms, self._snap_fps)
+        return ms
 
     def set_track(self, track: SubtitleTrack | None) -> None:
         self._track = track
@@ -803,18 +817,18 @@ class TimelineWidget(QWidget):
         seg = self._track[self._drag_seg_index]
 
         if self._drag_mode == _DragMode.MOVE:
-            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_start_ms + dx_ms))
             duration = self._drag_orig_end_ms - self._drag_orig_start_ms
             if new_start + duration > self._duration_ms:
                 new_start = self._duration_ms - duration
             seg.start_ms = new_start
             seg.end_ms = new_start + duration
         elif self._drag_mode == _DragMode.RESIZE_LEFT:
-            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_start_ms + dx_ms))
             new_start = min(new_start, seg.end_ms - 100)  # min 100ms
             seg.start_ms = new_start
         elif self._drag_mode == _DragMode.RESIZE_RIGHT:
-            new_end = max(seg.start_ms + 100, self._drag_orig_end_ms + dx_ms)
+            new_end = self._snap_ms(max(seg.start_ms + 100, self._drag_orig_end_ms + dx_ms))
             new_end = min(new_end, self._duration_ms)
             seg.end_ms = new_end
 
@@ -862,7 +876,7 @@ class TimelineWidget(QWidget):
         ov = self._image_overlay_track[self._drag_seg_index]
 
         if self._drag_mode == _DragMode.IMAGE_MOVE:
-            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_start_ms + dx_ms))
             duration = self._drag_orig_end_ms - self._drag_orig_start_ms
             ov.start_ms = new_start
             ov.end_ms = new_start + duration
@@ -870,11 +884,11 @@ class TimelineWidget(QWidget):
             if ov.end_ms > self._duration_ms:
                 self._duration_ms = ov.end_ms
         elif self._drag_mode == _DragMode.IMAGE_RESIZE_LEFT:
-            new_start = max(0, self._drag_orig_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_start_ms + dx_ms))
             new_start = min(new_start, ov.end_ms - 100)
             ov.start_ms = new_start
         elif self._drag_mode == _DragMode.IMAGE_RESIZE_RIGHT:
-            new_end = max(ov.start_ms + 100, self._drag_orig_end_ms + dx_ms)
+            new_end = self._snap_ms(max(ov.start_ms + 100, self._drag_orig_end_ms + dx_ms))
             ov.end_ms = new_end
             # Auto-extend timeline when resizing past the end
             if ov.end_ms > self._duration_ms:
@@ -898,12 +912,12 @@ class TimelineWidget(QWidget):
         dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
 
         if self._drag_mode == _DragMode.AUDIO_MOVE:
-            new_start = max(0, self._drag_orig_audio_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_audio_start_ms + dx_ms))
             if new_start + self._drag_orig_audio_duration_ms > self._duration_ms:
                 new_start = self._duration_ms - self._drag_orig_audio_duration_ms
             self._track.audio_start_ms = max(0, new_start)
         elif self._drag_mode == _DragMode.AUDIO_RESIZE_LEFT:
-            new_start = max(0, self._drag_orig_audio_start_ms + dx_ms)
+            new_start = self._snap_ms(max(0, self._drag_orig_audio_start_ms + dx_ms))
             new_start = min(new_start, self._track.audio_start_ms + self._track.audio_duration_ms - 100)
             duration_change = self._track.audio_start_ms - new_start
             self._track.audio_start_ms = new_start
