@@ -135,6 +135,11 @@ class VideoPlayerWidget(QGraphicsView):
 
         view_rect = self.viewport().rect()
         scene_rect = self.mapToScene(view_rect).boundingRect()
+
+        # Auto word-wrap: limit text width to 90% of view width
+        max_text_width = scene_rect.width() * 0.9
+        self._subtitle_item.setTextWidth(max_text_width)
+
         text_width = self._subtitle_item.boundingRect().width()
         text_height = self._subtitle_item.boundingRect().height()
 

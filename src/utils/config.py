@@ -54,6 +54,6 @@ TTS_VOICES = {
 }
 
 # UI
-TIMELINE_HEIGHT = 140  # Increased to accommodate audio track
+TIMELINE_HEIGHT = 170  # Accommodates ruler + subtitles + TTS audio + video waveform
 SUBTITLE_FONT_SIZE = 18
 SUBTITLE_OVERLAY_MARGIN_BOTTOM = 40

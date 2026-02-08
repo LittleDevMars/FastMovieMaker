@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QImage,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -17,6 +18,8 @@ from PySide6.QtGui import (
     QPolygon,
     QWheelEvent,
 )
+
+import numpy as np
 from PySide6.QtWidgets import QWidget
 
 from src.models.subtitle import SubtitleTrack
@@ -65,6 +68,9 @@ class TimelineWidget(QWidget):
     _AUDIO_SELECTED_BORDER = QColor(180, 255, 180)
     _VIDEO_AUDIO_COLOR = QColor(255, 150, 50, 180)  # Video audio - orange
     _VIDEO_AUDIO_BORDER = QColor(255, 180, 80)
+    _WAVEFORM_FILL = QColor(255, 150, 50, 100)  # Semi-transparent orange
+    _WAVEFORM_EDGE = QColor(255, 180, 80, 180)  # Brighter orange peaks
+    _WAVEFORM_CENTER = QColor(255, 150, 50, 40)  # Subtle center line
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -100,6 +106,11 @@ class TimelineWidget(QWidget):
         self._drag_orig_audio_start_ms: int = 0
         self._drag_orig_audio_duration_ms: int = 0
 
+        # Waveform data
+        self._waveform_data = None  # WaveformData or None
+        self._waveform_image_cache: QImage | None = None
+        self._waveform_cache_key: tuple | None = None
+
     # -------------------------------------------------------- Public API
 
     def set_track(self, track: SubtitleTrack | None) -> None:
@@ -132,6 +143,20 @@ class TimelineWidget(QWidget):
 
     def select_segment(self, index: int) -> None:
         self._selected_index = index
+        self.update()
+
+    def set_waveform(self, waveform_data) -> None:
+        """Set pre-computed waveform data for display."""
+        self._waveform_data = waveform_data
+        self._waveform_image_cache = None
+        self._waveform_cache_key = None
+        self.update()
+
+    def clear_waveform(self) -> None:
+        """Remove waveform display."""
+        self._waveform_data = None
+        self._waveform_image_cache = None
+        self._waveform_cache_key = None
         self.update()
 
     # ----------------------------------------------------------- Paint
@@ -182,13 +207,93 @@ class TimelineWidget(QWidget):
             t += tick_ms
 
     def _draw_video_audio(self, painter: QPainter, w: int, h: int) -> None:
-        """Draw video audio track (orange box spanning entire video duration)."""
-        # Only draw if we have a duration (video loaded)
+        """Draw video audio waveform or fallback indicator bar."""
         if self._duration_ms <= 0:
             return
 
-        video_audio_y = 120  # Below TTS audio
-        video_audio_h = 15   # Smaller height
+        if self._waveform_data is not None and self._waveform_data.duration_ms > 0:
+            self._draw_waveform(painter, w)
+        else:
+            self._draw_video_audio_fallback(painter, w)
+
+    def _draw_waveform(self, painter: QPainter, w: int) -> None:
+        """Draw waveform using cached QImage for performance."""
+        wf = self._waveform_data
+        if wf is None or wf.duration_ms <= 0:
+            return
+
+        waveform_y = 120
+        waveform_h = 45
+
+        visible_ms = self._visible_range_ms()
+        cache_key = (self._visible_start_ms, visible_ms, w)
+
+        if self._waveform_cache_key != cache_key:
+            self._waveform_image_cache = self._render_waveform_image(w, waveform_h)
+            self._waveform_cache_key = cache_key
+
+        if self._waveform_image_cache is not None:
+            painter.drawImage(0, waveform_y, self._waveform_image_cache)
+
+        # Draw label
+        label_x = max(5, int(self._ms_to_x(0)) + 5)
+        if 0 < label_x < w - 80:
+            painter.setPen(QColor(255, 200, 100, 200))
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(label_x, waveform_y + 10, "Video Audio")
+
+    def _render_waveform_image(self, w: int, h: int) -> QImage:
+        """Render waveform to a QImage for efficient blitting."""
+        wf = self._waveform_data
+        img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(QColor(0, 0, 0, 0))
+
+        center_y = h // 2
+        half_h = h / 2.0
+
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        fill_color = self._WAVEFORM_FILL
+        edge_color = self._WAVEFORM_EDGE
+
+        for px in range(w):
+            ms_start = self._x_to_ms(px)
+            ms_end = self._x_to_ms(px + 1)
+            ms_start_i = max(0, int(ms_start))
+            ms_end_i = min(wf.duration_ms, int(ms_end))
+
+            if ms_start_i >= ms_end_i or ms_start_i >= wf.duration_ms:
+                continue
+
+            peak_max = float(np.max(wf.peaks_pos[ms_start_i:ms_end_i]))
+            peak_min = float(np.min(wf.peaks_neg[ms_start_i:ms_end_i]))
+
+            y_top = center_y - int(peak_max * half_h)
+            y_bot = center_y - int(peak_min * half_h)
+            if y_bot <= y_top:
+                y_bot = y_top + 1
+
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(fill_color))
+            p.drawRect(px, y_top, 1, y_bot - y_top)
+
+            p.setBrush(QBrush(edge_color))
+            p.drawRect(px, y_top, 1, 1)
+            if y_bot - y_top > 2:
+                p.drawRect(px, y_bot - 1, 1, 1)
+
+        # Center line
+        p.setPen(QPen(self._WAVEFORM_CENTER, 1))
+        p.drawLine(0, center_y, w, center_y)
+
+        p.end()
+        return img
+
+    def _draw_video_audio_fallback(self, painter: QPainter, w: int) -> None:
+        """Fallback: draw simple bar when waveform data is not available."""
+        video_audio_y = 120
+        video_audio_h = 45
 
         x1 = self._ms_to_x(0)
         x2 = self._ms_to_x(self._duration_ms)
@@ -197,17 +302,15 @@ class TimelineWidget(QWidget):
             return
 
         rect = QRectF(x1, video_audio_y, max(x2 - x1, 2), video_audio_h)
-
         painter.setPen(QPen(self._VIDEO_AUDIO_BORDER, 1))
         painter.setBrush(QBrush(self._VIDEO_AUDIO_COLOR))
         painter.drawRoundedRect(rect, 3, 3)
 
-        # Draw label
-        if x2 - x1 > 100:  # Only if wide enough
+        if x2 - x1 > 100:
             painter.setPen(QColor(255, 255, 255))
             painter.setFont(QFont("Arial", 9))
             label_rect = QRectF(x1 + 5, video_audio_y, x2 - x1 - 10, video_audio_h)
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "🎬 Video Audio")
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Loading waveform...")
 
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
         """Draw individual audio segments for each subtitle segment."""

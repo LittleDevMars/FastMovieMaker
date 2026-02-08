@@ -1,8 +1,6 @@
 """
 Audio merger service using FFmpeg for concatenating and mixing audio tracks.
 """
-from __future__ import annotations
-
 from pathlib import Path
 from typing import List
 import subprocess

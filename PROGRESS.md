@@ -23,7 +23,7 @@
 4. **Phase 5** 계획 검토 (필요 시)
 
 **참고**
-- `audio_merger.py`에 `from __future__ import annotations` 추가함 (Python 3.9에서 `List[float] | None` 수집 에러 방지)
+- 가상환경: Python 3.13 사용 (3.9 호환성 고려 불필요)
 
 ---
 

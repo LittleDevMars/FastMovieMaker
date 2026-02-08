@@ -6,8 +6,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QUrl, Qt
-from PySide6.QtGui import QAction, QKeySequence, QShortcut, QUndoStack
+from PySide6.QtCore import QSettings, QThread, QUrl, Qt
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
@@ -53,6 +53,7 @@ from src.ui.video_player_widget import VideoPlayerWidget
 from src.ui.dialogs.whisper_dialog import WhisperDialog
 from src.ui.dialogs.tts_dialog import TTSDialog
 from src.utils.config import APP_NAME, APP_VERSION, VIDEO_FILTER, find_ffmpeg
+from src.workers.waveform_worker import WaveformWorker
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +62,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.setMinimumSize(1280, 900)  # Increased to ensure timeline is always visible
         self.resize(1440, 950)
+
+        # App icon
+        icon_path = Path(__file__).resolve().parent.parent.parent / "resources" / "icon.png"
+        if icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         # Enable drag & drop
         self.setAcceptDrops(True)
@@ -93,6 +99,10 @@ class MainWindow(QMainWindow):
         self._tts_audio_output.setVolume(1.0)
         self._tts_player = QMediaPlayer()
         self._tts_player.setAudioOutput(self._tts_audio_output)
+
+        # Waveform worker
+        self._waveform_thread: QThread | None = None
+        self._waveform_worker: WaveformWorker | None = None
 
         self._build_ui()
         self._build_menu()
@@ -734,6 +744,12 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
         self._refresh_track_selector()
+
+        # Start waveform generation in background
+        if self._project.video_has_audio:
+            self._start_waveform_generation(path)
+        else:
+            self._timeline.clear_waveform()
 
         self.setWindowTitle(f"{path.name} – {APP_NAME}")
         self.statusBar().showMessage(f"Loaded: {path.name}")
@@ -1527,7 +1543,54 @@ class MainWindow(QMainWindow):
         settings.setValue("window_geometry", self.saveGeometry())
         settings.setValue("window_state", self.saveState())
         self._player.stop()
+        self._stop_waveform_generation()
         self._cleanup_temp_video()
         # Final save before closing
         self._autosave.save_now()
         super().closeEvent(event)
+
+    # ------------------------------------------------ Waveform generation
+
+    def _start_waveform_generation(self, video_path: Path) -> None:
+        """Start background waveform peak computation."""
+        self._stop_waveform_generation()
+        self._timeline.clear_waveform()
+
+        self._waveform_thread = QThread()
+        self._waveform_worker = WaveformWorker(video_path)
+        self._waveform_worker.moveToThread(self._waveform_thread)
+
+        self._waveform_thread.started.connect(self._waveform_worker.run)
+        self._waveform_worker.status_update.connect(
+            lambda msg: self.statusBar().showMessage(msg, 3000)
+        )
+        self._waveform_worker.finished.connect(self._on_waveform_finished)
+        self._waveform_worker.error.connect(self._on_waveform_error)
+        self._waveform_worker.finished.connect(self._cleanup_waveform_thread)
+        self._waveform_worker.error.connect(self._cleanup_waveform_thread)
+
+        self._waveform_thread.start()
+
+    def _on_waveform_finished(self, waveform_data) -> None:
+        """Handle completed waveform computation."""
+        self._timeline.set_waveform(waveform_data)
+        self.statusBar().showMessage("Waveform loaded", 3000)
+
+    def _on_waveform_error(self, message: str) -> None:
+        """Handle waveform computation error (non-fatal)."""
+        print(f"Warning: Waveform generation failed: {message}")
+        self.statusBar().showMessage("Waveform unavailable", 3000)
+
+    def _stop_waveform_generation(self) -> None:
+        """Cancel any in-progress waveform computation."""
+        if self._waveform_worker:
+            self._waveform_worker.cancel()
+        self._cleanup_waveform_thread()
+
+    def _cleanup_waveform_thread(self) -> None:
+        """Clean up waveform worker thread."""
+        if self._waveform_thread and self._waveform_thread.isRunning():
+            self._waveform_thread.quit()
+            self._waveform_thread.wait(5000)
+        self._waveform_thread = None
+        self._waveform_worker = None
