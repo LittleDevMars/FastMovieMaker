@@ -18,13 +18,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.utils.i18n import tr
+
 
 class RecoveryDialog(QDialog):
     """Dialog to recover from crashed session or autosave files."""
 
     def __init__(self, recovery_files=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Recovery Files Found")
+        self.setWindowTitle(tr("Recovery Files Found"))
         self.setMinimumSize(550, 350)
 
         self._selected_file = None
@@ -58,14 +60,14 @@ class RecoveryDialog(QDialog):
         # Buttons
         button_layout = QHBoxLayout()
 
-        self._restore_button = QPushButton("Restore Selected")
+        self._restore_button = QPushButton(tr("Restore Selected"))
         self._restore_button.clicked.connect(self.accept)
         self._restore_button.setEnabled(False)
 
-        discard_button = QPushButton("Discard All")
+        discard_button = QPushButton(tr("Discard All"))
         discard_button.clicked.connect(self._on_discard_all)
 
-        cancel_button = QPushButton("Cancel")
+        cancel_button = QPushButton(tr("Cancel"))
         cancel_button.clicked.connect(self.reject)
 
         button_layout.addWidget(self._restore_button)
@@ -131,8 +133,8 @@ class RecoveryDialog(QDialog):
         """Discard all recovery files."""
         result = QMessageBox.question(
             self,
-            "Confirm Discard",
-            "Are you sure you want to discard all recovery files?",
+            tr("Confirm Discard"),
+            tr("Are you sure you want to discard all recovery files?"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

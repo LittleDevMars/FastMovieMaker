@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 13 완료 (2026-02-08)
+**현재 상태:** Day 16 완료 (2026-02-09)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -26,6 +26,10 @@
 | HW 가속 인코딩 (NVENC/QSV/AMF 자동 감지) | 완료 |
 | Phase 4 Week 3 잔여: Waveform 시각화, Batch Export (이미지 오버레이/템플릿 지원) | 완료 (Day 12) |
 | P1 타임코드 향상: 프레임 스냅, 프레임 번호 표시, Jump to Frame | 완료 (Day 13) |
+| QSS 전역 다크 테마 스타일시트 (15종 위젯) | 완료 (Day 14) |
+| 성능 최적화: Timeline QPixmap 캐시, faster-whisper, Waveform 청크, 자막 가상화 | 완료 (Day 14) |
+| **Phase T1: 영상 컷 편집** — 분할(Ctrl+B)/삭제(Delete)/트림, 클립 트랙 UI, 시간 매핑, FFmpeg concat 내보내기, Undo/Redo, 프로젝트 직렬화 v3 | **완료 (Day 15)** |
+| **i18n 다국어 지원** — tr() 기반 번역 시스템, 한국어/영어 전환, 환경설정 언어 선택, ~200+ 번역 키 (15개 UI 파일) | **완료 (Day 16)** |
 
 ---
 
@@ -52,8 +56,140 @@
 ---
 
 ### 다음 단계 (Next Session)
-- **즉시:** 수동 GUI 테스트 (TESTING.md / Day 6 체크리스트), Git commit and push
-- **선택:** P1 (타임코드 향상, TTS 향상) 또는 키보드 커스터마이징, Phase 5 계획
+
+#### ✅ Phase T1 — 영상 컷 편집 (완료 Day 15)
+| 항목 | 상태 |
+|------|------|
+| VideoClip + VideoClipTrack 모델 (소스↔타임라인 매핑, split, remove, trim) | 완료 |
+| 프로젝트 직렬화 v3 (video_clips 필드, 하위 호환) | 완료 |
+| SplitClipCommand / DeleteClipCommand (자막 리플) / TrimClipCommand | 완료 |
+| 타임라인 위젯: 클립 트랙 렌더링, 히트테스트, 드래그 트림, 우클릭 메뉴 | 완료 |
+| 재생 매핑: source↔timeline 변환, 클립 경계 자동 스킵, PlaybackControls 출력 시간 | 완료 |
+| Ctrl+B (분할) / Delete (삭제) 단축키 | 완료 |
+| FFmpeg trim+concat 필터 내보내기 | 완료 |
+| 통합 테스트 (302 pass) | 완료 |
+
+#### Phase T2 — 타임라인 시각 강화
+| 항목 | 설명 |
+|------|------|
+| 비디오 썸네일 | 클립 위에 프레임 미리보기 (FFmpeg 추출) |
+| 트랙 헤더 패널 | 트랙별 이름/잠금/뮤트/가시성 토글 |
+| 클립 간 자석 스냅 | 가장자리 정렬 자동 흡착 |
+| 리플 편집 모드 | 클립 삭제/이동 시 뒤 클립 자동 당김 |
+
+#### Phase T3 — 고급 편집
+| 항목 | 설명 |
+|------|------|
+| 트랜지션 효과 | 페이드/디졸브/와이프 (클립 사이) |
+| 속도 조절 | 0.25x~4x, 속도 램프 |
+| 다중 비디오 트랙 | 레이어 합성 (PIP, 크로마키) |
+
+#### 기존 Tier — 기능 완성도
+| 항목 | 설명 | 난이도 |
+|------|------|--------|
+| 프로젝트 저장/로드 (.fmm) | JSON 프로젝트 파일로 세션 복원 | 중 |
+| 자막 텍스트 애니메이션 | fade-in/out, 타이핑, 슬라이드 (FFmpeg drawtext) | 중 |
+| 배경음 자동 페이드 (ducking) | TTS 구간에서 비디오 오디오 자동 감소 | 중 |
+| 간단한 컬러 보정 | 밝기/대비/채도 슬라이더 → FFmpeg eq 필터 | 중 |
+
+#### 기존 Tier — 생산성/편의
+| 항목 | 설명 |
+|------|------|
+| 키보드 단축키 커스터마이징 | JSON 기반 키맵 설정 |
+| TTS 설정 프리셋 | 자주 쓰는 음성/속도 조합 저장 |
+| 프로젝트 템플릿 | 유튜브 쇼츠/릴스/해설 등 사전 설정 |
+
+#### 기존 Tier — AI 확장
+| 항목 | 설명 |
+|------|------|
+| GPT 스크립트 자동 생성 | 자막 기반 → 해설/요약 스크립트 |
+| 장면 감지 (Scene Detection) | PySceneDetect로 자동 분할점 제안 |
+
+#### 기존 Tier — 배포
+| 항목 | 설명 |
+|------|------|
+| PyInstaller 패키징 | 단일 exe/폴더 배포 |
+| Windows 인스톨러 | NSIS/Inno Setup |
+
+---
+
+## 2026-02-09 (Day 16) 작업 요약
+
+**i18n 다국어 지원 — 한국어/영어 전환 가능**
+
+### 1. i18n 인프라 (`src/utils/i18n.py`, `src/utils/lang/`)
+- `tr()` 함수: 딕셔너리 기반 번역 (영어 키 → 한국어 값)
+- `init_language(lang_code)`: 앱 시작 시 1회 호출, 런타임 전환 불가 (재시작 필요)
+- `current_language()`: 현재 언어 코드 반환
+- `src/utils/lang/ko.py`: ~200+ 한국어 번역 키
+- `src/utils/lang/en.py`: 빈 딕셔너리 (영어는 키 자체가 표시 문자열)
+- 확장 가능: `ja.py`, `zh.py` 등 추가 용이
+
+### 2. 번역 적용 (15개 UI 파일)
+- `main_window.py`: 메뉴, 탭, 툴바, 상태바, QMessageBox (~130개 문자열)
+- 다이얼로그 9개: export, batch_export, style, whisper, tts, translate, recovery, jump_to_frame, preferences
+- 패널 3개: subtitle_panel, media_library_panel, templates_panel
+- 컨트롤 2개: playback_controls, timeline_widget
+
+### 3. 환경설정 언어 선택 (`preferences_dialog.py`)
+- User Interface 그룹에 Language 콤보박스 추가 (English / 한국어)
+- `settings_manager.py`에 `get/set_ui_language()` 추가
+- 기본값 `"ko"` (기존 사용자 한국어 유지)
+- `main.py`에서 `init_language()` 호출
+
+### 수정/신규 파일
+- **신규 (4):** `src/utils/i18n.py`, `src/utils/lang/__init__.py`, `src/utils/lang/en.py`, `src/utils/lang/ko.py`
+- **수정 (16):** `main.py`, `src/services/settings_manager.py`, `src/ui/main_window.py`, `src/ui/subtitle_panel.py`, `src/ui/playback_controls.py`, `src/ui/timeline_widget.py`, `src/ui/media_library_panel.py`, `src/ui/templates_panel.py`, `src/ui/dialogs/preferences_dialog.py`, `src/ui/dialogs/export_dialog.py`, `src/ui/dialogs/batch_export_dialog.py`, `src/ui/dialogs/style_dialog.py`, `src/ui/dialogs/whisper_dialog.py`, `src/ui/dialogs/tts_dialog.py`, `src/ui/dialogs/translate_dialog.py`, `src/ui/dialogs/recovery_dialog.py`, `src/ui/dialogs/jump_to_frame_dialog.py`
+- **테스트 (1):** `tests/test_i18n.py` (9 tests)
+
+### 테스트 결과
+- 320/321 passed (1 실패는 기존 isVisible() GUI 이슈 — 미관련)
+
+---
+
+## 2026-02-08 (Day 14) 작업 요약
+
+**QSS 전역 다크 테마 + 성능 최적화 4종**
+
+### 1. QSS 전역 다크 테마 (`src/ui/styles/dark.qss`) — 신규
+- 536줄, 15종 위젯 스타일링 (QPushButton, QSlider, QScrollBar, QComboBox, QTabWidget, QGroupBox, QMenuBar, QMenu, QLineEdit, QSpinBox, QTableWidget, QProgressBar, QSplitter, QCheckBox, QStatusBar 등)
+- 액센트 컬러: `#3c8cdc` (파란색), 베이스: `#1e1e1e`, 윈도우: `#2d2d2d`
+- QPalette + QSS 보완적 작동 (인라인 setStyleSheet와 충돌 없음)
+- `main.py`에서 QSS 로드 코드 추가
+
+### 2. Timeline QPixmap 렌더링 캐시 (`src/ui/timeline_widget.py`)
+- 정적 레이어(눈금자, 세그먼트, 오디오, 이미지, 웨이브폼)를 QPixmap에 캐싱
+- `paintEvent`에서 캐시된 pixmap 블릿 + 플레이헤드만 실시간 그리기
+- 재생 중 full repaint 제거 → CPU 부하 대폭 감소
+- `_invalidate_static_cache()`: 데이터/줌/스크롤/선택 변경 시 캐시 무효화
+
+### 3. faster-whisper 전환 (`src/services/whisper_service.py`, `src/workers/whisper_worker.py`)
+- `openai-whisper` → `faster-whisper` (CTranslate2 기반)
+- CUDA float16: ~4배 빠른 추론, VRAM 절반
+- CPU int8 폴백 지원
+- `vad_filter=True`: 무음 구간 자동 스킵
+- 모델명 호환 (tiny/base/small/medium/large 동일)
+
+### 4. Waveform 청크 처리 (`src/services/waveform_service.py`)
+- 전체 WAV 메모리 로드 → 1초 단위 청크 읽기
+- 1시간 영상: ~115MB → ~128KB 피크 메모리
+- `on_progress` 콜백 추가 (진행률 표시)
+- `waveform_worker.py`에서 진행률 퍼센트 상태바 표시
+
+### 5. 자막 패널 가상화 (`src/ui/subtitle_panel.py`)
+- `QTableWidget` → `QTableView` + `_SubtitleTableModel(QAbstractTableModel)`
+- 보이는 행만 렌더링 → 1000+ 세그먼트에서도 즉시 반응
+- 모델의 `data()` / `setData()` / `flags()`로 편집 로직 통합
+- 검색 하이라이트: `BackgroundRole`로 모델 레벨 처리
+- 기존 외부 API 호환 (`_table.selectionModel()`, `selectRow()` 동일)
+
+### 수정 파일
+- **신규 (1):** `src/ui/styles/dark.qss`
+- **수정 (6):** `main.py`, `src/ui/timeline_widget.py`, `src/services/whisper_service.py`, `src/workers/whisper_worker.py`, `src/services/waveform_service.py`, `src/ui/subtitle_panel.py`
+- **패키지 추가:** `faster-whisper 1.2.1` (+ ctranslate2, av, huggingface-hub 등)
+
+### 테스트 결과
+- 275/276 passed (1 실패는 기존 isVisible() 이슈 — 미관련)
 
 ---
 

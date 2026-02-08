@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.subtitle import SubtitleTrack
+from src.utils.i18n import tr
 from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
 from src.services.tts_service import TTSService
@@ -40,7 +41,7 @@ class TTSDialog(QDialog):
 
     def __init__(self, video_audio_path: Optional[Path] = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Generate Speech (TTS)")
+        self.setWindowTitle(tr("Generate Speech (TTS)"))
         self.setMinimumSize(600, 500)
         self.setModal(True)
 
@@ -56,7 +57,7 @@ class TTSDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Script input
-        script_group = QGroupBox("Script")
+        script_group = QGroupBox(tr("Script"))
         script_layout = QVBoxLayout()
         self._script_edit = QPlainTextEdit()
         self._script_edit.setPlaceholderText(
@@ -72,27 +73,27 @@ class TTSDialog(QDialog):
         layout.addWidget(script_group)
 
         # Settings group
-        settings_group = QGroupBox("Settings")
+        settings_group = QGroupBox(tr("Settings"))
         settings_layout = QFormLayout()
 
         # Engine selector
         self._engine_combo = QComboBox()
-        self._engine_combo.addItem("Edge-TTS (무료)", TTSEngine.EDGE_TTS)
-        self._engine_combo.addItem("ElevenLabs (프리미엄)", TTSEngine.ELEVENLABS)
+        self._engine_combo.addItem(tr("Edge-TTS (Free)"), TTSEngine.EDGE_TTS)
+        self._engine_combo.addItem(tr("ElevenLabs (Premium)"), TTSEngine.ELEVENLABS)
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
-        settings_layout.addRow("엔진:", self._engine_combo)
+        settings_layout.addRow(tr("Engine:"), self._engine_combo)
 
         # Language selector
         self._lang_combo = QComboBox()
         self._lang_combo.addItems(["Korean", "English"])
         self._lang_combo.setCurrentText("Korean")
         self._lang_combo.currentTextChanged.connect(self._on_language_changed)
-        settings_layout.addRow("Language:", self._lang_combo)
+        settings_layout.addRow(tr("Language:"), self._lang_combo)
 
         # Voice selector
         self._voice_combo = QComboBox()
         self._populate_voices("Korean")
-        settings_layout.addRow("Voice:", self._voice_combo)
+        settings_layout.addRow(tr("Voice:"), self._voice_combo)
 
         # Speed
         self._speed_spin = QDoubleSpinBox()
@@ -100,21 +101,21 @@ class TTSDialog(QDialog):
         self._speed_spin.setSingleStep(0.1)
         self._speed_spin.setValue(TTS_DEFAULT_SPEED)
         self._speed_spin.setSuffix("x")
-        settings_layout.addRow("Speed:", self._speed_spin)
+        settings_layout.addRow(tr("Speed:"), self._speed_spin)
 
         # Split strategy
         self._strategy_combo = QComboBox()
-        self._strategy_combo.addItem("Sentence (. ! ?)", SplitStrategy.SENTENCE)
-        self._strategy_combo.addItem("Newline", SplitStrategy.NEWLINE)
-        self._strategy_combo.addItem("Fixed Length (50 chars)", SplitStrategy.FIXED_LENGTH)
-        settings_layout.addRow("Split by:", self._strategy_combo)
+        self._strategy_combo.addItem(tr("Sentence (. ! ?)"), SplitStrategy.SENTENCE)
+        self._strategy_combo.addItem(tr("Newline"), SplitStrategy.NEWLINE)
+        self._strategy_combo.addItem(tr("Fixed Length (50 chars)"), SplitStrategy.FIXED_LENGTH)
+        settings_layout.addRow(tr("Split by:"), self._strategy_combo)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
 
         # Volume controls (if mixing with video audio)
         if self._video_audio_path:
-            volume_group = QGroupBox("Volume Mix")
+            volume_group = QGroupBox(tr("Volume Mix"))
             volume_layout = QFormLayout()
 
             self._bg_volume_spin = QDoubleSpinBox()
@@ -122,14 +123,14 @@ class TTSDialog(QDialog):
             self._bg_volume_spin.setSingleStep(0.1)
             self._bg_volume_spin.setValue(0.5)
             self._bg_volume_spin.setPrefix("Background: ")
-            volume_layout.addRow("BG Audio:", self._bg_volume_spin)
+            volume_layout.addRow(tr("BG Audio:"), self._bg_volume_spin)
 
             self._tts_volume_spin = QDoubleSpinBox()
             self._tts_volume_spin.setRange(0.0, 1.0)
             self._tts_volume_spin.setSingleStep(0.1)
             self._tts_volume_spin.setValue(1.0)
             self._tts_volume_spin.setPrefix("TTS: ")
-            volume_layout.addRow("TTS Audio:", self._tts_volume_spin)
+            volume_layout.addRow(tr("TTS Audio:"), self._tts_volume_spin)
 
             volume_group.setLayout(volume_layout)
             layout.addWidget(volume_group)
@@ -138,7 +139,7 @@ class TTSDialog(QDialog):
             self._tts_volume_spin = None
 
         # Status
-        self._status_label = QLabel("Ready")
+        self._status_label = QLabel(tr("Ready"))
         layout.addWidget(self._status_label)
 
         # Progress bar
@@ -149,12 +150,12 @@ class TTSDialog(QDialog):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        self._generate_btn = QPushButton("Generate")
+        self._generate_btn = QPushButton(tr("Generate"))
         self._generate_btn.setDefault(True)
         self._generate_btn.clicked.connect(self._on_generate)
         btn_layout.addWidget(self._generate_btn)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(tr("Cancel"))
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
         layout.addLayout(btn_layout)
@@ -203,8 +204,8 @@ class TTSDialog(QDialog):
         if not script:
             QMessageBox.warning(
                 self,
-                "Empty Script",
-                "Please enter a script to generate speech."
+                tr("Empty Script"),
+                tr("Please enter a script to generate speech.")
             )
             return
 
@@ -216,9 +217,9 @@ class TTSDialog(QDialog):
             if not api_key:
                 QMessageBox.warning(
                     self,
-                    "API 키 필요",
-                    "ElevenLabs를 사용하려면 API 키가 필요합니다.\n\n"
-                    "Edit > Preferences > API Keys에서 설정하세요.",
+                    tr("API Key Required"),
+                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
 
@@ -323,8 +324,8 @@ class TTSDialog(QDialog):
 
         QMessageBox.critical(
             self,
-            "TTS Generation Failed",
-            f"Failed to generate speech:\n\n{message}"
+            tr("TTS Generation Failed"),
+            f"{tr('Failed to generate speech')}:\n\n{message}"
         )
 
     def _cleanup_thread(self) -> None:

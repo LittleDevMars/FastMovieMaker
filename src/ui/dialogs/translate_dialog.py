@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from src.models.subtitle import SubtitleTrack
 from src.services.settings_manager import SettingsManager
 from src.services.translator import TranslationEngine, TranslatorService
+from src.utils.i18n import tr
 
 
 class TranslateDialog(QDialog):
@@ -40,7 +41,7 @@ class TranslateDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Translate Subtitles")
+        self.setWindowTitle(tr("Translate Subtitles"))
         self.setMinimumSize(500, 400)
 
         self._track = track
@@ -63,82 +64,82 @@ class TranslateDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Language selection
-        lang_group = QGroupBox("Languages")
+        lang_group = QGroupBox(tr("Languages"))
         lang_layout = QFormLayout(lang_group)
 
         self._source_combo = QComboBox()
         self._source_combo.addItems(self._available_langs)
         self._source_combo.setCurrentText(self._source_lang)
-        lang_layout.addRow("Source Language:", self._source_combo)
+        lang_layout.addRow(tr("Source Language:"), self._source_combo)
 
         self._target_combo = QComboBox()
         self._target_combo.addItems(self._available_langs)
         # Default target language is English if source is not English
         default_target = "English" if self._source_lang != "English" else "Korean"
         self._target_combo.setCurrentText(default_target)
-        lang_layout.addRow("Target Language:", self._target_combo)
+        lang_layout.addRow(tr("Target Language:"), self._target_combo)
 
         layout.addWidget(lang_group)
 
         # Translation engine
-        engine_group = QGroupBox("Translation Engine")
+        engine_group = QGroupBox(tr("Translation Engine"))
         engine_layout = QFormLayout(engine_group)
 
         self._engine_combo = QComboBox()
-        self._engine_combo.addItem("DeepL API", TranslationEngine.DEEPL)
-        self._engine_combo.addItem("GPT-4o-mini", TranslationEngine.GPT)
-        self._engine_combo.addItem("Google Translate", TranslationEngine.GOOGLE)
-        engine_layout.addRow("Engine:", self._engine_combo)
+        self._engine_combo.addItem(tr("DeepL API"), TranslationEngine.DEEPL)
+        self._engine_combo.addItem(tr("GPT-4o-mini"), TranslationEngine.GPT)
+        self._engine_combo.addItem(tr("Google Translate"), TranslationEngine.GOOGLE)
+        engine_layout.addRow(tr("Engine:"), self._engine_combo)
 
         # API key for selected engine
         self._api_key_layout = QHBoxLayout()
         self._api_key_edit = QLineEdit()
         self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key_edit.setPlaceholderText("Enter API key...")
+        self._api_key_edit.setPlaceholderText(tr("Enter API key..."))
         self._api_key_layout.addWidget(self._api_key_edit)
 
-        self._save_key_btn = QPushButton("Save Key")
+        self._save_key_btn = QPushButton(tr("Save Key"))
         self._save_key_btn.clicked.connect(self._save_api_key)
         self._api_key_layout.addWidget(self._save_key_btn)
 
-        engine_layout.addRow("API Key:", self._api_key_layout)
+        engine_layout.addRow(tr("API Key:"), self._api_key_layout)
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
 
         layout.addWidget(engine_group)
 
         # Track options
-        options_group = QGroupBox("Options")
+        options_group = QGroupBox(tr("Options"))
         options_layout = QVBoxLayout(options_group)
 
-        self._new_track_radio = QRadioButton("Create new track")
+        self._new_track_radio = QRadioButton(tr("Create new track"))
         self._new_track_radio.setChecked(True)
-        self._replace_radio = QRadioButton("Replace current track")
+        self._replace_radio = QRadioButton(tr("Replace current track"))
         options_layout.addWidget(self._new_track_radio)
         options_layout.addWidget(self._replace_radio)
 
         layout.addWidget(options_group)
 
         # Progress
-        progress_group = QGroupBox("Translation Progress")
+        progress_group = QGroupBox(tr("Translation Progress"))
         progress_layout = QVBoxLayout(progress_group)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setValue(0)
         progress_layout.addWidget(self._progress_bar)
 
-        self._status_label = QLabel("Ready to translate")
+        self._status_label = QLabel(tr("Ready to translate"))
         progress_layout.addWidget(self._status_label)
 
         layout.addWidget(progress_group)
 
         # Preview
-        preview_group = QGroupBox("Preview")
+        preview_group = QGroupBox(tr("Preview"))
         preview_layout = QVBoxLayout(preview_group)
 
         self._preview_text = QTextEdit()
         self._preview_text.setReadOnly(True)
         self._preview_text.setFont(QFont("Courier", 11))
-        self._preview_text.setPlaceholderText("Translation preview will appear here...")
+        self._preview_text.setPlaceholderText(tr("Translation preview will appear here..."))
         preview_layout.addWidget(self._preview_text)
 
         layout.addWidget(preview_group)
@@ -146,10 +147,10 @@ class TranslateDialog(QDialog):
         # Buttons
         self._button_box = QDialogButtonBox()
         self._translate_btn = self._button_box.addButton(
-            "Translate", QDialogButtonBox.ButtonRole.AcceptRole
+            tr("Translate"), QDialogButtonBox.ButtonRole.AcceptRole
         )
         self._cancel_btn = self._button_box.addButton(
-            "Cancel", QDialogButtonBox.ButtonRole.RejectRole
+            tr("Cancel"), QDialogButtonBox.ButtonRole.RejectRole
         )
         self._button_box.accepted.connect(self._on_translate)
         self._button_box.rejected.connect(self._on_cancel)
@@ -184,7 +185,7 @@ class TranslateDialog(QDialog):
             self._settings.set_openai_api_key(key)
 
         self._settings.sync()
-        QMessageBox.information(self, "API Key Saved", "API key has been saved.")
+        QMessageBox.information(self, tr("API Key Saved"), tr("API key has been saved."))
 
     def _on_engine_changed(self):
         """Update the API key field when engine changes."""
@@ -230,8 +231,8 @@ class TranslateDialog(QDialog):
 
         if source_lang == target_lang:
             QMessageBox.warning(
-                self, "Invalid Language Selection",
-                "Source and target languages must be different."
+                self, tr("Invalid Language Selection"),
+                tr("Source and target languages must be different.")
             )
             return
 
@@ -242,8 +243,8 @@ class TranslateDialog(QDialog):
             key = self._translator.get_api_key(engine)
             if not key:
                 QMessageBox.warning(
-                    self, "API Key Required",
-                    f"Please enter an API key for {self._engine_combo.currentText()}."
+                    self, tr("API Key Required"),
+                    f"{tr('Please enter an API key for')} {self._engine_combo.currentText()}."
                 )
                 self._api_key_edit.setFocus()
                 return
@@ -265,7 +266,7 @@ class TranslateDialog(QDialog):
         self._progress_bar.setValue(percent)
 
         if current >= total:
-            self._status_label.setText("Translation completed!")
+            self._status_label.setText(tr("Translation completed!"))
             self._translation_complete = True
 
             # Update UI
@@ -276,7 +277,7 @@ class TranslateDialog(QDialog):
 
             # If successful, enable OK button to accept the dialog
             if self._result_track:
-                self._translate_btn.setText("Apply Translation")
+                self._translate_btn.setText(tr("Apply Translation"))
                 self._translate_btn.clicked.disconnect()
                 self._translate_btn.clicked.connect(self.accept)
 
@@ -300,7 +301,7 @@ class TranslateDialog(QDialog):
     def _on_cancel_translation(self):
         """Cancel the ongoing translation."""
         self._translator.cancel_translation()
-        self._status_label.setText("Translation canceled.")
+        self._status_label.setText(tr("Translation canceled."))
         self._update_ui_state(False)
 
     def _on_cancel(self):
@@ -308,8 +309,8 @@ class TranslateDialog(QDialog):
         if self._translation_complete:
             result = QMessageBox.question(
                 self,
-                "Discard Translation",
-                "Translation is complete. Are you sure you want to discard it?",
+                tr("Discard Translation"),
+                tr("Translation is complete. Are you sure you want to discard it?"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
@@ -320,7 +321,7 @@ class TranslateDialog(QDialog):
 
     def _on_error(self, error_msg: str):
         """Handle translation error."""
-        QMessageBox.critical(self, "Translation Error", error_msg)
+        QMessageBox.critical(self, tr("Translation Error"), error_msg)
         self._status_label.setText(f"Error: {error_msg}")
         self._update_ui_state(False)
 

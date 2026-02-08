@@ -128,6 +128,14 @@ class SettingsManager:
         """Set the UI theme."""
         self._settings.setValue("ui/theme", theme)
 
+    def get_ui_language(self) -> str:
+        """Get the UI language code (default: ko)."""
+        return self._settings.value("ui/language", "ko", str)
+
+    def set_ui_language(self, lang: str) -> None:
+        """Set the UI language code ('en', 'ko', etc.)."""
+        self._settings.setValue("ui/language", lang)
+
     # ---------------------------------------------------- General Methods
 
     def reset_to_defaults(self) -> None:

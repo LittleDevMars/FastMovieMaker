@@ -33,6 +33,7 @@ from src.models.export_preset import (
     ExportPreset,
 )
 from src.models.subtitle import SubtitleTrack
+from src.utils.i18n import tr
 from src.workers.batch_export_worker import BatchExportWorker
 
 
@@ -49,7 +50,7 @@ class BatchExportDialog(QDialog):
         image_overlays: list | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Batch Export")
+        self.setWindowTitle(tr("Batch Export"))
         self.setMinimumSize(650, 550)
         self.setModal(True)
 
@@ -74,7 +75,7 @@ class BatchExportDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # --- Preset selection group ---
-        preset_group = QGroupBox("Export Presets")
+        preset_group = QGroupBox(tr("Export Presets"))
         preset_layout = QVBoxLayout(preset_group)
 
         add_row = QHBoxLayout()
@@ -83,7 +84,7 @@ class BatchExportDialog(QDialog):
             self._preset_combo.addItem(p.name, p)
         add_row.addWidget(self._preset_combo, 1)
 
-        self._add_btn = QPushButton("Add")
+        self._add_btn = QPushButton(tr("Add"))
         self._add_btn.clicked.connect(self._on_add_preset)
         add_row.addWidget(self._add_btn)
         preset_layout.addLayout(add_row)
@@ -91,7 +92,7 @@ class BatchExportDialog(QDialog):
         # Preset table
         self._preset_table = QTableWidget(0, 4)
         self._preset_table.setHorizontalHeaderLabels(
-            ["Preset", "Resolution", "Format", "Status"]
+            [tr("Preset"), tr("Resolution"), tr("Format"), tr("Status")]
         )
         header = self._preset_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -109,7 +110,7 @@ class BatchExportDialog(QDialog):
 
         remove_row = QHBoxLayout()
         remove_row.addStretch()
-        self._remove_btn = QPushButton("Remove Selected")
+        self._remove_btn = QPushButton(tr("Remove Selected"))
         self._remove_btn.clicked.connect(self._on_remove_preset)
         remove_row.addWidget(self._remove_btn)
         preset_layout.addLayout(remove_row)
@@ -117,22 +118,22 @@ class BatchExportDialog(QDialog):
         layout.addWidget(preset_group)
 
         # --- Audio options group ---
-        self._options_group = QGroupBox("Audio Options")
+        self._options_group = QGroupBox(tr("Audio Options"))
         options_layout = QVBoxLayout(self._options_group)
 
-        self._tts_checkbox = QCheckBox("Include TTS audio")
+        self._tts_checkbox = QCheckBox(tr("Include TTS audio"))
         self._tts_checkbox.setChecked(self._has_tts)
         self._tts_checkbox.setEnabled(self._has_tts)
         self._tts_checkbox.toggled.connect(self._on_tts_toggled)
         options_layout.addWidget(self._tts_checkbox)
 
         if not self._has_tts:
-            hint = QLabel("(No TTS audio in this track)")
+            hint = QLabel(tr("(No TTS audio in this track)"))
             hint.setStyleSheet("color: gray; font-size: 11px;")
             options_layout.addWidget(hint)
 
         bg_row = QHBoxLayout()
-        bg_row.addWidget(QLabel("Background volume:"))
+        bg_row.addWidget(QLabel(tr("Background volume:")))
         self._bg_slider = QSlider(Qt.Orientation.Horizontal)
         self._bg_slider.setRange(0, 100)
         self._bg_slider.setValue(50)
@@ -145,7 +146,7 @@ class BatchExportDialog(QDialog):
         options_layout.addLayout(bg_row)
 
         tts_row = QHBoxLayout()
-        tts_row.addWidget(QLabel("TTS volume:"))
+        tts_row.addWidget(QLabel(tr("TTS volume:")))
         self._tts_slider = QSlider(Qt.Orientation.Horizontal)
         self._tts_slider.setRange(0, 200)
         self._tts_slider.setValue(100)
@@ -157,7 +158,7 @@ class BatchExportDialog(QDialog):
         self._tts_slider.valueChanged.connect(lambda v: self._tts_label.setText(f"{v}%"))
         options_layout.addLayout(tts_row)
 
-        self._seg_vol_checkbox = QCheckBox("Apply per-segment volumes")
+        self._seg_vol_checkbox = QCheckBox(tr("Apply per-segment volumes"))
         self._seg_vol_checkbox.setChecked(True)
         self._seg_vol_checkbox.setEnabled(self._has_tts)
         options_layout.addWidget(self._seg_vol_checkbox)
@@ -165,21 +166,21 @@ class BatchExportDialog(QDialog):
         layout.addWidget(self._options_group)
 
         # --- Progress section (hidden initially) ---
-        self._progress_group = QGroupBox("Batch Progress")
+        self._progress_group = QGroupBox(tr("Batch Progress"))
         progress_layout = QVBoxLayout(self._progress_group)
 
-        self._current_job_label = QLabel("Preparing...")
+        self._current_job_label = QLabel(tr("Preparing..."))
         progress_layout.addWidget(self._current_job_label)
 
         job_row = QHBoxLayout()
-        job_row.addWidget(QLabel("Current:"))
+        job_row.addWidget(QLabel(tr("Current:")))
         self._job_progress = QProgressBar()
         self._job_progress.setRange(0, 100)
         job_row.addWidget(self._job_progress)
         progress_layout.addLayout(job_row)
 
         overall_row = QHBoxLayout()
-        overall_row.addWidget(QLabel("Overall:"))
+        overall_row.addWidget(QLabel(tr("Overall:")))
         self._overall_progress = QProgressBar()
         self._overall_progress.setRange(0, 100)
         overall_row.addWidget(self._overall_progress)
@@ -190,11 +191,11 @@ class BatchExportDialog(QDialog):
 
         # --- Buttons ---
         btn_layout = QHBoxLayout()
-        self._export_btn = QPushButton("Export All...")
+        self._export_btn = QPushButton(tr("Export All..."))
         self._export_btn.clicked.connect(self._ask_output_dir_and_start)
         btn_layout.addWidget(self._export_btn)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(tr("Cancel"))
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
 
@@ -222,7 +223,7 @@ class BatchExportDialog(QDialog):
         self._preset_table.setItem(
             row, 2, QTableWidgetItem(f".{preset.container} / {preset.codec}")
         )
-        self._preset_table.setItem(row, 3, QTableWidgetItem("Pending"))
+        self._preset_table.setItem(row, 3, QTableWidgetItem(tr("Pending")))
 
     def _on_remove_preset(self) -> None:
         rows = self._preset_table.selectionModel().selectedRows()
@@ -238,11 +239,11 @@ class BatchExportDialog(QDialog):
 
     def _ask_output_dir_and_start(self) -> None:
         if self._preset_table.rowCount() == 0:
-            QMessageBox.warning(self, "No Presets", "Add at least one export preset.")
+            QMessageBox.warning(self, tr("No Presets"), tr("Add at least one export preset."))
             return
 
         dir_path = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory", str(self._video_path.parent)
+            self, tr("Select Output Directory"), str(self._video_path.parent)
         )
         if not dir_path:
             return
@@ -264,8 +265,8 @@ class BatchExportDialog(QDialog):
             names = "\n".join(Path(j.output_path).name for j in existing)
             reply = QMessageBox.question(
                 self,
-                "Overwrite?",
-                f"These files already exist:\n{names}\n\nOverwrite?",
+                tr("Overwrite?"),
+                f"{tr('These files already exist')}:\n{names}\n\n{tr('Overwrite?')}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -285,7 +286,7 @@ class BatchExportDialog(QDialog):
 
         # Prepare TTS audio ONCE for all jobs
         if self._tts_checkbox.isChecked() and self._has_tts:
-            self._current_job_label.setText("Preparing TTS audio...")
+            self._current_job_label.setText(tr("Preparing TTS audio..."))
             from PySide6.QtWidgets import QApplication
 
             QApplication.processEvents()
@@ -295,13 +296,13 @@ class BatchExportDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(
                     self,
-                    "Audio Preparation Error",
-                    f"Failed to prepare TTS audio:\n{e}\n\n"
-                    "Exporting without TTS audio.",
+                    tr("Audio Preparation Error"),
+                    f"{tr('Failed to prepare TTS audio')}:\n{e}\n\n"
+                    f"{tr('Exporting without TTS audio.')}",
                 )
                 audio_path = None
 
-        self._current_job_label.setText("Starting batch export...")
+        self._current_job_label.setText(tr("Starting batch export..."))
 
         self._thread = QThread()
         self._worker = BatchExportWorker(
@@ -357,7 +358,7 @@ class BatchExportDialog(QDialog):
             f"Exporting {index + 1}/{len(self._jobs)}: {preset_name}"
         )
         self._job_progress.setValue(0)
-        self._preset_table.setItem(index, 3, QTableWidgetItem("Exporting..."))
+        self._preset_table.setItem(index, 3, QTableWidgetItem(tr("Exporting...")))
         self._preset_table.scrollToItem(self._preset_table.item(index, 0))
 
     def _on_job_progress(self, index: int, total_sec: float, current_sec: float) -> None:
@@ -371,10 +372,10 @@ class BatchExportDialog(QDialog):
             self._overall_progress.setValue(min(100, overall_pct))
 
     def _on_job_finished(self, index: int, output_path: str) -> None:
-        self._preset_table.setItem(index, 3, QTableWidgetItem("Completed"))
+        self._preset_table.setItem(index, 3, QTableWidgetItem(tr("Completed")))
 
     def _on_job_error(self, index: int, message: str) -> None:
-        item = QTableWidgetItem("Failed")
+        item = QTableWidgetItem(tr("Failed"))
         item.setToolTip(message)
         self._preset_table.setItem(index, 3, item)
 
@@ -390,16 +391,16 @@ class BatchExportDialog(QDialog):
             summary_parts.append(f"{skipped} skipped")
         summary = ", ".join(summary_parts)
 
-        self._current_job_label.setText(f"Batch export complete: {summary}")
-        self._cancel_btn.setText("Close")
+        self._current_job_label.setText(f"{tr('Batch export complete')}: {summary}")
+        self._cancel_btn.setText(tr("Close"))
         self._cleanup_temp_audio()
 
         if failed == 0:
             QMessageBox.information(
                 self,
-                "Batch Export Complete",
-                f"All {succeeded} exports completed successfully.\n\n"
-                f"Output directory:\n{self._output_dir}",
+                tr("Batch Export Complete"),
+                f"{tr('All exports completed successfully')} ({succeeded}).\n\n"
+                f"{tr('Output directory')}:\n{self._output_dir}",
             )
         else:
             error_details = []
@@ -410,8 +411,8 @@ class BatchExportDialog(QDialog):
                     )
             QMessageBox.warning(
                 self,
-                "Batch Export Complete",
-                f"{summary}\n\nFailed exports:\n" + "\n".join(error_details),
+                tr("Batch Export Complete"),
+                f"{summary}\n\n{tr('Failed exports')}:\n" + "\n".join(error_details),
             )
 
         self.accept()

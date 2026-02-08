@@ -42,7 +42,13 @@ class WaveformWorker(QObject):
                 return
 
             self.status_update.emit("Computing waveform peaks...")
-            waveform_data = compute_peaks_from_wav(wav_path)
+
+            def _on_progress(processed_ms: int, total_ms: int) -> None:
+                if total_ms > 0:
+                    pct = int(processed_ms / total_ms * 100)
+                    self.status_update.emit(f"Computing waveform... {pct}%")
+
+            waveform_data = compute_peaks_from_wav(wav_path, on_progress=_on_progress)
 
             if not self._cancelled:
                 self.status_update.emit("Waveform ready")

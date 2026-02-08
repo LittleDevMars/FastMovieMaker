@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.utils.i18n import tr
 from src.utils.time_utils import ms_to_timecode_frames, parse_flexible_timecode
 
 
@@ -25,7 +26,7 @@ class JumpToFrameDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Jump to Frame")
+        self.setWindowTitle(tr("Jump to Frame"))
         self.setFixedWidth(400)
 
         self._fps = fps
@@ -36,7 +37,7 @@ class JumpToFrameDialog(QDialog):
 
         # Current position info
         current_tc = ms_to_timecode_frames(current_ms, fps)
-        info = QLabel(f"현재 위치: {current_tc}  (FPS: {fps})")
+        info = QLabel(f"{tr('Current position')}: {current_tc}  (FPS: {fps})")
         info.setStyleSheet("color: gray;")
         layout.addWidget(info)
 
@@ -49,11 +50,11 @@ class JumpToFrameDialog(QDialog):
 
         # Format help
         help_text = QLabel(
-            "지원 형식:\n"
-            "  HH:MM:SS:FF  (프레임)  예: 00:01:23:15\n"
-            "  HH:MM:SS.mmm (밀리초)  예: 00:01:23.456\n"
-            "  MM:SS.mmm              예: 01:23.456\n"
-            f"  F:숫자 또는 frame:숫자   예: F:300"
+            f"{tr('Supported formats')}:\n"
+            "  HH:MM:SS:FF  (frames)  e.g. 00:01:23:15\n"
+            "  HH:MM:SS.mmm (ms)      e.g. 00:01:23.456\n"
+            "  MM:SS.mmm              e.g. 01:23.456\n"
+            f"  F:number / frame:number  e.g. F:300"
         )
         help_text.setStyleSheet("color: gray; font-size: 11px;")
         help_text.setWordWrap(True)
@@ -78,7 +79,7 @@ class JumpToFrameDialog(QDialog):
     def _on_accept(self) -> None:
         text = self._input.text().strip()
         if not text:
-            self._show_error("값을 입력하세요.")
+            self._show_error(tr("Please enter a value."))
             return
 
         try:
@@ -91,7 +92,7 @@ class JumpToFrameDialog(QDialog):
             ms = 0
         if ms > self._duration_ms:
             self._show_error(
-                f"범위를 초과했습니다. 최대: {ms_to_timecode_frames(self._duration_ms, self._fps)}"
+                f"{tr('Out of range. Max')}: {ms_to_timecode_frames(self._duration_ms, self._fps)}"
             )
             return
 

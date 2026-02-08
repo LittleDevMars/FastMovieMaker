@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 # Set platform-appropriate media backend
 if sys.platform == "darwin":
@@ -14,6 +15,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 
 from src.utils.config import APP_NAME, ORG_NAME
+from src.utils.i18n import init_language
+from src.services.settings_manager import SettingsManager
 from src.ui.main_window import MainWindow
 
 
@@ -49,6 +52,11 @@ def _apply_dark_theme(app: QApplication) -> None:
 
     app.setPalette(palette)
 
+    # Load QSS stylesheet
+    qss_path = Path(__file__).parent / "src" / "ui" / "styles" / "dark.qss"
+    if qss_path.exists():
+        app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
+
 
 def main() -> None:
     QApplication.setOrganizationName(ORG_NAME)
@@ -56,6 +64,10 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     _apply_dark_theme(app)
+
+    # Initialize UI language from settings
+    _settings = SettingsManager()
+    init_language(_settings.get_ui_language())
 
     window = MainWindow()
     window.show()

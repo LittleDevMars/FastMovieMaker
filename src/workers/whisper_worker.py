@@ -12,7 +12,7 @@ from src.services.whisper_service import load_model, release_model, transcribe
 
 
 class WhisperWorker(QObject):
-    """Runs Whisper transcription in a background thread.
+    """Runs faster-whisper transcription in a background thread.
 
     Signals:
         status_update(str): Status message for UI display.
@@ -49,14 +49,14 @@ class WhisperWorker(QObject):
                 return
 
             # Step 2: Load model
-            self.status_update.emit(f"Loading Whisper '{self._model_name}' model...")
+            self.status_update.emit(f"Loading faster-whisper '{self._model_name}' model...")
             model = load_model(self._model_name)
 
             if self._cancelled:
                 return
 
             # Step 3: Transcribe
-            self.status_update.emit("Transcribing audio...")
+            self.status_update.emit("Transcribing audio (faster-whisper)...")
             track = transcribe(
                 model,
                 wav_path,

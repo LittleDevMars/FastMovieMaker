@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from src.models.subtitle import SubtitleTrack
 from src.utils.config import WHISPER_DEFAULT_LANGUAGE, WHISPER_DEFAULT_MODEL, WHISPER_MODELS
+from src.utils.i18n import tr
 from src.workers.whisper_worker import WhisperWorker
 
 
@@ -25,7 +26,7 @@ class WhisperDialog(QDialog):
 
     def __init__(self, video_path: Path, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Generate Subtitles (Whisper)")
+        self.setWindowTitle(tr("Generate Subtitles (Whisper)"))
         self.setMinimumWidth(420)
         self.setModal(True)
 
@@ -41,7 +42,7 @@ class WhisperDialog(QDialog):
 
         # Model selector
         model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Model:"))
+        model_layout.addWidget(QLabel(tr("Model:")))
         self._model_combo = QComboBox()
         self._model_combo.addItems(WHISPER_MODELS)
         self._model_combo.setCurrentText(WHISPER_DEFAULT_MODEL)
@@ -50,7 +51,7 @@ class WhisperDialog(QDialog):
 
         # Language selector
         lang_layout = QHBoxLayout()
-        lang_layout.addWidget(QLabel("Language:"))
+        lang_layout.addWidget(QLabel(tr("Language:")))
         self._lang_combo = QComboBox()
         self._lang_combo.setEditable(True)
         self._lang_combo.addItems(["ko", "en", "ja", "zh", "auto"])
@@ -59,7 +60,7 @@ class WhisperDialog(QDialog):
         layout.addLayout(lang_layout)
 
         # Status
-        self._status_label = QLabel("Ready")
+        self._status_label = QLabel(tr("Ready"))
         layout.addWidget(self._status_label)
 
         # Progress bar
@@ -70,12 +71,12 @@ class WhisperDialog(QDialog):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        self._start_btn = QPushButton("Start")
+        self._start_btn = QPushButton(tr("Start"))
         self._start_btn.setDefault(True)
         self._start_btn.clicked.connect(self._on_start)
         btn_layout.addWidget(self._start_btn)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(tr("Cancel"))
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
         layout.addLayout(btn_layout)

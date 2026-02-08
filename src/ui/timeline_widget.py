@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
+from src.utils.i18n import tr
+
 from PySide6.QtCore import Qt, Signal, QPoint, QRectF
 from PySide6.QtGui import (
     QBrush,
@@ -19,6 +21,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPen,
+    QPixmap,
     QPolygon,
     QWheelEvent,
 )
@@ -28,6 +31,7 @@ from PySide6.QtWidgets import QMenu, QWidget
 
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.subtitle import SubtitleTrack
+from src.models.video_clip import VideoClipTrack
 from src.utils.config import TIMELINE_HEIGHT
 from src.utils.time_utils import ms_to_display
 
@@ -47,12 +51,27 @@ class _DragMode(Enum):
     IMAGE_MOVE = auto()
     IMAGE_RESIZE_LEFT = auto()
     IMAGE_RESIZE_RIGHT = auto()
+    CLIP_TRIM_LEFT = auto()
+    CLIP_TRIM_RIGHT = auto()
 
 
 # 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
 _EDGE_PX = 6
 # 플레이헤드 드래그로 인식하는 픽셀 거리 (클릭 쉽게 넓게)
 _PLAYHEAD_HIT_PX = 20
+
+# ---- Track Y-positions ----
+_RULER_H = 14
+_CLIP_Y = 16
+_CLIP_H = 32
+_SEG_Y = 52
+_SEG_H = 40
+_AUDIO_Y = 96
+_AUDIO_H = 34
+_WAVEFORM_Y = 134
+_WAVEFORM_H = 45
+_IMG_BASE_Y_NO_VIDEO = 134
+_IMG_BASE_Y_WITH_VIDEO = 184
 
 
 class TimelineWidget(QWidget):
@@ -68,6 +87,10 @@ class TimelineWidget(QWidget):
     insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
     image_file_dropped = Signal(str, int)  # (file_path, position_ms)
     video_file_dropped = Signal(str)  # (file_path)
+    clip_selected = Signal(int)            # 클립 인덱스
+    clip_split_requested = Signal(int)     # 분할 위치(timeline_ms)
+    clip_deleted = Signal(int)             # 클립 인덱스
+    clip_trimmed = Signal(int, int, int)   # (index, new_source_in, new_source_out)
 
     # 색상 상수
     _BG_COLOR = QColor(30, 30, 30)
@@ -91,6 +114,11 @@ class TimelineWidget(QWidget):
     _IMG_OVERLAY_BORDER = QColor(200, 130, 240)
     _IMG_OVERLAY_SELECTED_COLOR = QColor(210, 150, 255, 200)
     _IMG_OVERLAY_SELECTED_BORDER = QColor(230, 180, 255)
+    _CLIP_COLOR = QColor(0, 170, 170, 180)
+    _CLIP_BORDER = QColor(0, 200, 200)
+    _CLIP_SELECTED_COLOR = QColor(60, 210, 210, 200)
+    _CLIP_SELECTED_BORDER = QColor(100, 240, 240)
+    _CLIP_SPLIT_LINE = QColor(255, 255, 255, 120)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -132,6 +160,13 @@ class TimelineWidget(QWidget):
         self._image_overlay_track: ImageOverlayTrack | None = None
         self._selected_overlay_index: int = -1
 
+        # 비디오 클립 트랙
+        self._clip_track: VideoClipTrack | None = None
+        self._selected_clip_index: int = -1
+        self._drag_clip_index: int = -1
+        self._drag_orig_source_in: int = 0
+        self._drag_orig_source_out: int = 0
+
         # 프레임 스냅 FPS (0 = 비활성화)
         self._snap_fps: int = 0
 
@@ -139,6 +174,10 @@ class TimelineWidget(QWidget):
         self._waveform_data = None  # WaveformData or None
         self._waveform_image_cache: QImage | None = None
         self._waveform_cache_key: tuple | None = None
+
+        # 정적 레이어 캐시 (눈금자+세그먼트+오디오+이미지+웨이브폼)
+        self._static_cache: QPixmap | None = None
+        self._static_cache_key: tuple | None = None
 
         # 드롭 표시
         self._drop_indicator_x: float = -1
@@ -156,9 +195,15 @@ class TimelineWidget(QWidget):
             return snap_to_frame(ms, self._snap_fps)
         return ms
 
+    def _invalidate_static_cache(self) -> None:
+        """정적 레이어 캐시 무효화 — 데이터/줌/스크롤 변경 시 호출."""
+        self._static_cache = None
+        self._static_cache_key = None
+
     def set_track(self, track: SubtitleTrack | None) -> None:
         self._track = track
         self._selected_index = -1
+        self._invalidate_static_cache()
         self.update()
 
     def set_duration(self, duration_ms: int, has_video: bool | None = None) -> None:
@@ -166,6 +211,7 @@ class TimelineWidget(QWidget):
         if has_video is not None:
             self._has_video = has_video
         self._visible_start_ms = 0
+        self._invalidate_static_cache()
         self.update()
 
     def set_playhead(self, position_ms: int) -> None:
@@ -184,19 +230,34 @@ class TimelineWidget(QWidget):
 
     def refresh(self) -> None:
         """외부에서 모델 변경 후 다시 그리기."""
+        self._invalidate_static_cache()
         self.update()
 
     def select_segment(self, index: int) -> None:
         self._selected_index = index
+        self._invalidate_static_cache()
         self.update()
 
     def set_image_overlay_track(self, track: ImageOverlayTrack | None) -> None:
         self._image_overlay_track = track
         self._selected_overlay_index = -1
+        self._invalidate_static_cache()
         self.update()
 
     def select_image_overlay(self, index: int) -> None:
         self._selected_overlay_index = index
+        self._invalidate_static_cache()
+        self.update()
+
+    def set_clip_track(self, track: VideoClipTrack | None) -> None:
+        self._clip_track = track
+        self._selected_clip_index = -1
+        self._invalidate_static_cache()
+        self.update()
+
+    def select_clip(self, index: int) -> None:
+        self._selected_clip_index = index
+        self._invalidate_static_cache()
         self.update()
 
     # -------------------------------------------------------- 줌 API
@@ -221,6 +282,7 @@ class TimelineWidget(QWidget):
             return
         self._visible_start_ms = 0
         self._px_per_ms = self.width() / float(self._duration_ms)
+        self._invalidate_static_cache()
         self.zoom_changed.emit(self.get_zoom_percent())
         self.update()
 
@@ -233,6 +295,7 @@ class TimelineWidget(QWidget):
         self._visible_start_ms = max(0, center_ms - new_range / 2)
         self._px_per_ms = self.width() / new_range
         self._clamp_visible_start(new_range)
+        self._invalidate_static_cache()
         self.zoom_changed.emit(self.get_zoom_percent())
         self.update()
 
@@ -251,6 +314,7 @@ class TimelineWidget(QWidget):
         self._waveform_data = waveform_data
         self._waveform_image_cache = None
         self._waveform_cache_key = None
+        self._invalidate_static_cache()
         self.update()
 
     def clear_waveform(self) -> None:
@@ -258,19 +322,19 @@ class TimelineWidget(QWidget):
         self._waveform_data = None
         self._waveform_image_cache = None
         self._waveform_cache_key = None
+        self._invalidate_static_cache()
         self.update()
 
     # ----------------------------------------------------------- 그리기
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
         h = self.height()
 
-        painter.fillRect(0, 0, w, h, self._BG_COLOR)
-
         if self._duration_ms <= 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(0, 0, w, h, self._BG_COLOR)
             painter.setPen(self._RULER_TEXT_COLOR)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No video loaded")
             painter.end()
@@ -281,12 +345,41 @@ class TimelineWidget(QWidget):
             visible_ms = self._duration_ms
         self._px_per_ms = w / visible_ms
 
-        self._draw_ruler(painter, w, h, visible_ms)
-        self._draw_video_audio(painter, w, h)  # Video audio track (if video loaded)
-        if self._track:
-            self._draw_audio_track(painter, h)  # TTS audio track
-            self._draw_segments(painter, h)
-        self._draw_image_overlays(painter, h)
+        # 정적 레이어 캐시 키: 크기·줌·스크롤·선택 상태·트랙 길이
+        seg_count = len(self._track) if self._track else 0
+        ovl_count = len(self._image_overlay_track) if self._image_overlay_track else 0
+        clip_count = len(self._clip_track) if self._clip_track else 0
+        cache_key = (
+            w, h, self._visible_start_ms, visible_ms,
+            self._selected_index, self._selected_overlay_index,
+            self._selected_clip_index, clip_count,
+            seg_count, ovl_count, self._has_video,
+            id(self._waveform_data),
+        )
+
+        if self._static_cache_key != cache_key or self._static_cache is None:
+            # 정적 레이어를 QPixmap에 렌더링
+            pixmap = QPixmap(w, h)
+            pp = QPainter(pixmap)
+            pp.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pp.fillRect(0, 0, w, h, self._BG_COLOR)
+
+            self._draw_ruler(pp, w, h, visible_ms)
+            self._draw_clips(pp, w)
+            self._draw_video_audio(pp, w, h)
+            if self._track:
+                self._draw_audio_track(pp, h)
+                self._draw_segments(pp, h)
+            self._draw_image_overlays(pp, h)
+            pp.end()
+
+            self._static_cache = pixmap
+            self._static_cache_key = cache_key
+
+        # 캐시된 정적 레이어 블릿 + 동적 요소(플레이헤드, 드롭 표시)
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._static_cache)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._draw_playhead(painter, h)
         self._draw_drop_indicator(painter, h)
         painter.end()
@@ -314,6 +407,9 @@ class TimelineWidget(QWidget):
         """비디오 오디오 웨이브폼 또는 로딩 중일 때 대체 바 그리기."""
         if self._duration_ms <= 0 or not self._has_video:
             return
+        # Hide waveform when multi-clip (T2에서 클립별 웨이브폼 구현 예정)
+        if self._clip_track and len(self._clip_track.clips) > 1:
+            return
 
         if self._waveform_data is not None and self._waveform_data.duration_ms > 0:
             self._draw_waveform(painter, w)
@@ -326,8 +422,8 @@ class TimelineWidget(QWidget):
         if wf is None or wf.duration_ms <= 0:
             return
 
-        waveform_y = 120
-        waveform_h = 45
+        waveform_y = _WAVEFORM_Y
+        waveform_h = _WAVEFORM_H
 
         visible_ms = self._visible_range_ms()
         cache_key = (self._visible_start_ms, visible_ms, w)
@@ -396,8 +492,8 @@ class TimelineWidget(QWidget):
 
     def _draw_video_audio_fallback(self, painter: QPainter, w: int) -> None:
         """웨이브폼 데이터 없을 때 단순 바 + 'Loading waveform...' 표시."""
-        video_audio_y = 120
-        video_audio_h = 45
+        video_audio_y = _WAVEFORM_Y
+        video_audio_h = _WAVEFORM_H
 
         x1 = self._ms_to_x(0)
         x2 = self._ms_to_x(self._duration_ms)
@@ -421,8 +517,8 @@ class TimelineWidget(QWidget):
         if not self._track:
             return
 
-        audio_y = 75
-        audio_h = 40
+        audio_y = _AUDIO_Y
+        audio_h = _AUDIO_H
 
         # Draw individual audio segments
         for i, seg in enumerate(self._track):
@@ -459,10 +555,57 @@ class TimelineWidget(QWidget):
                     f"🔊 {i+1}",
                 )
 
+    def _draw_clips(self, painter: QPainter, w: int) -> None:
+        """비디오 클립 트랙 그리기."""
+        if not self._clip_track or len(self._clip_track) == 0:
+            return
+
+        offset = 0
+        for i, clip in enumerate(self._clip_track):
+            x1 = self._ms_to_x(offset)
+            x2 = self._ms_to_x(offset + clip.duration_ms)
+            offset += clip.duration_ms
+
+            if x2 < 0 or x1 > w:
+                continue
+
+            rect = QRectF(x1, _CLIP_Y, max(x2 - x1, 2), _CLIP_H)
+
+            if i == self._selected_clip_index:
+                painter.setPen(QPen(self._CLIP_SELECTED_BORDER, 2))
+                painter.setBrush(QBrush(self._CLIP_SELECTED_COLOR))
+            else:
+                painter.setPen(QPen(self._CLIP_BORDER, 1))
+                painter.setBrush(QBrush(self._CLIP_COLOR))
+            painter.drawRoundedRect(rect, 3, 3)
+
+            # 클립 경계선 (첫 번째 이후)
+            if i > 0:
+                painter.setPen(QPen(self._CLIP_SPLIT_LINE, 1, Qt.PenStyle.DashLine))
+                painter.drawLine(int(x1), _CLIP_Y, int(x1), _CLIP_Y + _CLIP_H)
+
+            # 라벨: 소스 시간 범위
+            if rect.width() > 60:
+                painter.setPen(QColor("white"))
+                painter.setFont(QFont("Arial", 8))
+                label = f"{ms_to_display(clip.source_in_ms)}-{ms_to_display(clip.source_out_ms)}"
+                text_rect = rect.adjusted(4, 2, -4, -2)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    painter.fontMetrics().elidedText(
+                        label, Qt.TextElideMode.ElideRight, int(text_rect.width())
+                    ),
+                )
+            elif rect.width() > 25:
+                painter.setPen(QColor("white"))
+                painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(i + 1))
+
     def _draw_segments(self, painter: QPainter, h: int) -> None:
         """자막 세그먼트를 파란 박스로 그리기 (선택 시 하이라이트, 텍스트 일부 표시)."""
-        seg_y = 20
-        seg_h = 50
+        seg_y = _SEG_Y
+        seg_h = _SEG_H
 
         for i, seg in enumerate(self._track):
             x1 = self._ms_to_x(seg.start_ms)
@@ -498,7 +641,7 @@ class TimelineWidget(QWidget):
 
     def _img_overlay_base_y(self) -> int:
         """이미지 오버레이 트랙의 기준 y 좌표."""
-        return 120 if not self._has_video else 170
+        return _IMG_BASE_Y_NO_VIDEO if not self._has_video else _IMG_BASE_Y_WITH_VIDEO
 
     def _compute_overlay_rows(self) -> list[int]:
         """각 오버레이의 row 인덱스를 계산 (시간 겹침 → 다음 row)."""
@@ -631,6 +774,24 @@ class TimelineWidget(QWidget):
                 self._drag_mode = _DragMode.PLAYHEAD_DRAG
                 self._seek_to_x(x)
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            # 비디오 클립 영역
+            elif hit == "clip_body":
+                self._selected_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self.clip_selected.emit(seg_idx)
+            elif hit == "clip_left_edge":
+                self._selected_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self._start_clip_drag(_DragMode.CLIP_TRIM_LEFT, seg_idx, x)
+                self.clip_selected.emit(seg_idx)
+            elif hit == "clip_right_edge":
+                self._selected_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self._start_clip_drag(_DragMode.CLIP_TRIM_RIGHT, seg_idx, x)
+                self.clip_selected.emit(seg_idx)
             # 이미지 오버레이 영역
             elif hit == "img_left_edge":
                 self._selected_overlay_index = seg_idx
@@ -698,15 +859,20 @@ class TimelineWidget(QWidget):
             self._handle_image_drag(x)
             return
 
+        if self._drag_mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
+            self._handle_clip_drag(x)
+            return
+
         # 호버 시 커서 변경 (플레이헤드·가장자리·본문)
         if self._drag_mode == _DragMode.NONE:
             seg_idx, hit = self._hit_test(x, y)
             if hit == "playhead":
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
                 return
-            elif hit in ("left_edge", "right_edge", "img_left_edge", "img_right_edge"):
+            elif hit in ("left_edge", "right_edge", "img_left_edge", "img_right_edge",
+                         "clip_left_edge", "clip_right_edge"):
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-            elif hit in ("body", "audio_body", "img_body"):
+            elif hit in ("body", "audio_body", "img_body", "clip_body"):
                 self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
             else:
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -722,17 +888,43 @@ class TimelineWidget(QWidget):
                 ov = self._image_overlay_track[self._drag_seg_index]
                 if ov.start_ms != self._drag_orig_start_ms or ov.end_ms != self._drag_orig_end_ms:
                     self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
+        elif self._drag_mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
+            if self._clip_track and 0 <= self._drag_clip_index < len(self._clip_track.clips):
+                clip = self._clip_track.clips[self._drag_clip_index]
+                new_in = clip.source_in_ms
+                new_out = clip.source_out_ms
+                if new_in != self._drag_orig_source_in or new_out != self._drag_orig_source_out:
+                    # Revert to original so undo command's redo() applies the change
+                    clip.source_in_ms = self._drag_orig_source_in
+                    clip.source_out_ms = self._drag_orig_source_out
+                    self.clip_trimmed.emit(self._drag_clip_index, new_in, new_out)
+            self._drag_clip_index = -1
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index = -1
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def contextMenuEvent(self, event) -> None:
-        """우클릭: 이미지 오버레이 삭제 또는 현재 위치에 삽입."""
+        """우클릭: 클립 분할/삭제, 이미지 오버레이 삭제 또는 현재 위치에 삽입."""
         if self._duration_ms <= 0:
             return
         x = event.pos().x()
         y = event.pos().y()
         menu = QMenu(self)
+
+        # 비디오 클립 트랙 영역 우클릭
+        if self._clip_track and _CLIP_Y <= y <= _CLIP_Y + _CLIP_H:
+            seg_idx, hit = self._hit_test(x, y)
+            if hit.startswith("clip_"):
+                split_act = menu.addAction(tr("Split at Playhead (Ctrl+B)"))
+                delete_act = None
+                if len(self._clip_track.clips) > 1:
+                    delete_act = menu.addAction(tr("Delete Clip"))
+                action = menu.exec(event.globalPos())
+                if action == split_act:
+                    self.clip_split_requested.emit(self._playhead_ms)
+                elif delete_act and action == delete_act:
+                    self.clip_deleted.emit(seg_idx)
+                return
 
         img_base_y = self._img_overlay_base_y()
         rows = self._compute_overlay_rows()
@@ -741,16 +933,16 @@ class TimelineWidget(QWidget):
             seg_idx, hit = self._hit_test(x, y)
             if hit.startswith("img_"):
                 # Size presets submenu
-                size_menu = menu.addMenu("크기 조정")
-                fit_act = size_menu.addAction("화면에 맞춤 (비율 유지)")
-                fit_width_act = size_menu.addAction("화면 넓이에 맞춤")
-                fit_height_act = size_menu.addAction("화면 높이에 맞춤")
-                full_act = size_menu.addAction("전체 화면 채움 (잘림 가능)")
+                size_menu = menu.addMenu(tr("Resize"))
+                fit_act = size_menu.addAction(tr("Fit to Screen (Keep Ratio)"))
+                fit_width_act = size_menu.addAction(tr("Fit Width"))
+                fit_height_act = size_menu.addAction(tr("Fit Height"))
+                full_act = size_menu.addAction(tr("Fill Screen (May Crop)"))
                 size_menu.addSeparator()
-                ratio_16_9_act = size_menu.addAction("16:9 (가로)")
-                ratio_9_16_act = size_menu.addAction("9:16 (세로)")
+                ratio_16_9_act = size_menu.addAction(tr("16:9 (Landscape)"))
+                ratio_9_16_act = size_menu.addAction(tr("9:16 (Portrait)"))
                 menu.addSeparator()
-                delete_action = menu.addAction("이미지 오버레이 삭제")
+                delete_action = menu.addAction(tr("Delete Image Overlay"))
                 action = menu.exec(event.globalPos())
                 if action == delete_action:
                     self._image_overlay_track.remove_overlay(seg_idx)
@@ -770,7 +962,7 @@ class TimelineWidget(QWidget):
                     self.image_overlay_resize.emit(seg_idx, "9:16")
                 return
 
-        insert_action = menu.addAction("Insert Image Overlay")
+        insert_action = menu.addAction(tr("Insert Image Overlay"))
         action = menu.exec(event.globalPos())
         if action == insert_action:
             ms = int(max(0, min(self._duration_ms, self._x_to_ms(x))))
@@ -796,6 +988,7 @@ class TimelineWidget(QWidget):
             self._visible_start_ms = max(0, mouse_ms - new_range * mouse_frac)
             self._clamp_visible_start(new_range)
             self.zoom_changed.emit(self.get_zoom_percent())
+        self._invalidate_static_cache()
         self.update()
 
     # -------------------------------------------------------- 드래그 헬퍼
@@ -832,6 +1025,7 @@ class TimelineWidget(QWidget):
             new_end = min(new_end, self._duration_ms)
             seg.end_ms = new_end
 
+        self._invalidate_static_cache()
         self.update()
 
     def _handle_pan_view(self, x: float) -> None:
@@ -853,6 +1047,7 @@ class TimelineWidget(QWidget):
         new_visible_start = min(new_visible_start, max_start)
 
         self._visible_start_ms = new_visible_start
+        self._invalidate_static_cache()
         self.update()
 
     def _start_image_drag(self, mode: _DragMode, seg_idx: int, x: float) -> None:
@@ -894,6 +1089,39 @@ class TimelineWidget(QWidget):
             if ov.end_ms > self._duration_ms:
                 self._duration_ms = ov.end_ms
 
+        self._invalidate_static_cache()
+        self.update()
+
+    def _start_clip_drag(self, mode: _DragMode, clip_idx: int, x: float) -> None:
+        """비디오 클립 트림 드래그 시작."""
+        self._drag_mode = mode
+        self._drag_clip_index = clip_idx
+        self._drag_start_x = x
+        if self._clip_track and 0 <= clip_idx < len(self._clip_track.clips):
+            clip = self._clip_track.clips[clip_idx]
+            self._drag_orig_source_in = clip.source_in_ms
+            self._drag_orig_source_out = clip.source_out_ms
+        self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+    def _handle_clip_drag(self, x: float) -> None:
+        """비디오 클립 트림 처리."""
+        if not self._clip_track or self._drag_clip_index < 0:
+            return
+        if self._drag_clip_index >= len(self._clip_track.clips):
+            return
+
+        dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+        clip = self._clip_track.clips[self._drag_clip_index]
+
+        if self._drag_mode == _DragMode.CLIP_TRIM_LEFT:
+            new_in = max(0, self._drag_orig_source_in + dx_ms)
+            new_in = min(new_in, clip.source_out_ms - 100)  # min 100ms
+            clip.source_in_ms = new_in
+        elif self._drag_mode == _DragMode.CLIP_TRIM_RIGHT:
+            new_out = max(clip.source_in_ms + 100, self._drag_orig_source_out + dx_ms)
+            clip.source_out_ms = new_out
+
+        self._invalidate_static_cache()
         self.update()
 
     def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
@@ -927,6 +1155,7 @@ class TimelineWidget(QWidget):
             max_duration = self._duration_ms - self._track.audio_start_ms
             self._track.audio_duration_ms = min(new_duration, max_duration)
 
+        self._invalidate_static_cache()
         self.update()
 
     def _hit_test(self, x: float, y: float) -> tuple[int, str]:
@@ -935,6 +1164,22 @@ class TimelineWidget(QWidget):
         playhead_x = self._ms_to_x(self._playhead_ms)
         if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
             return -3, "playhead"
+
+        # 비디오 클립 트랙
+        if self._clip_track and _CLIP_Y <= y <= _CLIP_Y + _CLIP_H:
+            offset = 0
+            for i, clip in enumerate(self._clip_track.clips):
+                x1 = self._ms_to_x(offset)
+                x2 = self._ms_to_x(offset + clip.duration_ms)
+                offset += clip.duration_ms
+                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                    continue
+                if abs(x - x1) <= _EDGE_PX and i > 0:
+                    return i, "clip_left_edge"
+                if abs(x - x2) <= _EDGE_PX and i < len(self._clip_track.clips) - 1:
+                    return i, "clip_right_edge"
+                if x1 <= x <= x2:
+                    return i, "clip_body"
 
         # 이미지 오버레이 세그먼트 (row 별 y 좌표 계산)
         if self._image_overlay_track and len(self._image_overlay_track) > 0:
@@ -962,8 +1207,8 @@ class TimelineWidget(QWidget):
             return -1, ""
 
         # 오디오 세그먼트 (자막과 동일 인덱스로 연동)
-        audio_y = 75
-        audio_h = 40
+        audio_y = _AUDIO_Y
+        audio_h = _AUDIO_H
         if audio_y <= y <= audio_y + audio_h:
             for i, seg in enumerate(self._track):
                 if not seg.audio_file:
@@ -980,8 +1225,8 @@ class TimelineWidget(QWidget):
                     return i, "body"
 
         # 자막 세그먼트
-        seg_y = 20
-        seg_h = 50
+        seg_y = _SEG_Y
+        seg_h = _SEG_H
         if seg_y <= y <= seg_y + seg_h:
             for i, seg in enumerate(self._track):
                 x1 = self._ms_to_x(seg.start_ms)

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from src.services.settings_manager import SettingsManager
 from src.services.translator import ISO_639_1_CODES
+from src.utils.i18n import tr
 
 
 class PreferencesDialog(QDialog):
@@ -30,7 +31,7 @@ class PreferencesDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Preferences")
+        self.setWindowTitle(tr("Preferences"))
         self.setMinimumSize(600, 500)
 
         self._settings = SettingsManager()
@@ -45,10 +46,10 @@ class PreferencesDialog(QDialog):
         layout.addWidget(self._tabs)
 
         # Create tabs
-        self._tabs.addTab(self._create_general_tab(), "General")
-        self._tabs.addTab(self._create_editing_tab(), "Editing")
-        self._tabs.addTab(self._create_advanced_tab(), "Advanced")
-        self._tabs.addTab(self._create_api_keys_tab(), "API Keys")
+        self._tabs.addTab(self._create_general_tab(), tr("General"))
+        self._tabs.addTab(self._create_editing_tab(), tr("Editing"))
+        self._tabs.addTab(self._create_advanced_tab(), tr("Advanced"))
+        self._tabs.addTab(self._create_api_keys_tab(), tr("API Keys"))
 
         # Buttons
         button_box = QDialogButtonBox(
@@ -64,51 +65,57 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         # Autosave group
-        autosave_group = QGroupBox("Autosave")
+        autosave_group = QGroupBox(tr("Autosave"))
         autosave_layout = QFormLayout(autosave_group)
 
         self._autosave_interval = QSpinBox()
         self._autosave_interval.setRange(10, 300)
-        self._autosave_interval.setSuffix(" seconds")
-        autosave_layout.addRow("Save Interval:", self._autosave_interval)
+        self._autosave_interval.setSuffix(f" {tr('seconds')}")
+        autosave_layout.addRow(tr("Save Interval:"), self._autosave_interval)
 
         self._autosave_idle = QSpinBox()
         self._autosave_idle.setRange(1, 60)
-        self._autosave_idle.setSuffix(" seconds")
-        autosave_layout.addRow("Idle Timeout:", self._autosave_idle)
+        self._autosave_idle.setSuffix(f" {tr('seconds')}")
+        autosave_layout.addRow(tr("Idle Timeout:"), self._autosave_idle)
 
         layout.addWidget(autosave_group)
 
         # Recent files group
-        recent_group = QGroupBox("Recent Files")
+        recent_group = QGroupBox(tr("Recent Files"))
         recent_layout = QFormLayout(recent_group)
 
         self._recent_max = QSpinBox()
         self._recent_max.setRange(5, 20)
-        self._recent_max.setSuffix(" files")
-        recent_layout.addRow("Maximum Recent Files:", self._recent_max)
+        self._recent_max.setSuffix(f" {tr('files')}")
+        recent_layout.addRow(tr("Maximum Recent Files:"), self._recent_max)
 
         layout.addWidget(recent_group)
 
         # Language group
-        lang_group = QGroupBox("Default Language")
+        lang_group = QGroupBox(tr("Default Language"))
         lang_layout = QFormLayout(lang_group)
 
         self._default_lang = QComboBox()
         self._default_lang.addItems(sorted(ISO_639_1_CODES.keys()))
-        lang_layout.addRow("New Project Language:", self._default_lang)
+        lang_layout.addRow(tr("New Project Language:"), self._default_lang)
 
         layout.addWidget(lang_group)
 
         # UI group
-        ui_group = QGroupBox("User Interface")
+        ui_group = QGroupBox(tr("User Interface"))
         ui_layout = QFormLayout(ui_group)
 
         self._theme = QComboBox()
         self._theme.addItems(["dark", "light"])
-        ui_layout.addRow("Theme:", self._theme)
+        ui_layout.addRow(tr("Theme:"), self._theme)
 
-        info_label = QLabel("Note: Theme changes require restart")
+        # UI Language selector
+        self._ui_language = QComboBox()
+        self._ui_language.addItem("English", "en")
+        self._ui_language.addItem("한국어", "ko")
+        ui_layout.addRow(tr("Language:"), self._ui_language)
+
+        info_label = QLabel(tr("Note: Language and theme changes require restart"))
         info_label.setStyleSheet("color: gray; font-style: italic;")
         ui_layout.addRow("", info_label)
 
@@ -123,29 +130,29 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         # Subtitle defaults group
-        subtitle_group = QGroupBox("Subtitle Defaults")
+        subtitle_group = QGroupBox(tr("Subtitle Defaults"))
         subtitle_layout = QFormLayout(subtitle_group)
 
         self._default_duration = QSpinBox()
         self._default_duration.setRange(500, 10000)
         self._default_duration.setSuffix(" ms")
-        subtitle_layout.addRow("Default Duration:", self._default_duration)
+        subtitle_layout.addRow(tr("Default Duration:"), self._default_duration)
 
         layout.addWidget(subtitle_group)
 
         # Timeline group
-        timeline_group = QGroupBox("Timeline")
+        timeline_group = QGroupBox(tr("Timeline"))
         timeline_layout = QFormLayout(timeline_group)
 
         self._snap_tolerance = QSpinBox()
         self._snap_tolerance.setRange(5, 50)
-        self._snap_tolerance.setSuffix(" pixels")
-        timeline_layout.addRow("Snap Tolerance:", self._snap_tolerance)
+        self._snap_tolerance.setSuffix(f" {tr('pixels')}")
+        timeline_layout.addRow(tr("Snap Tolerance:"), self._snap_tolerance)
 
         self._frame_fps = QSpinBox()
         self._frame_fps.setRange(10, 120)
         self._frame_fps.setSuffix(" fps")
-        timeline_layout.addRow("Frame Seek FPS:", self._frame_fps)
+        timeline_layout.addRow(tr("Frame Seek FPS:"), self._frame_fps)
 
         layout.addWidget(timeline_group)
 
@@ -163,11 +170,11 @@ class PreferencesDialog(QDialog):
 
         ffmpeg_path_layout = QHBoxLayout()
         self._ffmpeg_path = QLineEdit()
-        self._ffmpeg_path.setPlaceholderText("Auto-detect")
-        ffmpeg_path_layout.addWidget(QLabel("FFmpeg Path:"))
+        self._ffmpeg_path.setPlaceholderText(tr("Auto-detect"))
+        ffmpeg_path_layout.addWidget(QLabel(tr("FFmpeg Path:")))
         ffmpeg_path_layout.addWidget(self._ffmpeg_path)
 
-        browse_ffmpeg = QPushButton("Browse...")
+        browse_ffmpeg = QPushButton(tr("Browse..."))
         browse_ffmpeg.clicked.connect(self._browse_ffmpeg)
         ffmpeg_path_layout.addWidget(browse_ffmpeg)
 
@@ -180,11 +187,11 @@ class PreferencesDialog(QDialog):
 
         whisper_cache_layout = QHBoxLayout()
         self._whisper_cache = QLineEdit()
-        self._whisper_cache.setPlaceholderText("Default cache directory")
-        whisper_cache_layout.addWidget(QLabel("Model Cache:"))
+        self._whisper_cache.setPlaceholderText(tr("Default cache directory"))
+        whisper_cache_layout.addWidget(QLabel(tr("Model Cache:")))
         whisper_cache_layout.addWidget(self._whisper_cache)
 
-        browse_cache = QPushButton("Browse...")
+        browse_cache = QPushButton(tr("Browse..."))
         browse_cache.clicked.connect(self._browse_whisper_cache)
         whisper_cache_layout.addWidget(browse_cache)
 
@@ -200,11 +207,11 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         # DeepL group
-        deepl_group = QGroupBox("DeepL Translation")
+        deepl_group = QGroupBox(tr("DeepL Translation"))
         deepl_layout = QVBoxLayout(deepl_group)
 
         deepl_info = QLabel(
-            "Get your free API key at: https://www.deepl.com/pro-api"
+            f"{tr('Get your free API key at')}: https://www.deepl.com/pro-api"
         )
         deepl_info.setOpenExternalLinks(True)
         deepl_info.setStyleSheet("color: gray; font-style: italic;")
@@ -212,7 +219,7 @@ class PreferencesDialog(QDialog):
 
         self._deepl_key = QLineEdit()
         self._deepl_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._deepl_key.setPlaceholderText("Enter DeepL API key...")
+        self._deepl_key.setPlaceholderText(tr("Enter DeepL API key..."))
         deepl_layout.addWidget(self._deepl_key)
 
         layout.addWidget(deepl_group)
@@ -222,7 +229,7 @@ class PreferencesDialog(QDialog):
         openai_layout = QVBoxLayout(openai_group)
 
         openai_info = QLabel(
-            "Get your API key at: https://platform.openai.com/api-keys"
+            f"{tr('Get your API key at')}: https://platform.openai.com/api-keys"
         )
         openai_info.setOpenExternalLinks(True)
         openai_info.setStyleSheet("color: gray; font-style: italic;")
@@ -230,7 +237,7 @@ class PreferencesDialog(QDialog):
 
         self._openai_key = QLineEdit()
         self._openai_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._openai_key.setPlaceholderText("Enter OpenAI API key...")
+        self._openai_key.setPlaceholderText(tr("Enter OpenAI API key..."))
         openai_layout.addWidget(self._openai_key)
 
         layout.addWidget(openai_group)
@@ -240,7 +247,7 @@ class PreferencesDialog(QDialog):
         elevenlabs_layout = QVBoxLayout(elevenlabs_group)
 
         elevenlabs_info = QLabel(
-            "Get your API key at: https://elevenlabs.io/app/settings/api-keys"
+            f"{tr('Get your API key at')}: https://elevenlabs.io/app/settings/api-keys"
         )
         elevenlabs_info.setOpenExternalLinks(True)
         elevenlabs_info.setStyleSheet("color: gray; font-style: italic;")
@@ -248,16 +255,16 @@ class PreferencesDialog(QDialog):
 
         self._elevenlabs_key = QLineEdit()
         self._elevenlabs_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._elevenlabs_key.setPlaceholderText("Enter ElevenLabs API key...")
+        self._elevenlabs_key.setPlaceholderText(tr("Enter ElevenLabs API key..."))
         elevenlabs_layout.addWidget(self._elevenlabs_key)
 
         layout.addWidget(elevenlabs_group)
 
         # Info label
         info_label = QLabel(
-            "Note: API keys are stored securely in your system settings.\n"
-            "Google Translate does not require an API key.\n"
-            "Edge-TTS is free and does not require an API key."
+            tr("Note: API keys are stored securely in your system settings.") + "\n"
+            + tr("Google Translate does not require an API key.") + "\n"
+            + tr("Edge-TTS is free and does not require an API key.")
         )
         info_label.setStyleSheet("color: gray; font-style: italic; margin-top: 20px;")
         info_label.setWordWrap(True)
@@ -274,6 +281,12 @@ class PreferencesDialog(QDialog):
         self._recent_max.setValue(self._settings.get_recent_files_max())
         self._default_lang.setCurrentText(self._settings.get_default_language())
         self._theme.setCurrentText(self._settings.get_theme())
+
+        # UI Language
+        current_lang = self._settings.get_ui_language()
+        lang_index = self._ui_language.findData(current_lang)
+        if lang_index >= 0:
+            self._ui_language.setCurrentIndex(lang_index)
 
         # Editing
         self._default_duration.setValue(self._settings.get_default_subtitle_duration())
@@ -300,6 +313,7 @@ class PreferencesDialog(QDialog):
         self._settings.set_recent_files_max(self._recent_max.value())
         self._settings.set_default_language(self._default_lang.currentText())
         self._settings.set_theme(self._theme.currentText())
+        self._settings.set_ui_language(self._ui_language.currentData())
 
         # Editing
         self._settings.set_default_subtitle_duration(self._default_duration.value())
@@ -326,7 +340,7 @@ class PreferencesDialog(QDialog):
     def _browse_ffmpeg(self):
         """Browse for FFmpeg executable."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select FFmpeg Executable", str(Path.home())
+            self, tr("Select FFmpeg Executable"), str(Path.home())
         )
         if file_path:
             self._ffmpeg_path.setText(file_path)
@@ -334,7 +348,7 @@ class PreferencesDialog(QDialog):
     def _browse_whisper_cache(self):
         """Browse for Whisper cache directory."""
         dir_path = QFileDialog.getExistingDirectory(
-            self, "Select Whisper Cache Directory", str(Path.home())
+            self, tr("Select Whisper Cache Directory"), str(Path.home())
         )
         if dir_path:
             self._whisper_cache.setText(dir_path)

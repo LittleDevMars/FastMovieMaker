@@ -82,6 +82,6 @@ ELEVENLABS_DEFAULT_VOICES = {
 }
 
 # UI
-TIMELINE_HEIGHT = 260  # Accommodates ruler + subtitles + TTS audio + video waveform + image overlays (multi-row)
+TIMELINE_HEIGHT = 300  # Accommodates ruler + video clips + subtitles + TTS audio + video waveform + image overlays (multi-row)
 SUBTITLE_FONT_SIZE = 18
 SUBTITLE_OVERLAY_MARGIN_BOTTOM = 40

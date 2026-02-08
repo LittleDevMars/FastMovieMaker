@@ -44,7 +44,7 @@ class TestSaveLoadV2:
         path = tmp_path / "test.fmm.json"
         save_project(sample_project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["version"] == 2
+        assert data["version"] == 3
         assert "tracks" in data
         assert "default_style" in data
 
@@ -247,3 +247,73 @@ class TestAudioTimeline:
         loaded = load_project(path)
         assert loaded.subtitle_track.audio_start_ms == 0  # Default value
         assert loaded.subtitle_track.audio_duration_ms == 0  # Default value
+
+
+class TestVideoClipTrack:
+    """Tests for video clip track save/load."""
+
+    def test_clip_track_roundtrip(self, tmp_path):
+        from src.models.video_clip import VideoClip, VideoClipTrack
+        project = ProjectState()
+        project.video_path = Path("/fake/video.mp4")
+        project.duration_ms = 30000
+        project.video_clip_track = VideoClipTrack(clips=[
+            VideoClip(0, 10000),
+            VideoClip(15000, 25000),
+        ])
+        track = SubtitleTrack(name="Default")
+        track.add_segment(SubtitleSegment(0, 5000, "hello"))
+        project.subtitle_track = track
+
+        path = tmp_path / "test_clips.fmm.json"
+        save_project(project, path)
+        loaded = load_project(path)
+
+        assert loaded.video_clip_track is not None
+        assert len(loaded.video_clip_track.clips) == 2
+        assert loaded.video_clip_track.clips[0].source_in_ms == 0
+        assert loaded.video_clip_track.clips[0].source_out_ms == 10000
+        assert loaded.video_clip_track.clips[1].source_in_ms == 15000
+        assert loaded.video_clip_track.clips[1].source_out_ms == 25000
+        assert loaded.video_clip_track.output_duration_ms == 20000
+
+    def test_no_clip_track_backward_compat(self, tmp_path):
+        """v2 projects without video_clips should load with clip_track=None."""
+        old_data = {
+            "version": 2,
+            "video_path": "/fake/video.mp4",
+            "duration_ms": 10000,
+            "default_style": {"font_size": 18, "font_color": "#FFFFFF"},
+            "active_track_index": 0,
+            "tracks": [
+                {
+                    "name": "Default",
+                    "language": "",
+                    "audio_path": "",
+                    "segments": [],
+                }
+            ],
+        }
+        path = tmp_path / "v2.fmm.json"
+        path.write_text(json.dumps(old_data), encoding="utf-8")
+        loaded = load_project(path)
+        assert loaded.video_clip_track is None
+
+    def test_clip_track_json_structure(self, tmp_path):
+        from src.models.video_clip import VideoClip, VideoClipTrack
+        project = ProjectState()
+        project.video_clip_track = VideoClipTrack(clips=[
+            VideoClip(1000, 5000),
+        ])
+        track = SubtitleTrack(name="Default")
+        project.subtitle_track = track
+
+        path = tmp_path / "test.fmm.json"
+        save_project(project, path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        assert data["version"] == 3
+        assert "video_clips" in data
+        assert len(data["video_clips"]) == 1
+        assert data["video_clips"][0]["source_in_ms"] == 1000
+        assert data["video_clips"][0]["source_out_ms"] == 5000

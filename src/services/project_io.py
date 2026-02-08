@@ -9,8 +9,9 @@ from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.models.video_clip import VideoClip, VideoClipTrack
 
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:
@@ -75,7 +76,7 @@ def _dict_to_segment(d: dict) -> SubtitleSegment:
 
 
 def save_project(project: ProjectState, path: Path) -> None:
-    """Serialize *project* to a JSON file (v2 format)."""
+    """Serialize *project* to a JSON file (v3 format)."""
     tracks_data = []
     for track in project.subtitle_tracks:
         tracks_data.append({
@@ -90,6 +91,11 @@ def save_project(project: ProjectState, path: Path) -> None:
     # Image overlays
     image_overlays_data = [ov.to_dict() for ov in project.image_overlay_track]
 
+    # Video clips (v3)
+    video_clips_data = None
+    if project.video_clip_track is not None:
+        video_clips_data = [c.to_dict() for c in project.video_clip_track]
+
     data = {
         "version": PROJECT_VERSION,
         "video_path": str(project.video_path) if project.video_path else None,
@@ -98,6 +104,7 @@ def save_project(project: ProjectState, path: Path) -> None:
         "active_track_index": project.active_track_index,
         "tracks": tracks_data,
         "image_overlays": image_overlays_data,
+        "video_clips": video_clips_data,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -153,5 +160,14 @@ def load_project(path: Path) -> ProjectState:
     for ov_data in data.get("image_overlays", []):
         io_track.add_overlay(ImageOverlay.from_dict(ov_data))
     project.image_overlay_track = io_track
+
+    # Video clips (v3, backward-compatible)
+    video_clips_data = data.get("video_clips")
+    if video_clips_data is not None:
+        clip_track = VideoClipTrack()
+        clip_track.clips = [VideoClip.from_dict(c) for c in video_clips_data]
+        project.video_clip_track = clip_track
+    else:
+        project.video_clip_track = None
 
     return project

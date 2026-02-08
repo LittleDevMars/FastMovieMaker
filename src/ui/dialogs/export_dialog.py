@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.subtitle import SubtitleTrack
+from src.utils.i18n import tr
 from src.workers.export_worker import ExportWorker
 
 
@@ -37,9 +38,10 @@ class ExportDialog(QDialog):
         video_has_audio: bool = False,
         overlay_path: Path | None = None,
         image_overlays: list | None = None,
+        video_clips=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Export Video")
+        self.setWindowTitle(tr("Export Video"))
         self.setMinimumWidth(450)
         self.setModal(True)
 
@@ -48,6 +50,7 @@ class ExportDialog(QDialog):
         self._video_has_audio = video_has_audio
         self._overlay_path = overlay_path
         self._image_overlays = image_overlays
+        self._video_clips = video_clips
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
         self._temp_audio_path: Path | None = None
@@ -64,24 +67,24 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # --- Audio options group ---
-        self._options_group = QGroupBox("Audio Options")
+        self._options_group = QGroupBox(tr("Audio Options"))
         options_layout = QVBoxLayout(self._options_group)
 
         # TTS include checkbox
-        self._tts_checkbox = QCheckBox("Include TTS audio")
+        self._tts_checkbox = QCheckBox(tr("Include TTS audio"))
         self._tts_checkbox.setChecked(self._has_tts)
         self._tts_checkbox.setEnabled(self._has_tts)
         self._tts_checkbox.toggled.connect(self._on_tts_toggled)
         options_layout.addWidget(self._tts_checkbox)
 
         if not self._has_tts:
-            hint = QLabel("(No TTS audio in this track)")
+            hint = QLabel(tr("(No TTS audio in this track)"))
             hint.setStyleSheet("color: gray; font-size: 11px;")
             options_layout.addWidget(hint)
 
         # Background volume slider
         bg_row = QHBoxLayout()
-        bg_row.addWidget(QLabel("Background volume:"))
+        bg_row.addWidget(QLabel(tr("Background volume:")))
         self._bg_slider = QSlider(Qt.Orientation.Horizontal)
         self._bg_slider.setRange(0, 100)
         self._bg_slider.setValue(50)
@@ -95,7 +98,7 @@ class ExportDialog(QDialog):
 
         # TTS volume slider
         tts_row = QHBoxLayout()
-        tts_row.addWidget(QLabel("TTS volume:"))
+        tts_row.addWidget(QLabel(tr("TTS volume:")))
         self._tts_slider = QSlider(Qt.Orientation.Horizontal)
         self._tts_slider.setRange(0, 200)
         self._tts_slider.setValue(100)
@@ -108,7 +111,7 @@ class ExportDialog(QDialog):
         options_layout.addLayout(tts_row)
 
         # Segment volume checkbox
-        self._seg_vol_checkbox = QCheckBox("Apply per-segment volumes")
+        self._seg_vol_checkbox = QCheckBox(tr("Apply per-segment volumes"))
         self._seg_vol_checkbox.setChecked(True)
         self._seg_vol_checkbox.setEnabled(self._has_tts)
         options_layout.addWidget(self._seg_vol_checkbox)
@@ -116,10 +119,10 @@ class ExportDialog(QDialog):
         layout.addWidget(self._options_group)
 
         # --- Progress section (hidden initially) ---
-        self._progress_section = QGroupBox("Export Progress")
+        self._progress_section = QGroupBox(tr("Export Progress"))
         progress_layout = QVBoxLayout(self._progress_section)
 
-        self._status_label = QLabel("Preparing export...")
+        self._status_label = QLabel(tr("Preparing export..."))
         progress_layout.addWidget(self._status_label)
 
         self._progress_bar = QProgressBar()
@@ -132,11 +135,11 @@ class ExportDialog(QDialog):
 
         # --- Buttons ---
         btn_layout = QHBoxLayout()
-        self._export_btn = QPushButton("Export...")
+        self._export_btn = QPushButton(tr("Export..."))
         self._export_btn.clicked.connect(self._ask_output_and_start)
         btn_layout.addWidget(self._export_btn)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton(tr("Cancel"))
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
 
@@ -159,7 +162,7 @@ class ExportDialog(QDialog):
         default_name = self._video_path.stem + "_subtitled.mp4"
         default_dir = str(self._video_path.parent / default_name)
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Video As", default_dir,
+            self, tr("Save Video As"), default_dir,
             "MP4 Files (*.mp4);;All Files (*)",
         )
         if not path:
@@ -179,7 +182,7 @@ class ExportDialog(QDialog):
 
         if self._tts_checkbox.isChecked() and self._has_tts:
             # Prepare TTS audio
-            self._status_label.setText("Preparing TTS audio...")
+            self._status_label.setText(tr("Preparing TTS audio..."))
             from PySide6.QtWidgets import QApplication
             QApplication.processEvents()
 
@@ -187,13 +190,13 @@ class ExportDialog(QDialog):
                 audio_path = self._prepare_tts_audio()
             except Exception as e:
                 QMessageBox.critical(
-                    self, "Audio Preparation Error",
-                    f"Failed to prepare TTS audio:\n{e}\n\n"
-                    "Exporting without TTS audio."
+                    self, tr("Audio Preparation Error"),
+                    f"{tr('Failed to prepare TTS audio')}:\n{e}\n\n"
+                    f"{tr('Exporting without TTS audio.')}"
                 )
                 audio_path = None
 
-        self._status_label.setText("Exporting video with subtitles...")
+        self._status_label.setText(tr("Exporting video with subtitles..."))
 
         self._thread = QThread()
         self._worker = ExportWorker(
@@ -203,6 +206,7 @@ class ExportDialog(QDialog):
             audio_path=audio_path,
             overlay_path=self._overlay_path,
             image_overlays=self._image_overlays,
+            video_clips=self._video_clips,
         )
         self._worker.moveToThread(self._thread)
 
@@ -256,17 +260,17 @@ class ExportDialog(QDialog):
 
     def _on_finished(self, output_path: str) -> None:
         self._progress_bar.setValue(100)
-        self._status_label.setText("Export complete!")
-        self._cancel_btn.setText("Close")
+        self._status_label.setText(tr("Export complete!"))
+        self._cancel_btn.setText(tr("Close"))
         self._cleanup_temp_audio()
-        QMessageBox.information(self, "Export Complete", f"Video exported to:\n{output_path}")
+        QMessageBox.information(self, tr("Export Complete"), f"{tr('Video exported to')}:\n{output_path}")
         self.accept()
 
     def _on_error(self, message: str) -> None:
-        self._status_label.setText(f"Error: {message}")
-        self._cancel_btn.setText("Close")
+        self._status_label.setText(f"{tr('Error')}: {message}")
+        self._cancel_btn.setText(tr("Close"))
         self._cleanup_temp_audio()
-        QMessageBox.critical(self, "Export Error", message)
+        QMessageBox.critical(self, tr("Export Error"), message)
 
     def _on_cancel(self) -> None:
         self._cleanup_thread()

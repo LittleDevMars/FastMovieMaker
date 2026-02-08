@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.overlay_template import OverlayTemplate
+from src.utils.i18n import tr
 from src.services.template_service import TemplateService
 
 
@@ -122,7 +123,7 @@ class TemplatesPanel(QWidget):
         self._source_group = QButtonGroup(self)
         self._source_group.setExclusive(True)
 
-        for label, val in [("기본 템플릿", "builtin"), ("내 템플릿", "user")]:
+        for label, val in [(tr("Default Templates"), "builtin"), (tr("My Templates"), "user")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setStyleSheet(
@@ -145,7 +146,7 @@ class TemplatesPanel(QWidget):
         self._aspect_group = QButtonGroup(self)
         self._aspect_group.setExclusive(True)
 
-        for label, val in [("전체", None), ("16:9", "16:9"), ("9:16", "9:16")]:
+        for label, val in [(tr("All"), None), ("16:9", "16:9"), ("9:16", "9:16")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setStyleSheet(
@@ -183,7 +184,7 @@ class TemplatesPanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
 
-        apply_btn = QPushButton("적용하기")
+        apply_btn = QPushButton(tr("Apply"))
         apply_btn.setStyleSheet(
             "QPushButton { background-color: #00bcd4; color: white; "
             "border: none; border-radius: 4px; padding: 8px; font-weight: bold; }"
@@ -192,7 +193,7 @@ class TemplatesPanel(QWidget):
         apply_btn.clicked.connect(self._on_apply)
         btn_row.addWidget(apply_btn)
 
-        clear_btn = QPushButton("해제")
+        clear_btn = QPushButton(tr("Clear"))
         clear_btn.setStyleSheet(
             "QPushButton { background-color: #555; color: white; "
             "border: none; border-radius: 4px; padding: 8px; }"
@@ -204,7 +205,7 @@ class TemplatesPanel(QWidget):
         layout.addLayout(btn_row)
 
         # Import button (for user templates)
-        self._import_btn = QPushButton("+ 이미지 추가")
+        self._import_btn = QPushButton(tr("+ Add Image"))
         self._import_btn.setStyleSheet(
             "QPushButton { background-color: #333; color: #ccc; "
             "border: 1px solid #555; border-radius: 4px; padding: 6px; }"
@@ -252,7 +253,7 @@ class TemplatesPanel(QWidget):
 
     def _on_import(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
-            self, "오버레이 이미지 선택", "",
+            self, tr("Select Overlay Image"), "",
             "Image Files (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)"
         )
         if not files:

@@ -9,8 +9,37 @@ import threading
 from pathlib import Path
 
 from src.models.subtitle import SubtitleTrack
+from src.models.video_clip import VideoClipTrack
 from src.services.subtitle_exporter import export_srt
 from src.utils.config import find_ffmpeg
+
+
+def _build_concat_filter(clips: list) -> tuple[list[str], str, str]:
+    """Build FFmpeg trim+concat filter parts for video clips.
+
+    Returns:
+        (filter_parts, video_label, audio_label) where labels are e.g. "[concatv]", "[concata]".
+    """
+    parts: list[str] = []
+    v_labels = []
+    a_labels = []
+    for i, clip in enumerate(clips):
+        start_s = clip.source_in_ms / 1000.0
+        end_s = clip.source_out_ms / 1000.0
+        vl = f"cv{i}"
+        al = f"ca{i}"
+        parts.append(
+            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},setpts=PTS-STARTPTS[{vl}]"
+        )
+        parts.append(
+            f"[0:a]atrim=start={start_s:.3f}:end={end_s:.3f},asetpts=PTS-STARTPTS[{al}]"
+        )
+        v_labels.append(f"[{vl}]")
+        a_labels.append(f"[{al}]")
+
+    concat_in = "".join(v_labels[j] + a_labels[j] for j in range(len(clips)))
+    parts.append(f"{concat_in}concat=n={len(clips)}:v=1:a=1[concatv][concata]")
+    return parts, "[concatv]", "[concata]"
 
 
 def export_video(
@@ -24,6 +53,7 @@ def export_video(
     codec: str = "h264",
     overlay_path: Path | None = None,
     image_overlays: list | None = None,
+    video_clips: VideoClipTrack | None = None,
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -76,7 +106,12 @@ def export_video(
             ov for ov in (image_overlays or [])
             if Path(ov.image_path).exists()
         ]
-        use_filter_complex = use_overlay or bool(valid_image_overlays)
+        # Multi-clip also needs filter_complex for concat
+        multi_clip = (
+            video_clips is not None
+            and len(video_clips.clips) > 1
+        )
+        use_filter_complex = use_overlay or bool(valid_image_overlays) or multi_clip
 
         if use_filter_complex:
             # ---- Collect all inputs ----
@@ -103,12 +138,22 @@ def export_video(
 
             # ---- Build filter_complex ----
             fc_parts: list[str] = []
-            current = "[0:v]"
+            concat_audio_label = ""
+
+            # Multi-clip concat (trim + concat)
+            if multi_clip:
+                concat_parts, v_label, a_label = _build_concat_filter(video_clips.clips)
+                fc_parts.extend(concat_parts)
+                current = v_label  # e.g. "[concatv]"
+                concat_audio_label = a_label  # e.g. "[concata]"
+            else:
+                current = "[0:v]"
 
             # Scale video if needed
             if scale_width > 0 and scale_height > 0:
+                src = current
                 fc_parts.append(
-                    f"[0:v]scale={scale_width}:{scale_height}"
+                    f"{src}scale={scale_width}:{scale_height}"
                     f":force_original_aspect_ratio=decrease,"
                     f"pad={scale_width}:{scale_height}:(ow-iw)/2:(oh-ih)/2[scaled]"
                 )
@@ -172,6 +217,11 @@ def export_video(
 
             if audio_idx >= 0:
                 cmd.extend(["-map", f"{audio_idx}:a",
+                            "-c:v", video_encoder, *encoder_flags,
+                            *audio_codec_flags])
+            elif concat_audio_label:
+                # Multi-clip: audio from concat filter
+                cmd.extend(["-map", concat_audio_label,
                             "-c:v", video_encoder, *encoder_flags,
                             *audio_codec_flags])
             else:
@@ -246,7 +296,10 @@ def export_video(
         stderr_thread.start()
 
         # Parse -progress output for duration tracking
-        total_duration = _get_video_duration(ffmpeg, video_path)
+        if multi_clip:
+            total_duration = video_clips.output_duration_ms / 1000.0
+        else:
+            total_duration = _get_video_duration(ffmpeg, video_path)
 
         if process.stdout:
             for line in process.stdout:

@@ -37,9 +37,11 @@ from src.services.translator import TranslatorService
 from src.ui.dialogs.preferences_dialog import PreferencesDialog
 from src.ui.dialogs.recovery_dialog import RecoveryDialog
 from src.ui.dialogs.translate_dialog import TranslateDialog
+from src.models.video_clip import VideoClipTrack
 from src.ui.commands import (
     AddSegmentCommand,
     BatchShiftCommand,
+    DeleteClipCommand,
     DeleteSegmentCommand,
     EditStyleCommand,
     EditTextCommand,
@@ -47,7 +49,9 @@ from src.ui.commands import (
     EditVolumeCommand,
     MergeCommand,
     MoveSegmentCommand,
+    SplitClipCommand,
     SplitCommand,
+    TrimClipCommand,
 )
 from src.ui.media_library_panel import MediaLibraryPanel
 from src.ui.templates_panel import TemplatesPanel
@@ -59,6 +63,7 @@ from src.ui.video_player_widget import VideoPlayerWidget
 from src.ui.dialogs.whisper_dialog import WhisperDialog
 from src.ui.dialogs.tts_dialog import TTSDialog
 from src.utils.config import APP_NAME, APP_VERSION, VIDEO_FILTER, find_ffmpeg
+from src.utils.i18n import tr
 from src.workers.waveform_worker import WaveformWorker
 
 
@@ -119,9 +124,9 @@ class MainWindow(QMainWindow):
 
         # FFmpeg check
         if not find_ffmpeg():
-            self.statusBar().showMessage("Warning: FFmpeg not found – subtitle generation won't work")
+            self.statusBar().showMessage(tr("Warning: FFmpeg not found – subtitle generation won't work"))
         else:
-            self.statusBar().showMessage("Ready")
+            self.statusBar().showMessage(tr("Ready"))
 
     # ------------------------------------------------------------------ UI
 
@@ -155,9 +160,9 @@ class MainWindow(QMainWindow):
 
         # Right tabs
         self._right_tabs = QTabWidget()
-        self._right_tabs.addTab(subtitle_tab, "Subtitles")
-        self._right_tabs.addTab(self._media_panel, "Media")
-        self._right_tabs.addTab(self._templates_panel, "Templates")
+        self._right_tabs.addTab(subtitle_tab, tr("Subtitles"))
+        self._right_tabs.addTab(self._media_panel, tr("Media"))
+        self._right_tabs.addTab(self._templates_panel, tr("Templates"))
 
         # Top splitter: video | right tabs
         self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -184,16 +189,16 @@ class MainWindow(QMainWindow):
 
         btn_style = "QPushButton { background: rgb(60,60,60); color: white; border: 1px solid rgb(80,80,80); border-radius: 3px; padding: 1px 8px; font-size: 12px; } QPushButton:hover { background: rgb(80,80,80); }"
 
-        self._zoom_fit_btn = QPushButton("Fit")
+        self._zoom_fit_btn = QPushButton(tr("Fit"))
         self._zoom_fit_btn.setFixedWidth(36)
         self._zoom_fit_btn.setStyleSheet(btn_style)
-        self._zoom_fit_btn.setToolTip("Fit entire timeline (Ctrl+0)")
+        self._zoom_fit_btn.setToolTip(tr("Fit entire timeline (Ctrl+0)"))
         self._zoom_fit_btn.clicked.connect(self._timeline.zoom_fit)
 
         self._zoom_out_btn = QPushButton("-")
         self._zoom_out_btn.setFixedWidth(28)
         self._zoom_out_btn.setStyleSheet(btn_style)
-        self._zoom_out_btn.setToolTip("Zoom out (Ctrl+-)")
+        self._zoom_out_btn.setToolTip(tr("Zoom out (Ctrl+-)"))
         self._zoom_out_btn.clicked.connect(self._timeline.zoom_out)
 
         self._zoom_label = QLabel("100%")
@@ -204,7 +209,7 @@ class MainWindow(QMainWindow):
         self._zoom_in_btn = QPushButton("+")
         self._zoom_in_btn.setFixedWidth(28)
         self._zoom_in_btn.setStyleSheet(btn_style)
-        self._zoom_in_btn.setToolTip("Zoom in (Ctrl++)")
+        self._zoom_in_btn.setToolTip(tr("Zoom in (Ctrl++)"))
         self._zoom_in_btn.clicked.connect(self._timeline.zoom_in)
 
         zoom_layout.addWidget(self._zoom_fit_btn)
@@ -231,145 +236,145 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # File menu
-        file_menu = menubar.addMenu("&File")
+        file_menu = menubar.addMenu(tr("&File"))
 
-        open_action = QAction("&Open Video...", self)
+        open_action = QAction(tr("&Open Video..."), self)
         open_action.setShortcut(QKeySequence("Ctrl+O"))
         open_action.triggered.connect(self._on_open_video)
         file_menu.addAction(open_action)
 
-        import_srt_action = QAction("&Import SRT...", self)
+        import_srt_action = QAction(tr("&Import SRT..."), self)
         import_srt_action.setShortcut(QKeySequence("Ctrl+I"))
         import_srt_action.triggered.connect(self._on_import_srt)
         file_menu.addAction(import_srt_action)
 
-        import_srt_track_action = QAction("Import SRT to &New Track...", self)
+        import_srt_track_action = QAction(tr("Import SRT to &New Track..."), self)
         import_srt_track_action.triggered.connect(self._on_import_srt_new_track)
         file_menu.addAction(import_srt_track_action)
 
         file_menu.addSeparator()
 
-        export_action = QAction("&Export SRT...", self)
+        export_action = QAction(tr("&Export SRT..."), self)
         export_action.setShortcut(QKeySequence("Ctrl+E"))
         export_action.triggered.connect(self._on_export_srt)
         file_menu.addAction(export_action)
 
-        export_video_action = QAction("Export &Video...", self)
+        export_video_action = QAction(tr("Export &Video..."), self)
         export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
         export_video_action.triggered.connect(self._on_export_video)
         file_menu.addAction(export_video_action)
 
-        batch_export_action = QAction("&Batch Export...", self)
+        batch_export_action = QAction(tr("&Batch Export..."), self)
         batch_export_action.triggered.connect(self._on_batch_export)
         file_menu.addAction(batch_export_action)
 
         file_menu.addSeparator()
 
-        save_action = QAction("&Save Project...", self)
+        save_action = QAction(tr("&Save Project..."), self)
         save_action.setShortcut(QKeySequence("Ctrl+S"))
         save_action.triggered.connect(self._on_save_project)
         file_menu.addAction(save_action)
 
-        load_action = QAction("&Load Project...", self)
+        load_action = QAction(tr("&Load Project..."), self)
         load_action.setShortcut(QKeySequence("Ctrl+L"))
         load_action.triggered.connect(self._on_load_project)
         file_menu.addAction(load_action)
 
         # Recent files submenu
-        self._recent_menu = QMenu("Recent &Projects", self)
+        self._recent_menu = QMenu(tr("Recent &Projects"), self)
         file_menu.addMenu(self._recent_menu)
         self._update_recent_menu()
 
         file_menu.addSeparator()
 
-        quit_action = QAction("&Quit", self)
+        quit_action = QAction(tr("&Quit"), self)
         quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
         # Edit menu
-        edit_menu = menubar.addMenu("&Edit")
+        edit_menu = menubar.addMenu(tr("&Edit"))
 
-        undo_action = self._undo_stack.createUndoAction(self, "&Undo")
+        undo_action = self._undo_stack.createUndoAction(self, tr("&Undo"))
         undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         edit_menu.addAction(undo_action)
 
-        redo_action = self._undo_stack.createRedoAction(self, "&Redo")
+        redo_action = self._undo_stack.createRedoAction(self, tr("&Redo"))
         redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         edit_menu.addAction(redo_action)
 
         edit_menu.addSeparator()
 
-        split_action = QAction("S&plit Subtitle", self)
+        split_action = QAction(tr("S&plit Subtitle"), self)
         split_action.triggered.connect(self._on_split_subtitle)
         edit_menu.addAction(split_action)
 
-        merge_action = QAction("&Merge Subtitles", self)
+        merge_action = QAction(tr("&Merge Subtitles"), self)
         merge_action.triggered.connect(self._on_merge_subtitles)
         edit_menu.addAction(merge_action)
 
         edit_menu.addSeparator()
 
-        batch_shift_action = QAction("&Batch Shift Timing...", self)
+        batch_shift_action = QAction(tr("&Batch Shift Timing..."), self)
         batch_shift_action.triggered.connect(self._on_batch_shift)
         edit_menu.addAction(batch_shift_action)
 
         edit_menu.addSeparator()
 
-        jump_frame_action = QAction("&Jump to Frame...", self)
+        jump_frame_action = QAction(tr("&Jump to Frame..."), self)
         jump_frame_action.setShortcut(QKeySequence("Ctrl+J"))
         jump_frame_action.triggered.connect(self._on_jump_to_frame)
         edit_menu.addAction(jump_frame_action)
 
         edit_menu.addSeparator()
 
-        preferences_action = QAction("&Preferences...", self)
+        preferences_action = QAction(tr("&Preferences..."), self)
         preferences_action.setShortcut(QKeySequence("Ctrl+,"))
         preferences_action.triggered.connect(self._on_preferences)
         edit_menu.addAction(preferences_action)
 
         # Subtitles menu
-        sub_menu = menubar.addMenu("&Subtitles")
+        sub_menu = menubar.addMenu(tr("&Subtitles"))
 
-        gen_action = QAction("&Generate (Whisper)...", self)
+        gen_action = QAction(tr("&Generate (Whisper)..."), self)
         gen_action.setShortcut(QKeySequence("Ctrl+G"))
         gen_action.triggered.connect(self._on_generate_subtitles)
         sub_menu.addAction(gen_action)
 
-        tts_action = QAction("Generate &Speech (TTS)...", self)
+        tts_action = QAction(tr("Generate &Speech (TTS)..."), self)
         tts_action.setShortcut(QKeySequence("Ctrl+T"))
         tts_action.triggered.connect(self._on_generate_tts)
         sub_menu.addAction(tts_action)
 
-        play_tts_action = QAction("&Play TTS Audio", self)
+        play_tts_action = QAction(tr("&Play TTS Audio"), self)
         play_tts_action.setShortcut(QKeySequence("Ctrl+P"))
         play_tts_action.triggered.connect(self._on_play_tts_audio)
         sub_menu.addAction(play_tts_action)
 
-        regen_audio_action = QAction("&Regenerate Audio from Timeline", self)
+        regen_audio_action = QAction(tr("&Regenerate Audio from Timeline"), self)
         regen_audio_action.setShortcut(QKeySequence("Ctrl+R"))
         regen_audio_action.triggered.connect(self._on_regenerate_audio)
         sub_menu.addAction(regen_audio_action)
 
-        clear_action = QAction("&Clear Subtitles", self)
+        clear_action = QAction(tr("&Clear Subtitles"), self)
         clear_action.triggered.connect(self._on_clear_subtitles)
         sub_menu.addAction(clear_action)
 
         sub_menu.addSeparator()
 
-        translate_action = QAction("&Translate Track...", self)
+        translate_action = QAction(tr("&Translate Track..."), self)
         translate_action.triggered.connect(self._on_translate_track)
         sub_menu.addAction(translate_action)
 
         sub_menu.addSeparator()
 
-        style_action = QAction("Default &Style...", self)
+        style_action = QAction(tr("Default &Style..."), self)
         style_action.triggered.connect(self._on_edit_default_style)
         sub_menu.addAction(style_action)
 
         sub_menu.addSeparator()
 
-        edit_position_action = QAction("Edit Subtitle &Position", self)
+        edit_position_action = QAction(tr("Edit Subtitle &Position"), self)
         edit_position_action.setCheckable(True)
         edit_position_action.setShortcut(QKeySequence("Ctrl+E"))
         edit_position_action.triggered.connect(self._on_toggle_position_edit)
@@ -377,16 +382,16 @@ class MainWindow(QMainWindow):
         self._edit_position_action = edit_position_action  # Store reference
 
         # Help menu
-        help_menu = menubar.addMenu("&Help")
+        help_menu = menubar.addMenu(tr("&Help"))
 
-        screenshot_action = QAction("Take &Screenshot", self)
+        screenshot_action = QAction(tr("Take &Screenshot"), self)
         screenshot_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         screenshot_action.triggered.connect(self._on_take_screenshot)
         help_menu.addAction(screenshot_action)
 
         help_menu.addSeparator()
 
-        about_action = QAction("&About", self)
+        about_action = QAction(tr("&About"), self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
 
@@ -408,9 +413,13 @@ class MainWindow(QMainWindow):
         sc_frame_right = QShortcut(QKeySequence("Shift+Right"), self)
         sc_frame_right.activated.connect(lambda: self._seek_frame_relative(1))
 
-        # Delete → delete selected subtitle
+        # Delete → delete selected clip/subtitle
         sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
-        sc_del.activated.connect(self._on_delete_selected_subtitle)
+        sc_del.activated.connect(self._on_delete_selected)
+
+        # Ctrl+B → split clip at playhead
+        sc_split = QShortcut(QKeySequence("Ctrl+B"), self)
+        sc_split.activated.connect(lambda: self._on_split_clip(self._timeline._playhead_ms))
 
         # Ctrl+Plus → Zoom in timeline
         sc_zoom_in = QShortcut(QKeySequence("Ctrl+="), self)
@@ -566,7 +575,15 @@ class MainWindow(QMainWindow):
             if target is not None:
                 self._on_timeline_seek(target)
 
-    def _on_delete_selected_subtitle(self) -> None:
+    def _on_delete_selected(self) -> None:
+        # Check if a video clip is selected in timeline
+        sel_clip = self._timeline._selected_clip_index
+        if sel_clip >= 0 and self._project.video_clip_track:
+            if len(self._project.video_clip_track.clips) > 1:
+                self._on_delete_clip(sel_clip)
+                self._timeline.select_clip(-1)
+                return
+
         # Check if an image overlay is selected in timeline
         sel_img = self._timeline._selected_overlay_index
         if sel_img >= 0:
@@ -615,6 +632,12 @@ class MainWindow(QMainWindow):
         self._timeline.image_overlay_selected.connect(self._on_image_overlay_selected)
         self._timeline.image_overlay_resize.connect(self._on_image_overlay_resize)
 
+        # Video clip signals
+        self._timeline.clip_selected.connect(self._on_clip_selected)
+        self._timeline.clip_split_requested.connect(self._on_split_clip)
+        self._timeline.clip_deleted.connect(self._on_delete_clip)
+        self._timeline.clip_trimmed.connect(self._on_clip_trimmed)
+
         # PIP drag on video player
         self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
 
@@ -657,6 +680,13 @@ class MainWindow(QMainWindow):
         io_track = self._project.image_overlay_track
         self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
         self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
+        # Sync video clip track
+        clip_track = self._project.video_clip_track
+        self._timeline.set_clip_track(clip_track)
+        if clip_track:
+            output_dur = clip_track.output_duration_ms
+            self._timeline.set_duration(output_dur, has_video=self._project.has_video)
+            self._controls.set_output_duration(output_dur)
         # Notify autosave of edits
         self._autosave.notify_edit()
 
@@ -699,7 +729,7 @@ class MainWindow(QMainWindow):
             old_text = track[index].text
             cmd = EditTextCommand(track, index, old_text, new_text)
             self._undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Text updated (segment {index + 1})")
+            self.statusBar().showMessage(f"{tr('Text updated')} ({tr('segment')} {index + 1})")
 
     def _on_time_edited(self, index: int, start_ms: int, end_ms: int) -> None:
         track = self._project.subtitle_track
@@ -707,7 +737,7 @@ class MainWindow(QMainWindow):
             seg = track[index]
             cmd = EditTimeCommand(track, index, seg.start_ms, seg.end_ms, start_ms, end_ms)
             self._undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Time updated (segment {index + 1})")
+            self.statusBar().showMessage(f"{tr('Time updated')} ({tr('segment')} {index + 1})")
 
     def _on_segment_volume_edited(self, index: int, volume: float) -> None:
         track = self._project.subtitle_track
@@ -715,13 +745,13 @@ class MainWindow(QMainWindow):
             old_volume = track[index].volume
             cmd = EditVolumeCommand(track, index, old_volume, volume)
             self._undo_stack.push(cmd)
-            self.statusBar().showMessage(f"Volume updated: {int(volume * 100)}% (segment {index + 1})")
+            self.statusBar().showMessage(f"{tr('Volume updated')}: {int(volume * 100)}% ({tr('segment')} {index + 1})")
 
     def _on_segment_add(self, start_ms: int, end_ms: int) -> None:
         seg = SubtitleSegment(start_ms, end_ms, "New subtitle")
         cmd = AddSegmentCommand(self._project.subtitle_track, seg)
         self._undo_stack.push(cmd)
-        self.statusBar().showMessage("Subtitle added")
+        self.statusBar().showMessage(tr("Subtitle added"))
 
     def _on_segment_delete(self, index: int) -> None:
         track = self._project.subtitle_track
@@ -729,7 +759,7 @@ class MainWindow(QMainWindow):
             seg = track[index]
             cmd = DeleteSegmentCommand(track, index, seg)
             self._undo_stack.push(cmd)
-            self.statusBar().showMessage("Subtitle deleted")
+            self.statusBar().showMessage(tr("Subtitle deleted"))
 
     def _on_timeline_segment_selected(self, index: int) -> None:
         if self._project.has_subtitles and 0 <= index < len(self._project.subtitle_track):
@@ -753,7 +783,7 @@ class MainWindow(QMainWindow):
             # Refresh subtitle panel
             self._subtitle_panel.set_track(track)
 
-            self.statusBar().showMessage(f"Segment {index + 1} moved")
+            self.statusBar().showMessage(f"{tr('segment')} {index + 1} {tr('moved')}")
 
     def _on_timeline_audio_moved(self, new_start_ms: int, new_duration_ms: int) -> None:
         """Handle audio track moved/resized in timeline."""
@@ -946,7 +976,7 @@ class MainWindow(QMainWindow):
             self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
             self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
             self._autosave.notify_edit()
-            self.statusBar().showMessage("Image overlay deleted")
+            self.statusBar().showMessage(tr("Image overlay deleted"))
 
     def _on_pip_position_changed(self, index: int, x_pct: float, y_pct: float, scale_pct: float) -> None:
         """Handle PIP image dragged/scaled on video player."""
@@ -962,12 +992,12 @@ class MainWindow(QMainWindow):
 
     def _on_split_subtitle(self) -> None:
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "No subtitles to split.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("No subtitles to split."))
             return
 
         rows = self._subtitle_panel._table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "No Selection", "Select a subtitle to split.")
+            QMessageBox.information(self, tr("No Selection"), tr("Select a subtitle to split."))
             return
 
         index = rows[0].row()
@@ -980,8 +1010,8 @@ class MainWindow(QMainWindow):
 
         if split_ms <= seg.start_ms or split_ms >= seg.end_ms:
             QMessageBox.warning(
-                self, "Invalid Position",
-                "Move the playhead inside the selected subtitle to split it."
+                self, tr("Invalid Position"),
+                tr("Move the playhead inside the selected subtitle to split it.")
             )
             return
 
@@ -1000,22 +1030,22 @@ class MainWindow(QMainWindow):
 
         cmd = SplitCommand(track, index, split_ms, seg, first, second)
         self._undo_stack.push(cmd)
-        self.statusBar().showMessage(f"Segment {index + 1} split at {split_ms}ms")
+        self.statusBar().showMessage(f"{tr('segment')} {index + 1} {tr('split at')} {split_ms}ms")
 
     def _on_merge_subtitles(self) -> None:
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "No subtitles to merge.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("No subtitles to merge."))
             return
 
         rows = self._subtitle_panel._table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "No Selection", "Select a subtitle to merge with the next one.")
+            QMessageBox.information(self, tr("No Selection"), tr("Select a subtitle to merge with the next one."))
             return
 
         index = rows[0].row()
         track = self._project.subtitle_track
         if index < 0 or index + 1 >= len(track):
-            QMessageBox.warning(self, "Cannot Merge", "Select a subtitle that has a following subtitle.")
+            QMessageBox.warning(self, tr("Cannot Merge"), tr("Select a subtitle that has a following subtitle."))
             return
 
         first = track[index]
@@ -1025,15 +1055,15 @@ class MainWindow(QMainWindow):
 
         cmd = MergeCommand(track, index, first, second, merged)
         self._undo_stack.push(cmd)
-        self.statusBar().showMessage(f"Segments {index + 1}-{index + 2} merged")
+        self.statusBar().showMessage(f"{tr('Segments')} {index + 1}-{index + 2} {tr('merged')}")
 
     def _on_batch_shift(self) -> None:
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "No subtitles to shift.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("No subtitles to shift."))
             return
 
         offset, ok = QInputDialog.getInt(
-            self, "Batch Shift", "Offset (ms, negative=earlier):", 0, -60000, 60000, 100
+            self, tr("Batch Shift"), tr("Offset (ms, negative=earlier):"), 0, -60000, 60000, 100
         )
         if not ok or offset == 0:
             return
@@ -1047,7 +1077,7 @@ class MainWindow(QMainWindow):
         dialog = PreferencesDialog(self)
         if dialog.exec():
             # Settings are saved in the dialog, just show a message
-            self.statusBar().showMessage("Preferences updated")
+            self.statusBar().showMessage(tr("Preferences updated"))
             # Note: Some settings (like theme) require restart
 
     # ------------------------------------------------------------ Track management
@@ -1071,7 +1101,7 @@ class MainWindow(QMainWindow):
 
     def _on_track_removed(self, index: int) -> None:
         if len(self._project.subtitle_tracks) <= 1:
-            QMessageBox.warning(self, "Cannot Remove", "At least one track must remain.")
+            QMessageBox.warning(self, tr("Cannot Remove"), tr("At least one track must remain."))
             return
         if 0 <= index < len(self._project.subtitle_tracks):
             self._project.subtitle_tracks.pop(index)
@@ -1092,7 +1122,7 @@ class MainWindow(QMainWindow):
         settings = QSettings()
         last_dir = settings.value("last_video_dir", "")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Video", last_dir, VIDEO_FILTER
+            self, tr("Open Video"), last_dir, VIDEO_FILTER
         )
         if not path:
             return
@@ -1131,9 +1161,9 @@ class MainWindow(QMainWindow):
                 self._temp_video_path = converted
             else:
                 QMessageBox.critical(
-                    self, "Conversion Failed",
-                    f"Could not convert {path.suffix} to MP4 for playback.\n"
-                    "Make sure FFmpeg is installed."
+                    self, tr("Conversion Failed"),
+                    f"{tr('Could not convert')} {path.suffix} {tr('to MP4 for playback.')}\n"
+                    f"{tr('Make sure FFmpeg is installed.')}"
                 )
                 return
 
@@ -1156,7 +1186,7 @@ class MainWindow(QMainWindow):
             self._timeline.clear_waveform()
 
         self.setWindowTitle(f"{path.name} – {APP_NAME}")
-        self.statusBar().showMessage(f"Loaded: {path.name}")
+        self.statusBar().showMessage(f"{tr('Loaded')}: {path.name}")
 
     def _convert_to_mp4(self, source: Path) -> Path | None:
         """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
@@ -1179,7 +1209,7 @@ class MainWindow(QMainWindow):
             str(tmp),
         ]
 
-        progress = QProgressDialog(f"Converting {source.name} to MP4...", "Cancel", 0, 0, self)
+        progress = QProgressDialog(f"{tr('Converting')} {source.name} {tr('to MP4...')}", tr("Cancel"), 0, 0, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.show()
@@ -1192,7 +1222,7 @@ class MainWindow(QMainWindow):
             )
             progress.close()
             if result.returncode == 0 and tmp.is_file():
-                self.statusBar().showMessage(f"Converted {source.suffix} to MP4 for playback")
+                self.statusBar().showMessage(f"{tr('Converted')} {source.suffix} {tr('to MP4 for playback')}")
                 return tmp
             else:
                 # If copy codec fails, try re-encoding
@@ -1209,7 +1239,7 @@ class MainWindow(QMainWindow):
                     "-y",
                     str(tmp),
                 ]
-                progress2 = QProgressDialog(f"Re-encoding {source.name}...", None, 0, 0, self)
+                progress2 = QProgressDialog(f"{tr('Re-encoding')} {source.name}...", None, 0, 0, self)
                 progress2.setWindowModality(Qt.WindowModality.WindowModal)
                 progress2.setMinimumDuration(0)
                 progress2.show()
@@ -1238,17 +1268,25 @@ class MainWindow(QMainWindow):
         # Only update timeline if duration > 0; ignore durationChanged(0)
         # which would overwrite a TTS-derived timeline duration.
         if duration_ms > 0:
-            self._timeline.set_duration(duration_ms, has_video=True)
+            # Initialize clip track if not already set
+            if self._project.video_clip_track is None:
+                self._project.video_clip_track = VideoClipTrack.from_full_video(duration_ms)
+            output_dur = self._project.video_clip_track.output_duration_ms
+            self._timeline.set_duration(output_dur, has_video=True)
+            self._timeline.set_clip_track(self._project.video_clip_track)
+            # Enable output time mode on controls
+            self._controls.enable_output_time_mode()
+            self._controls.set_output_duration(output_dur)
 
     def _on_generate_subtitles(self) -> None:
         if not self._project.has_video:
-            QMessageBox.warning(self, "No Video", "Please open a video file first.")
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
 
         if not find_ffmpeg():
             QMessageBox.critical(
-                self, "FFmpeg Missing",
-                "FFmpeg is required for subtitle generation but was not found."
+                self, tr("FFmpeg Missing"),
+                tr("FFmpeg is required for subtitle generation but was not found.")
             )
             return
 
@@ -1264,8 +1302,8 @@ class MainWindow(QMainWindow):
         if not find_ffmpeg():
             QMessageBox.critical(
                 self,
-                "FFmpeg Missing",
-                "FFmpeg is required for TTS generation but was not found."
+                tr("FFmpeg Missing"),
+                tr("FFmpeg is required for TTS generation but was not found.")
             )
             return
 
@@ -1280,7 +1318,7 @@ class MainWindow(QMainWindow):
 
             if track and len(track) > 0:
                 # Add as new track
-                track.name = f"TTS Track {len(self._project.subtitle_tracks)}"
+                track.name = f"{tr('TTS Track')} {len(self._project.subtitle_tracks)}"
                 track.audio_path = audio_path  # Store audio path for playback
 
                 # Set audio duration for timeline visualization
@@ -1312,7 +1350,7 @@ class MainWindow(QMainWindow):
                 self._refresh_all_widgets()
 
                 self.statusBar().showMessage(
-                    f"TTS generated: {len(track)} segments, audio: {audio_path}"
+                    f"{tr('TTS generated')}: {len(track)} {tr('segments')}"
                 )
 
     def _on_play_tts_audio(self) -> None:
@@ -1324,9 +1362,9 @@ class MainWindow(QMainWindow):
         if not current_track or not current_track.audio_path:
             QMessageBox.information(
                 self,
-                "No TTS Audio",
-                "The current track doesn't have TTS audio.\n\n"
-                "Generate TTS audio first (Ctrl+T)."
+                tr("No TTS Audio"),
+                tr("The current track doesn't have TTS audio.") + "\n\n"
+                + tr("Generate TTS audio first (Ctrl+T).")
             )
             return
 
@@ -1335,9 +1373,9 @@ class MainWindow(QMainWindow):
         if not audio_path.exists():
             QMessageBox.warning(
                 self,
-                "Audio File Not Found",
-                f"TTS audio file not found:\n{audio_path}\n\n"
-                "It may have been deleted."
+                tr("Audio File Not Found"),
+                f"{tr('TTS audio file not found')}:\n{audio_path}\n\n"
+                f"{tr('It may have been deleted.')}"
             )
             return
 
@@ -1350,7 +1388,7 @@ class MainWindow(QMainWindow):
         self._tts_player.play()
 
         self.statusBar().showMessage(
-            f"Playing TTS audio: {current_track.name}"
+            f"{tr('Playing TTS audio')}: {current_track.name}"
         )
 
     def _on_regenerate_audio(self) -> None:
@@ -1365,20 +1403,19 @@ class MainWindow(QMainWindow):
         if not audio_segments:
             QMessageBox.information(
                 self,
-                "No Audio Segments",
-                "The current track doesn't have audio segments.\n\n"
-                "Generate TTS audio first (Ctrl+T)."
+                tr("No Audio Segments"),
+                tr("The current track doesn't have audio segments.") + "\n\n"
+                + tr("Generate TTS audio first (Ctrl+T).")
             )
             return
 
         # Confirm regeneration
         reply = QMessageBox.question(
             self,
-            "Regenerate Audio?",
-            f"Regenerate merged audio based on current timeline positions?\n\n"
-            f"This will create a new audio file with segments positioned "
-            f"according to the timeline.\n\n"
-            f"Segments: {len(audio_segments)}",
+            tr("Regenerate Audio?"),
+            f"{tr('Regenerate merged audio based on current timeline positions?')}\n\n"
+            f"{tr('This will create a new audio file with segments positioned according to the timeline.')}\n\n"
+            f"{tr('Segments')}: {len(audio_segments)}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
         )
@@ -1388,7 +1425,7 @@ class MainWindow(QMainWindow):
 
         try:
             # Show progress
-            self.statusBar().showMessage("Regenerating audio from timeline...")
+            self.statusBar().showMessage(tr("Regenerating audio from timeline..."))
             QApplication.processEvents()
 
             # Prepare output path
@@ -1432,27 +1469,27 @@ class MainWindow(QMainWindow):
             self._on_player_position_changed(current_pos)
 
             self.statusBar().showMessage(
-                f"Audio regenerated: {len(audio_segments)} segments, "
+                f"{tr('Audio regenerated')}: {len(audio_segments)} {tr('segments')}, "
                 f"{total_duration_ms/1000:.1f}s",
                 5000
             )
 
             QMessageBox.information(
                 self,
-                "Audio Regenerated",
-                f"Audio has been regenerated successfully!\n\n"
-                f"Segments: {len(audio_segments)}\n"
-                f"Duration: {total_duration_ms/1000:.1f}s\n\n"
-                f"Play to hear the updated audio."
+                tr("Audio Regenerated"),
+                f"{tr('Audio has been regenerated successfully!')}\n\n"
+                f"{tr('Segments')}: {len(audio_segments)}\n"
+                f"{tr('Duration')}: {total_duration_ms/1000:.1f}s\n\n"
+                f"{tr('Play to hear the updated audio.')}"
             )
 
         except Exception as e:
             QMessageBox.critical(
                 self,
-                "Regeneration Failed",
-                f"Failed to regenerate audio:\n\n{e}"
+                tr("Regeneration Failed"),
+                f"{tr('Failed to regenerate audio')}:\n\n{e}"
             )
-            self.statusBar().showMessage("Audio regeneration failed", 5000)
+            self.statusBar().showMessage(tr("Audio regeneration failed"), 5000)
 
     def _on_toggle_position_edit(self, checked: bool) -> None:
         """Toggle subtitle position editing mode."""
@@ -1460,7 +1497,7 @@ class MainWindow(QMainWindow):
 
         if checked:
             self.statusBar().showMessage(
-                "Edit Mode: Drag subtitle to reposition. Press Ctrl+E again to save."
+                tr("Edit Mode: Drag subtitle to reposition. Press Ctrl+E again to save.")
             )
         else:
             # Save position when exiting edit mode
@@ -1483,12 +1520,12 @@ class MainWindow(QMainWindow):
                     self._on_player_position_changed(current_pos)
 
                     self.statusBar().showMessage(
-                        f"Subtitle position saved: ({x}, {y})"
+                        f"{tr('Subtitle position saved')}: ({x}, {y})"
                     )
                     # Mark as edited for autosave
                     self._on_document_edited()
             else:
-                self.statusBar().showMessage("Edit Mode OFF")
+                self.statusBar().showMessage(tr("Edit Mode OFF"))
 
     def _apply_subtitle_track(self, track: SubtitleTrack) -> None:
         self._project.subtitle_track = track
@@ -1498,7 +1535,7 @@ class MainWindow(QMainWindow):
         self._timeline.set_track(track)
         self._refresh_track_selector()
         self.statusBar().showMessage(
-            f"Subtitles loaded: {len(track)} segments"
+            f"{tr('Subtitles loaded')}: {len(track)} {tr('segments')}"
         )
 
     def _on_clear_subtitles(self) -> None:
@@ -1507,12 +1544,12 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(None)
         self._subtitle_panel.set_track(None)
         self._timeline.set_track(None)
-        self.statusBar().showMessage("Subtitles cleared")
+        self.statusBar().showMessage(tr("Subtitles cleared"))
 
     def _on_translate_track(self) -> None:
         """Open the translate dialog and process the translation."""
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to translate.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to translate."))
             return
 
         # Available languages
@@ -1534,23 +1571,23 @@ class MainWindow(QMainWindow):
                     self._project.active_track_index = len(self._project.subtitle_tracks) - 1
                     self._refresh_track_selector()
                     self._on_track_changed(self._project.active_track_index)
-                    self.statusBar().showMessage(f"Added translated track: {translated_track.name}")
+                    self.statusBar().showMessage(f"{tr('Added translated track')}: {translated_track.name}")
                 else:
                     # Replace current track
                     self._project.subtitle_track = translated_track
                     self._refresh_all_widgets()
-                    self.statusBar().showMessage("Track translated")
+                    self.statusBar().showMessage(tr("Track translated"))
 
                 # Notify autosave
                 self._autosave.notify_edit()
 
     def _on_edit_default_style(self) -> None:
         from src.ui.dialogs.style_dialog import StyleDialog
-        dialog = StyleDialog(self._project.default_style, parent=self, title="Default Subtitle Style")
+        dialog = StyleDialog(self._project.default_style, parent=self, title=tr("Default Subtitle Style"))
         if dialog.exec():
             self._project.default_style = dialog.result_style()
             self._video_widget.set_default_style(self._project.default_style)
-            self.statusBar().showMessage("Default style updated")
+            self.statusBar().showMessage(tr("Default style updated"))
 
     def _on_edit_segment_style(self, index: int) -> None:
         if not self._project.has_subtitles or index < 0 or index >= len(self._project.subtitle_track):
@@ -1558,19 +1595,19 @@ class MainWindow(QMainWindow):
         from src.ui.dialogs.style_dialog import StyleDialog
         seg = self._project.subtitle_track[index]
         current_style = seg.style if seg.style is not None else self._project.default_style
-        dialog = StyleDialog(current_style, parent=self, title=f"Style - Segment {index + 1}")
+        dialog = StyleDialog(current_style, parent=self, title=f"{tr('Style')} - {tr('Segment')} {index + 1}")
         if dialog.exec():
             old_style = seg.style
             new_style = dialog.result_style()
             cmd = EditStyleCommand(self._project.subtitle_track, index, old_style, new_style)
             self._undo_stack.push(cmd)
             self._video_widget.set_default_style(self._project.default_style)
-            self.statusBar().showMessage(f"Style updated (segment {index + 1})")
+            self.statusBar().showMessage(f"{tr('Style updated')} ({tr('segment')} {index + 1})")
 
     def _on_import_srt(self, path=None) -> None:
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Import SRT", "", "SRT Files (*.srt);;All Files (*)"
+                self, tr("Import SRT"), "", "SRT Files (*.srt);;All Files (*)"
             )
             if not path:
                 return
@@ -1582,12 +1619,12 @@ class MainWindow(QMainWindow):
             self._apply_subtitle_track(track)
             self._autosave.notify_edit()
         except Exception as e:
-            QMessageBox.critical(self, "Import Error", str(e))
+            QMessageBox.critical(self, tr("Import Error"), str(e))
 
     def _on_import_srt_new_track(self, path=None) -> None:
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Import SRT to New Track", "", "SRT Files (*.srt);;All Files (*)"
+                self, tr("Import SRT to New Track"), "", "SRT Files (*.srt);;All Files (*)"
             )
             if not path:
                 return
@@ -1603,36 +1640,36 @@ class MainWindow(QMainWindow):
             self._refresh_track_selector()
             self._on_track_changed(self._project.active_track_index)
             self._autosave.notify_edit()
-            self.statusBar().showMessage(f"Imported to new track: {track_name}")
+            self.statusBar().showMessage(f"{tr('Imported to new track')}: {track_name}")
         except Exception as e:
-            QMessageBox.critical(self, "Import Error", str(e))
+            QMessageBox.critical(self, tr("Import Error"), str(e))
 
     def _on_export_srt(self) -> None:
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to export.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to export."))
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export SRT", "", "SRT Files (*.srt);;All Files (*)"
+            self, tr("Export SRT"), "", "SRT Files (*.srt);;All Files (*)"
         )
         if not path:
             return
 
         try:
             export_srt(self._project.subtitle_track, Path(path))
-            self.statusBar().showMessage(f"Exported: {path}")
+            self.statusBar().showMessage(f"{tr('Exported')}: {path}")
         except OSError as e:
-            QMessageBox.critical(self, "Export Error", str(e))
+            QMessageBox.critical(self, tr("Export Error"), str(e))
 
     def _on_export_video(self) -> None:
         if not self._project.has_video:
-            QMessageBox.warning(self, "No Video", "Please open a video file first.")
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to burn in.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to burn in."))
             return
         if not find_ffmpeg():
-            QMessageBox.critical(self, "FFmpeg Missing", "FFmpeg is required for video export.")
+            QMessageBox.critical(self, tr("FFmpeg Missing"), tr("FFmpeg is required for video export."))
             return
 
         from src.ui.dialogs.export_dialog import ExportDialog
@@ -1641,6 +1678,12 @@ class MainWindow(QMainWindow):
             overlay_path = Path(self._overlay_template.image_path)
         io_track = self._project.image_overlay_track
         img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
+        # Pass video clips for multi-clip export (skip if single full-video clip)
+        clip_track = self._project.video_clip_track
+        video_clips = None
+        if clip_track and not clip_track.is_full_video(self._project.duration_ms):
+            video_clips = clip_track
+
         dialog = ExportDialog(
             self._project.video_path,
             self._project.subtitle_track,
@@ -1648,18 +1691,19 @@ class MainWindow(QMainWindow):
             video_has_audio=self._project.video_has_audio,
             overlay_path=overlay_path,
             image_overlays=img_overlays,
+            video_clips=video_clips,
         )
         dialog.exec()
 
     def _on_batch_export(self) -> None:
         if not self._project.has_video:
-            QMessageBox.warning(self, "No Video", "Please open a video file first.")
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
         if not self._project.has_subtitles:
-            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to burn in.")
+            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to burn in."))
             return
         if not find_ffmpeg():
-            QMessageBox.critical(self, "FFmpeg Missing", "FFmpeg is required for video export.")
+            QMessageBox.critical(self, tr("FFmpeg Missing"), tr("FFmpeg is required for video export."))
             return
 
         overlay_path = None
@@ -1685,20 +1729,20 @@ class MainWindow(QMainWindow):
         """Apply an overlay template to the video player."""
         self._overlay_template = template
         self._video_widget.set_overlay(template.image_path, template.opacity)
-        self.statusBar().showMessage(f"Template applied: {template.name}")
+        self.statusBar().showMessage(f"{tr('Template applied')}: {template.name}")
 
     def _on_template_cleared(self) -> None:
         """Remove the overlay template from the video player."""
         self._overlay_template = None
         self._video_widget.clear_overlay()
-        self.statusBar().showMessage("Template cleared")
+        self.statusBar().showMessage(tr("Template cleared"))
 
     def _on_save_project(self) -> None:
         if not self._project.has_video:
-            QMessageBox.warning(self, "No Video", "Please open a video file first.")
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
+            self, tr("Save Project"), "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
         )
         if not path:
             return
@@ -1709,14 +1753,14 @@ class MainWindow(QMainWindow):
             self._current_project_path = path
             self._autosave.set_active_file(path)
             self._update_recent_menu()
-            self.statusBar().showMessage(f"Project saved: {path}")
+            self.statusBar().showMessage(f"{tr('Project saved')}: {path}")
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", str(e))
+            QMessageBox.critical(self, tr("Save Error"), str(e))
 
     def _on_load_project(self, path=None) -> None:
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Load Project", "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
+                self, tr("Load Project"), "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
             )
             if not path:
                 return
@@ -1752,14 +1796,28 @@ class MainWindow(QMainWindow):
                 self._timeline.set_image_overlay_track(io_track)
                 self._video_widget.set_image_overlay_track(io_track)
 
+            # Apply video clip track
+            if project.video_clip_track:
+                self._timeline.set_clip_track(project.video_clip_track)
+                self._controls.enable_output_time_mode()
+                self._controls.set_output_duration(project.video_clip_track.output_duration_ms)
+
             self._update_recent_menu()
-            self.statusBar().showMessage(f"Project loaded: {path}")
+            self.statusBar().showMessage(f"{tr('Project loaded')}: {path}")
         except Exception as e:
-            QMessageBox.critical(self, "Load Error", str(e))
+            QMessageBox.critical(self, tr("Load Error"), str(e))
 
     def _on_timeline_seek(self, position_ms: int) -> None:
         if self._project.has_video:
-            self._player.setPosition(position_ms)
+            clip_track = self._project.video_clip_track
+            if clip_track:
+                source_ms = clip_track.timeline_to_source(position_ms)
+                if source_ms is not None:
+                    self._player.setPosition(source_ms)
+                else:
+                    self._player.setPosition(position_ms)
+            else:
+                self._player.setPosition(position_ms)
             self._sync_tts_playback()
         else:
             # No video - directly seek TTS player
@@ -1773,15 +1831,48 @@ class MainWindow(QMainWindow):
             self._timeline.set_playhead(position_ms)
 
     def _on_position_changed_by_user(self, position_ms: int) -> None:
-        """Handle position change from playback controls slider."""
+        """Handle position change from playback controls slider (output time)."""
+        clip_track = self._project.video_clip_track
+        if clip_track:
+            source_ms = clip_track.timeline_to_source(position_ms)
+            if source_ms is not None:
+                self._player.setPosition(source_ms)
+            self._timeline.set_playhead(position_ms)
+        else:
+            self._player.setPosition(position_ms)
         self._sync_tts_playback()
 
     def _on_player_position_changed(self, position_ms: int) -> None:
-        """Handle video player position change."""
-        # If video is loaded, use video position
-        if self._project.has_video:
+        """Handle video player position change (source_ms from QMediaPlayer)."""
+        if not self._project.has_video:
+            return
+
+        clip_track = self._project.video_clip_track
+        if clip_track:
+            timeline_ms = clip_track.source_to_timeline(position_ms)
+            if timeline_ms is None:
+                # Source position is in a deleted region — skip to next clip
+                next_in = clip_track.next_clip_source_in(position_ms)
+                if next_in is not None:
+                    self._player.setPosition(next_in)
+                return
+            self._timeline.set_playhead(timeline_ms)
+            self._controls.set_output_position(timeline_ms)
+            self._video_widget._update_subtitle(timeline_ms)
+
+            # Auto-skip at clip boundaries
+            result = clip_track.clip_at_timeline(timeline_ms)
+            if result is not None:
+                idx, clip = result
+                # Calculate this clip's end in source time
+                clip_source_end = clip.source_out_ms
+                if abs(position_ms - clip_source_end) < 50:
+                    # Near clip end — check for next clip
+                    if idx + 1 < len(clip_track.clips):
+                        next_clip = clip_track.clips[idx + 1]
+                        self._player.setPosition(next_clip.source_in_ms)
+        else:
             self._timeline.set_playhead(position_ms)
-            # Update subtitle display based on current position
             self._video_widget._update_subtitle(position_ms)
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
@@ -1805,7 +1896,81 @@ class MainWindow(QMainWindow):
                 self._video_widget._update_subtitle(timeline_pos)
 
     def _on_player_error(self, error, error_string: str) -> None:
-        self.statusBar().showMessage(f"Player error: {error_string}")
+        self.statusBar().showMessage(f"{tr('Player error')}: {error_string}")
+
+    # -------------------------------------------------------- Video clip editing
+
+    def _on_clip_selected(self, index: int) -> None:
+        """Handle clip selection from timeline."""
+        self._timeline.select_clip(index)
+
+    def _on_split_clip(self, timeline_ms: int) -> None:
+        """Split clip at the given timeline position (Ctrl+B or context menu)."""
+        clip_track = self._project.video_clip_track
+        if not clip_track:
+            return
+
+        result = clip_track.clip_at_timeline(timeline_ms)
+        if result is None:
+            return
+
+        clip_idx, clip = result
+        # Calculate split point in source time
+        offset = sum(c.duration_ms for c in clip_track.clips[:clip_idx])
+        local_ms = timeline_ms - offset
+        split_source = clip.source_in_ms + local_ms
+
+        # Don't split at very edges
+        if split_source <= clip.source_in_ms + 50 or split_source >= clip.source_out_ms - 50:
+            return
+
+        from src.models.video_clip import VideoClip
+        original = clip
+        first = VideoClip(clip.source_in_ms, split_source)
+        second = VideoClip(split_source, clip.source_out_ms)
+
+        cmd = SplitClipCommand(clip_track, clip_idx, original, first, second)
+        self._undo_stack.push(cmd)
+        self._refresh_all_widgets()
+        self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms")
+
+    def _on_delete_clip(self, clip_index: int) -> None:
+        """Delete a video clip with subtitle ripple."""
+        clip_track = self._project.video_clip_track
+        if not clip_track or clip_index < 0 or clip_index >= len(clip_track.clips):
+            return
+        if len(clip_track.clips) <= 1:
+            self.statusBar().showMessage(tr("Cannot delete the last clip"))
+            return
+
+        clip = clip_track.clips[clip_index]
+        # Calculate clip's timeline range
+        clip_start_tl = sum(c.duration_ms for c in clip_track.clips[:clip_index])
+        clip_end_tl = clip_start_tl + clip.duration_ms
+
+        sub_track = self._project.subtitle_track
+        cmd = DeleteClipCommand(
+            clip_track, clip_index, clip, sub_track, clip_start_tl, clip_end_tl,
+        )
+        self._undo_stack.push(cmd)
+        self._timeline.select_clip(-1)
+        self._refresh_all_widgets()
+        self.statusBar().showMessage(f"{tr('Deleted clip')} {clip_index + 1}")
+
+    def _on_clip_trimmed(self, clip_index: int, new_source_in: int, new_source_out: int) -> None:
+        """Handle clip trim from timeline drag."""
+        clip_track = self._project.video_clip_track
+        if not clip_track or clip_index < 0 or clip_index >= len(clip_track.clips):
+            return
+
+        clip = clip_track.clips[clip_index]
+        # clip is already reverted to original values by timeline mouseReleaseEvent
+        old_in = clip.source_in_ms
+        old_out = clip.source_out_ms
+
+        cmd = TrimClipCommand(clip_track, clip_index, old_in, old_out, new_source_in, new_source_out)
+        self._undo_stack.push(cmd)
+        self._refresh_all_widgets()
 
     def _on_take_screenshot(self) -> None:
         """Capture a screenshot of the main window for debugging."""
@@ -1828,18 +1993,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(
                 self,
-                "Screenshot Failed",
-                f"Failed to capture screenshot:\n{e}"
+                tr("Screenshot Failed"),
+                f"{tr('Failed to capture screenshot')}:\n{e}"
             )
             print(f"❌ Screenshot error: {e}")
 
     def _on_about(self) -> None:
         QMessageBox.about(
             self,
-            f"About {APP_NAME}",
+            f"{tr('About')} {APP_NAME}",
             f"{APP_NAME} v{APP_VERSION}\n\n"
-            "Video subtitle editor with Whisper-based\n"
-            "automatic subtitle generation.",
+            f"{tr('Video subtitle editor with Whisper-based automatic subtitle generation.')}",
         )
 
     # --------------------------------------------------------- Lifecycle
@@ -1882,9 +2046,9 @@ class MainWindow(QMainWindow):
                         self._timeline.set_track(track)
                         self._refresh_track_selector()
 
-                    self.statusBar().showMessage("Project recovered successfully")
+                    self.statusBar().showMessage(tr("Project recovered successfully"))
                 except Exception as e:
-                    QMessageBox.critical(self, "Recovery Error", str(e))
+                    QMessageBox.critical(self, tr("Recovery Error"), str(e))
 
             # Clean up recovery files whether restored or discarded
             self._autosave.cleanup_recovery_files()
@@ -1895,7 +2059,7 @@ class MainWindow(QMainWindow):
 
         recent_files = self._autosave.get_recent_files()
         if not recent_files:
-            no_recent = QAction("No Recent Projects", self)
+            no_recent = QAction(tr("No Recent Projects"), self)
             no_recent.setEnabled(False)
             self._recent_menu.addAction(no_recent)
             return
@@ -1907,7 +2071,7 @@ class MainWindow(QMainWindow):
             self._recent_menu.addAction(action)
 
         self._recent_menu.addSeparator()
-        clear_action = QAction("Clear Recent Projects", self)
+        clear_action = QAction(tr("Clear Recent Projects"), self)
         clear_action.triggered.connect(self._on_clear_recent)
         self._recent_menu.addAction(clear_action)
 
@@ -1920,8 +2084,8 @@ class MainWindow(QMainWindow):
                 self._on_load_project(path)
             else:
                 QMessageBox.warning(
-                    self, "File Not Found",
-                    f"The file {path} no longer exists."
+                    self, tr("File Not Found"),
+                    f"{tr('The file')} {path} {tr('no longer exists.')}"
                 )
                 # Remove from recent list
                 self._autosave.get_recent_files()
@@ -1934,7 +2098,7 @@ class MainWindow(QMainWindow):
 
     def _on_autosave_completed(self, path: Path) -> None:
         """Called when an autosave operation completes."""
-        self.statusBar().showMessage(f"Autosaved: {path.name}", 2000)
+        self.statusBar().showMessage(f"{tr('Autosaved')}: {path.name}", 2000)
 
     def _on_document_edited(self) -> None:
         """Called when the document is edited (via undo stack)."""
@@ -1971,8 +2135,8 @@ class MainWindow(QMainWindow):
             if suffix == ".srt":
                 # Ask if they want to create a new track or replace current
                 result = QMessageBox.question(
-                    self, "Import SRT",
-                    "Do you want to import this SRT file as a new track?",
+                    self, tr("Import SRT"),
+                    tr("Do you want to import this SRT file as a new track?"),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes
                 )
@@ -2036,12 +2200,12 @@ class MainWindow(QMainWindow):
     def _on_waveform_finished(self, waveform_data) -> None:
         """Handle completed waveform computation."""
         self._timeline.set_waveform(waveform_data)
-        self.statusBar().showMessage("Waveform loaded", 3000)
+        self.statusBar().showMessage(tr("Waveform loaded"), 3000)
 
     def _on_waveform_error(self, message: str) -> None:
         """Handle waveform computation error (non-fatal)."""
         print(f"Warning: Waveform generation failed: {message}")
-        self.statusBar().showMessage("Waveform unavailable", 3000)
+        self.statusBar().showMessage(tr("Waveform unavailable"), 3000)
 
     def _stop_waveform_generation(self) -> None:
         """Cancel any in-progress waveform computation."""

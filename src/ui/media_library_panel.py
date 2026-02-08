@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models.media_item import MediaItem
+from src.utils.i18n import tr
 from src.services.media_library_service import MediaLibraryService
 from src.utils.config import MEDIA_FILTER, VIDEO_EXTENSIONS
 
@@ -150,7 +151,7 @@ class MediaLibraryPanel(QWidget):
         layout.setSpacing(6)
 
         # Import button
-        import_btn = QPushButton("+ PC에서 불러오기")
+        import_btn = QPushButton(tr("+ Import from PC"))
         import_btn.setStyleSheet(
             "QPushButton { background-color: #00bcd4; color: white; "
             "border: none; border-radius: 4px; padding: 8px; font-weight: bold; }"
@@ -165,7 +166,7 @@ class MediaLibraryPanel(QWidget):
         self._filter_group = QButtonGroup(self)
         self._filter_group.setExclusive(True)
 
-        for label, filter_val in [("전체", None), ("이미지", "image"), ("비디오", "video")]:
+        for label, filter_val in [(tr("All"), None), (tr("Images"), "image"), (tr("Videos"), "video")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setStyleSheet(
@@ -202,12 +203,12 @@ class MediaLibraryPanel(QWidget):
         # Bottom row: item count + clear all button
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
-        self._count_label = QLabel("내 미디어 (0)")
+        self._count_label = QLabel(f"{tr('My Media')} (0)")
         self._count_label.setStyleSheet("color: #999; font-size: 11px; padding: 2px;")
         bottom_row.addWidget(self._count_label)
         bottom_row.addStretch()
 
-        clear_btn = QPushButton("모두 비우기")
+        clear_btn = QPushButton(tr("Clear All"))
         clear_btn.setStyleSheet(
             "QPushButton { background: #444; color: #ccc; border: 1px solid #555; "
             "border-radius: 3px; padding: 3px 8px; font-size: 11px; }"
@@ -221,7 +222,7 @@ class MediaLibraryPanel(QWidget):
 
     def _on_import(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
-            self, "미디어 파일 불러오기", "", MEDIA_FILTER
+            self, tr("Import Media Files"), "", MEDIA_FILTER
         )
         if not files:
             return
@@ -257,26 +258,26 @@ class MediaLibraryPanel(QWidget):
         menu = QMenu(self)
 
         if item.media_type == "video":
-            open_action = menu.addAction("비디오 열기")
+            open_action = menu.addAction(tr("Open Video"))
             open_action.triggered.connect(
                 lambda: self.video_open_requested.emit(item.file_path)
             )
             menu.addSeparator()
 
         if item.media_type == "image":
-            insert_action = menu.addAction("타임라인에 삽입")
+            insert_action = menu.addAction(tr("Insert to Timeline"))
             insert_action.triggered.connect(
                 lambda: self.image_insert_to_timeline.emit(item.file_path)
             )
             menu.addSeparator()
 
-        fav_text = "즐겨찾기 해제" if item.favorite else "즐겨찾기"
+        fav_text = tr("Unfavorite") if item.favorite else tr("Favorite")
         fav_action = menu.addAction(fav_text)
         fav_action.triggered.connect(lambda: self._toggle_favorite(item_id))
 
         menu.addSeparator()
 
-        remove_action = menu.addAction("라이브러리에서 삭제")
+        remove_action = menu.addAction(tr("Remove from Library"))
         remove_action.triggered.connect(lambda: self._remove_item(item_id))
 
         menu.exec(pos)
@@ -294,8 +295,8 @@ class MediaLibraryPanel(QWidget):
         if not items:
             return
         reply = QMessageBox.question(
-            self, "모두 비우기",
-            f"미디어 라이브러리의 {len(items)}개 항목을 모두 삭제하시겠습니까?",
+            self, tr("Clear All"),
+            f"{len(items)} {tr('items will be removed from the media library. Continue?')}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -321,20 +322,20 @@ class MediaLibraryPanel(QWidget):
 
         row = 0
         if favorites:
-            fav_label = QLabel(f"즐겨찾기 ({len(favorites)})")
+            fav_label = QLabel(f"{tr('Favorites')} ({len(favorites)})")
             fav_label.setStyleSheet("color: #00bcd4; font-size: 12px; font-weight: bold;")
             self._grid_layout.addWidget(fav_label, row, 0, 1, self.GRID_COLUMNS)
             row += 1
             row = self._add_items_to_grid(favorites, row)
 
         # All items section
-        section_label = QLabel(f"내 미디어 ({len(items)})")
+        section_label = QLabel(f"{tr('My Media')} ({len(items)})")
         section_label.setStyleSheet("color: #999; font-size: 12px; font-weight: bold;")
         self._grid_layout.addWidget(section_label, row, 0, 1, self.GRID_COLUMNS)
         row += 1
         self._add_items_to_grid(non_favorites, row)
 
-        self._count_label.setText(f"내 미디어 ({len(items)})")
+        self._count_label.setText(f"{tr('My Media')} ({len(items)})")
 
     def _add_items_to_grid(self, items: list[MediaItem], start_row: int) -> int:
         row = start_row

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.utils.i18n import tr
 from src.utils.time_utils import ms_to_display, ms_to_frame, ms_to_timecode_frames
 
 
@@ -28,6 +29,7 @@ class PlaybackControls(QWidget):
         self._tts_audio_output: QAudioOutput | None = None
         self._is_seeking = False
         self._display_fps: int = 30
+        self._output_time_mode: bool = False
 
         # --- 위젯 구성 ---
         self._play_btn = QPushButton("▶")
@@ -57,7 +59,7 @@ class PlaybackControls(QWidget):
         self._video_vol_slider.setRange(0, 100)
         self._video_vol_slider.setValue(70)
         self._video_vol_slider.setFixedWidth(80)
-        self._video_vol_slider.setToolTip("Video volume")
+        self._video_vol_slider.setToolTip(tr("Video volume"))
         self._audio_output.setVolume(0.7)
 
         # TTS volume
@@ -66,7 +68,7 @@ class PlaybackControls(QWidget):
         self._tts_vol_slider.setRange(0, 100)
         self._tts_vol_slider.setValue(100)
         self._tts_vol_slider.setFixedWidth(80)
-        self._tts_vol_slider.setToolTip("TTS volume")
+        self._tts_vol_slider.setToolTip(tr("TTS volume"))
 
         # --- 레이아웃 ---
         layout = QHBoxLayout(self)
@@ -111,7 +113,8 @@ class PlaybackControls(QWidget):
     def _on_seek_released(self) -> None:
         self._is_seeking = False
         pos = self._seek_slider.value()
-        self._player.setPosition(pos)
+        if not self._output_time_mode:
+            self._player.setPosition(pos)
         self.position_changed_by_user.emit(pos)
 
     def _on_seek_moved(self, value: int) -> None:
@@ -144,13 +147,36 @@ class PlaybackControls(QWidget):
         if self._tts_audio_output:
             self._tts_audio_output.setVolume(value / 100.0)
 
+    def enable_output_time_mode(self) -> None:
+        """Enable output time mode — position/duration controlled by MainWindow."""
+        self._output_time_mode = True
+
+    def disable_output_time_mode(self) -> None:
+        self._output_time_mode = False
+
+    def set_output_duration(self, duration_ms: int) -> None:
+        """Set slider range and duration label to output timeline duration."""
+        self._seek_slider.setRange(0, duration_ms)
+        self._duration_label.setText(ms_to_display(duration_ms))
+
+    def set_output_position(self, position_ms: int) -> None:
+        """Set slider position and time label to output timeline position."""
+        if not self._is_seeking:
+            self._seek_slider.setValue(position_ms)
+            self._time_label.setText(ms_to_display(position_ms))
+            self._update_frame_label(position_ms)
+
     def _on_position_changed(self, position: int) -> None:
+        if self._output_time_mode:
+            return
         if not self._is_seeking:
             self._seek_slider.setValue(position)
             self._time_label.setText(ms_to_display(position))
             self._update_frame_label(position)
 
     def _on_duration_changed(self, duration: int) -> None:
+        if self._output_time_mode:
+            return
         self._seek_slider.setRange(0, duration)
         self._duration_label.setText(ms_to_display(duration))
 

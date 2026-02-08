@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from src.models.style import SubtitleStyle
 from src.services.style_preset_manager import StylePresetManager
+from src.utils.i18n import tr
 
 _POSITIONS = [
     ("Bottom Center", "bottom-center"),
@@ -37,9 +38,9 @@ _POSITIONS = [
 class StyleDialog(QDialog):
     """Dialog for editing a SubtitleStyle."""
 
-    def __init__(self, style: SubtitleStyle, parent=None, title: str = "Edit Style"):
+    def __init__(self, style: SubtitleStyle, parent=None, title: str = None):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(title if title else tr("Edit Style"))
         self.setMinimumWidth(500)
         self._style = style.copy()
         self._preset_manager = StylePresetManager()
@@ -53,7 +54,7 @@ class StyleDialog(QDialog):
         # Left side: Preset list
         left_layout = QVBoxLayout()
 
-        preset_label = QLabel("Presets")
+        preset_label = QLabel(tr("Presets"))
         preset_label.setStyleSheet("font-weight: bold;")
         left_layout.addWidget(preset_label)
 
@@ -65,15 +66,15 @@ class StyleDialog(QDialog):
         # Preset buttons
         preset_btn_layout = QVBoxLayout()
 
-        self._save_preset_btn = QPushButton("Save...")
+        self._save_preset_btn = QPushButton(tr("Save..."))
         self._save_preset_btn.clicked.connect(self._save_preset)
         preset_btn_layout.addWidget(self._save_preset_btn)
 
-        self._rename_preset_btn = QPushButton("Rename...")
+        self._rename_preset_btn = QPushButton(tr("Rename..."))
         self._rename_preset_btn.clicked.connect(self._rename_preset)
         preset_btn_layout.addWidget(self._rename_preset_btn)
 
-        self._delete_preset_btn = QPushButton("Delete")
+        self._delete_preset_btn = QPushButton(tr("Delete"))
         self._delete_preset_btn.clicked.connect(self._delete_preset)
         preset_btn_layout.addWidget(self._delete_preset_btn)
 
@@ -89,76 +90,76 @@ class StyleDialog(QDialog):
         self._refresh_preset_list()
 
         # Font group
-        font_group = QGroupBox("Font")
+        font_group = QGroupBox(tr("Font"))
         font_layout = QFormLayout(font_group)
 
         self._font_combo = QFontComboBox()
         self._font_combo.setCurrentFont(QFont(self._style.font_family))
         self._font_combo.currentFontChanged.connect(self._update_preview)
-        font_layout.addRow("Family:", self._font_combo)
+        font_layout.addRow(tr("Family:"), self._font_combo)
 
         self._size_spin = QSpinBox()
         self._size_spin.setRange(8, 72)
         self._size_spin.setValue(self._style.font_size)
         self._size_spin.valueChanged.connect(self._update_preview)
-        font_layout.addRow("Size:", self._size_spin)
+        font_layout.addRow(tr("Size:"), self._size_spin)
 
         style_row = QHBoxLayout()
-        self._bold_check = QCheckBox("Bold")
+        self._bold_check = QCheckBox(tr("Bold"))
         self._bold_check.setChecked(self._style.font_bold)
         self._bold_check.toggled.connect(self._update_preview)
         style_row.addWidget(self._bold_check)
-        self._italic_check = QCheckBox("Italic")
+        self._italic_check = QCheckBox(tr("Italic"))
         self._italic_check.setChecked(self._style.font_italic)
         self._italic_check.toggled.connect(self._update_preview)
         style_row.addWidget(self._italic_check)
-        font_layout.addRow("Style:", style_row)
+        font_layout.addRow(tr("Style:"), style_row)
 
         right_layout.addWidget(font_group)
 
         # Colors group
-        color_group = QGroupBox("Colors")
+        color_group = QGroupBox(tr("Colors"))
         color_layout = QFormLayout(color_group)
 
         self._font_color_btn = self._make_color_button(self._style.font_color)
         self._font_color_btn.clicked.connect(lambda: self._pick_color(self._font_color_btn))
-        color_layout.addRow("Text Color:", self._font_color_btn)
+        color_layout.addRow(tr("Text Color:"), self._font_color_btn)
 
         self._outline_color_btn = self._make_color_button(self._style.outline_color)
         self._outline_color_btn.clicked.connect(lambda: self._pick_color(self._outline_color_btn))
-        color_layout.addRow("Outline Color:", self._outline_color_btn)
+        color_layout.addRow(tr("Outline Color:"), self._outline_color_btn)
 
         self._outline_width_spin = QSpinBox()
         self._outline_width_spin.setRange(0, 10)
         self._outline_width_spin.setValue(self._style.outline_width)
         self._outline_width_spin.valueChanged.connect(self._update_preview)
-        color_layout.addRow("Outline Width:", self._outline_width_spin)
+        color_layout.addRow(tr("Outline Width:"), self._outline_width_spin)
 
         self._bg_color_btn = self._make_color_button(self._style.bg_color or "#00000000")
         self._bg_color_btn.clicked.connect(lambda: self._pick_color(self._bg_color_btn))
-        color_layout.addRow("Background:", self._bg_color_btn)
+        color_layout.addRow(tr("Background:"), self._bg_color_btn)
 
         right_layout.addWidget(color_group)
 
         # Position group
-        pos_group = QGroupBox("Position")
+        pos_group = QGroupBox(tr("Position"))
         pos_layout = QFormLayout(pos_group)
 
         self._position_combo = QComboBox()
         for label, value in _POSITIONS:
-            self._position_combo.addItem(label, value)
+            self._position_combo.addItem(tr(label), value)
         current_idx = next(
             (i for i, (_, v) in enumerate(_POSITIONS) if v == self._style.position), 0
         )
         self._position_combo.setCurrentIndex(current_idx)
         self._position_combo.currentIndexChanged.connect(self._update_preview)
-        pos_layout.addRow("Position:", self._position_combo)
+        pos_layout.addRow(tr("Position:"), self._position_combo)
 
         self._margin_spin = QSpinBox()
         self._margin_spin.setRange(0, 200)
         self._margin_spin.setValue(self._style.margin_bottom)
         self._margin_spin.valueChanged.connect(self._update_preview)
-        pos_layout.addRow("Margin:", self._margin_spin)
+        pos_layout.addRow(tr("Margin:"), self._margin_spin)
 
         right_layout.addWidget(pos_group)
 
@@ -208,7 +209,7 @@ class StyleDialog(QDialog):
 
     def _pick_color(self, btn: QPushButton) -> None:
         current = QColor(btn.property("color_hex"))
-        color = QColorDialog.getColor(current, self, "Select Color")
+        color = QColorDialog.getColor(current, self, tr("Select Color"))
         if color.isValid():
             self._set_button_color(btn, color.name())
             self._update_preview()
@@ -226,7 +227,7 @@ class StyleDialog(QDialog):
             f"font-weight: {bold}; font-style: {italic};"
             f"color: {color};"
         )
-        self._preview_label.setText("Sample Subtitle Text")
+        self._preview_label.setText(tr("Sample Subtitle Text"))
 
     def _refresh_preset_list(self) -> None:
         """Refresh the preset list widget."""
@@ -273,8 +274,8 @@ class StyleDialog(QDialog):
         """Save current style as a preset."""
         name, ok = QInputDialog.getText(
             self,
-            "Save Preset",
-            "Enter preset name:",
+            tr("Save Preset"),
+            tr("Enter preset name:"),
         )
 
         if not ok or not name.strip():
@@ -286,8 +287,8 @@ class StyleDialog(QDialog):
         if self._preset_manager.preset_exists(name):
             reply = QMessageBox.question(
                 self,
-                "Overwrite Preset",
-                f"Preset '{name}' already exists. Overwrite?",
+                tr("Overwrite Preset"),
+                f"{tr('Preset')} '{name}' {tr('already exists. Overwrite?')}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -300,8 +301,8 @@ class StyleDialog(QDialog):
 
         QMessageBox.information(
             self,
-            "Preset Saved",
-            f"Preset '{name}' has been saved successfully.",
+            tr("Preset Saved"),
+            f"{tr('Preset')} '{name}' {tr('has been saved successfully.')}",
         )
 
     def _load_preset_from_list(self) -> None:
@@ -318,8 +319,8 @@ class StyleDialog(QDialog):
         else:
             QMessageBox.warning(
                 self,
-                "Load Failed",
-                f"Could not load preset '{preset_name}'.",
+                tr("Load Failed"),
+                f"{tr('Could not load preset')} '{preset_name}'.",
             )
 
     def _rename_preset(self) -> None:
@@ -328,8 +329,8 @@ class StyleDialog(QDialog):
         if not item:
             QMessageBox.information(
                 self,
-                "No Selection",
-                "Please select a preset to rename.",
+                tr("No Selection"),
+                tr("Please select a preset to rename."),
             )
             return
 
@@ -337,8 +338,8 @@ class StyleDialog(QDialog):
 
         new_name, ok = QInputDialog.getText(
             self,
-            "Rename Preset",
-            f"Enter new name for '{old_name}':",
+            tr("Rename Preset"),
+            f"{tr('Enter new name for')} '{old_name}':",
             text=old_name,
         )
 
@@ -353,8 +354,8 @@ class StyleDialog(QDialog):
         if self._preset_manager.preset_exists(new_name):
             QMessageBox.warning(
                 self,
-                "Name Conflict",
-                f"Preset '{new_name}' already exists. Please choose a different name.",
+                tr("Name Conflict"),
+                f"{tr('Preset')} '{new_name}' {tr('already exists. Please choose a different name.')}",
             )
             return
 
@@ -362,14 +363,14 @@ class StyleDialog(QDialog):
             self._refresh_preset_list()
             QMessageBox.information(
                 self,
-                "Preset Renamed",
-                f"Preset renamed from '{old_name}' to '{new_name}'.",
+                tr("Preset Renamed"),
+                f"{tr('Preset renamed from')} '{old_name}' {tr('to')} '{new_name}'.",
             )
         else:
             QMessageBox.warning(
                 self,
-                "Rename Failed",
-                f"Could not rename preset '{old_name}'.",
+                tr("Rename Failed"),
+                f"{tr('Could not rename preset')} '{old_name}'.",
             )
 
     def _delete_preset(self) -> None:
@@ -378,8 +379,8 @@ class StyleDialog(QDialog):
         if not item:
             QMessageBox.information(
                 self,
-                "No Selection",
-                "Please select a preset to delete.",
+                tr("No Selection"),
+                tr("Please select a preset to delete."),
             )
             return
 
@@ -387,8 +388,8 @@ class StyleDialog(QDialog):
 
         reply = QMessageBox.question(
             self,
-            "Delete Preset",
-            f"Are you sure you want to delete preset '{preset_name}'?",
+            tr("Delete Preset"),
+            f"{tr('Are you sure you want to delete preset')} '{preset_name}'?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
 
@@ -397,6 +398,6 @@ class StyleDialog(QDialog):
             self._refresh_preset_list()
             QMessageBox.information(
                 self,
-                "Preset Deleted",
-                f"Preset '{preset_name}' has been deleted.",
+                tr("Preset Deleted"),
+                f"{tr('Preset')} '{preset_name}' {tr('has been deleted.')}",
             )

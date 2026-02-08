@@ -1,8 +1,14 @@
-"""Subtitle list panel using QTableWidget with inline editing and search."""
+"""Subtitle list panel using QTableView + QAbstractTableModel (virtual rows)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -13,8 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
     QLabel,
@@ -23,7 +28,125 @@ from PySide6.QtWidgets import (
 from src.ui.search_bar import SearchBar
 
 from src.models.subtitle import SubtitleTrack
+from src.utils.i18n import tr
 from src.utils.time_utils import ms_to_display, parse_flexible_timecode
+
+
+# ------------------------------------------------------------------ Model
+
+
+class _SubtitleTableModel(QAbstractTableModel):
+    """Virtual model backed by SubtitleTrack — only provides data for visible rows."""
+
+    HEADERS = [tr("#"), tr("Start"), tr("End"), tr("Text"), tr("Vol")]
+
+    # Signals forwarded to panel
+    text_committed = Signal(int, str)      # (row, new_text)
+    volume_committed = Signal(int, float)  # (row, new_volume)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._track: SubtitleTrack | None = None
+        self._search_rows: set[int] = set()
+
+    def set_track(self, track: SubtitleTrack | None) -> None:
+        self.beginResetModel()
+        self._track = track
+        self._search_rows.clear()
+        self.endResetModel()
+
+    def notify_data_changed(self) -> None:
+        """Notify that all data may have changed (e.g. after external edit)."""
+        self.beginResetModel()
+        self.endResetModel()
+
+    def set_search_rows(self, rows: set[int]) -> None:
+        self._search_rows = rows
+        top_left = self.index(0, 0)
+        bot_right = self.index(self.rowCount() - 1, self.columnCount() - 1)
+        if top_left.isValid() and bot_right.isValid():
+            self.dataChanged.emit(top_left, bot_right)
+
+    # ---- QAbstractTableModel overrides ----
+
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self._track) if self._track else 0
+
+    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
+        return 5
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self.HEADERS[section]
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not self._track:
+            return None
+        row, col = index.row(), index.column()
+        if row < 0 or row >= len(self._track):
+            return None
+
+        seg = self._track[row]
+
+        if role == Qt.ItemDataRole.DisplayRole or role == Qt.ItemDataRole.EditRole:
+            if col == 0:
+                return str(row + 1)
+            elif col == 1:
+                return ms_to_display(seg.start_ms)
+            elif col == 2:
+                return ms_to_display(seg.end_ms)
+            elif col == 3:
+                return seg.text
+            elif col == 4:
+                return f"{int(seg.volume * 100)}%"
+
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            if col in (0, 4):
+                return int(Qt.AlignmentFlag.AlignCenter)
+
+        elif role == Qt.ItemDataRole.BackgroundRole:
+            if row in self._search_rows:
+                return QColor(100, 150, 240, 50)
+
+        return None
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() in (3, 4):
+            base |= Qt.ItemFlag.ItemIsEditable
+        return base
+
+    def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role != Qt.ItemDataRole.EditRole or not self._track:
+            return False
+        row, col = index.row(), index.column()
+        if row < 0 or row >= len(self._track):
+            return False
+
+        if col == 3:
+            new_text = str(value).strip()
+            if new_text and new_text != self._track[row].text:
+                self.text_committed.emit(row, new_text)
+                self.dataChanged.emit(index, index)
+                return True
+        elif col == 4:
+            raw = str(value).strip().rstrip("%")
+            try:
+                pct = int(raw)
+                volume = max(0.0, min(2.0, pct / 100.0))
+                if volume != self._track[row].volume:
+                    self.volume_committed.emit(row, volume)
+                    self.dataChanged.emit(index, index)
+                    return True
+            except ValueError:
+                pass
+        return False
+
+
+# ------------------------------------------------------------------ Dialog
 
 
 class _TimeEditDialog(QDialog):
@@ -31,30 +154,27 @@ class _TimeEditDialog(QDialog):
 
     def __init__(self, start_ms: int, end_ms: int, fps: int, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Edit Time")
+        self.setWindowTitle(tr("Edit Time"))
         self._fps = fps
 
         layout = QFormLayout(self)
 
-        # Input fields with current values
         self._start_edit = QLineEdit(ms_to_display(start_ms))
         self._end_edit = QLineEdit(ms_to_display(end_ms))
-        layout.addRow("Start:", self._start_edit)
-        layout.addRow("End:", self._end_edit)
+        layout.addRow(tr("Start:"), self._start_edit)
+        layout.addRow(tr("End:"), self._end_edit)
 
-        # Help text showing supported formats
         help_text = QLabel(
-            "Supported formats:\n"
-            "• MM:SS.mmm (e.g., 01:23.456)\n"
-            "• HH:MM:SS.mmm (e.g., 00:01:23.456)\n"
-            "• HH:MM:SS:FF (e.g., 00:01:23:15)\n"
-            f"• F:123 (frame number at {fps} fps)"
+            f"{tr('Supported formats')}:\n"
+            f"• MM:SS.mmm (e.g., 01:23.456)\n"
+            f"• HH:MM:SS.mmm (e.g., 00:01:23.456)\n"
+            f"• HH:MM:SS:FF (e.g., 00:01:23:15)\n"
+            f"• F:123 ({tr('frame number at')} {fps} fps)"
         )
         help_text.setStyleSheet("color: gray; font-size: 10px;")
         help_text.setWordWrap(True)
         layout.addRow("", help_text)
 
-        # OK/Cancel buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -63,21 +183,16 @@ class _TimeEditDialog(QDialog):
         layout.addRow(buttons)
 
     def values(self) -> tuple[int, int]:
-        """Parse and return start/end times in milliseconds.
-
-        Returns:
-            Tuple of (start_ms, end_ms)
-
-        Raises:
-            ValueError: If timecode format is invalid
-        """
         start_ms = parse_flexible_timecode(self._start_edit.text(), self._fps)
         end_ms = parse_flexible_timecode(self._end_edit.text(), self._fps)
         return start_ms, end_ms
 
 
+# ------------------------------------------------------------------ Panel
+
+
 class SubtitlePanel(QWidget):
-    """Panel showing subtitle segments in a table with editing support."""
+    """Panel showing subtitle segments in a virtual table with editing support."""
 
     seek_requested = Signal(int)  # ms
     text_edited = Signal(int, str)  # (segment index, new text)
@@ -90,28 +205,31 @@ class SubtitlePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._track: SubtitleTrack | None = None
-        self._editing = False  # guard to ignore cellChanged during rebuild
-        self._search_results = []  # indexes of matched segments
-        self._current_result = -1  # current highlighted result index
+        self._search_results: list[int] = []
+        self._current_result: int = -1
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Header with subtitle count
-        self._header_label = QLabel("Subtitles")
+        # Header
+        self._header_label = QLabel(tr("Subtitles"))
         self._header_label.setStyleSheet("font-weight: bold; padding: 4px;")
         layout.addWidget(self._header_label)
 
-        # Search bar (initially hidden)
+        # Search bar
         self._search_bar = SearchBar(self)
         self._search_bar.search_changed.connect(self._on_search)
         self._search_bar.next_result.connect(self._on_next_result)
         self._search_bar.previous_result.connect(self._on_previous_result)
         layout.addWidget(self._search_bar)
 
-        # Subtitle table
-        self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["#", "Start", "End", "Text", "Vol"])
+        # Model + View (virtual rows)
+        self._model = _SubtitleTableModel(self)
+        self._model.text_committed.connect(self.text_edited)
+        self._model.volume_committed.connect(self.volume_edited)
+
+        self._table = QTableView()
+        self._table.setModel(self._model)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -125,24 +243,22 @@ class SubtitlePanel(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
 
-        self._table.cellClicked.connect(self._on_cell_clicked)
-        self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
-        self._table.cellChanged.connect(self._on_cell_changed)
+        self._table.clicked.connect(self._on_clicked)
+        self._table.doubleClicked.connect(self._on_double_clicked)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self._table)
 
-        # Search shortcuts
         self._setup_shortcuts()
 
     # --------------------------------------------------------------- Public
 
     def set_track(self, track: SubtitleTrack | None) -> None:
         self._track = track
-        self.refresh()
+        self._model.set_track(track)
+        self._update_header()
 
     def refresh(self) -> None:
-        """Rebuild the table from the current track data."""
-        # Remember current search text
+        """Notify model of external data change and re-apply search."""
         search_visible = self._search_bar.isVisible()
         if search_visible:
             search_text = self._search_bar._search_edit.text()
@@ -151,75 +267,34 @@ class SubtitlePanel(QWidget):
             search_text = ""
             case_sensitive = False
 
-        # Rebuild table
-        self._rebuild_table()
+        self._model.notify_data_changed()
+        self._update_header()
 
-        # Restore search if active
         if search_visible and search_text:
             self._on_search(search_text, case_sensitive)
 
-    # --------------------------------------------------------------- Build
+    # --------------------------------------------------------------- Internal
 
-    def _rebuild_table(self) -> None:
-        self._editing = True
-        self._table.setRowCount(0)
-        if not self._track:
-            self._header_label.setText("Subtitles")
-            self._editing = False
-            return
-
-        self._header_label.setText(f"Subtitles ({len(self._track)})")
-        for i, seg in enumerate(self._track):
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-
-            num_item = QTableWidgetItem(str(i + 1))
-            num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            num_item.setFlags(num_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(row, 0, num_item)
-
-            start_item = QTableWidgetItem(ms_to_display(seg.start_ms))
-            start_item.setFlags(start_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(row, 1, start_item)
-
-            end_item = QTableWidgetItem(ms_to_display(seg.end_ms))
-            end_item.setFlags(end_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(row, 2, end_item)
-
-            text_item = QTableWidgetItem(seg.text)
-            self._table.setItem(row, 3, text_item)
-
-            vol_item = QTableWidgetItem(f"{int(seg.volume * 100)}%")
-            vol_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._table.setItem(row, 4, vol_item)
-
-        self._editing = False
+    def _update_header(self) -> None:
+        count = len(self._track) if self._track else 0
+        self._header_label.setText(f"{tr('Subtitles')} ({count})" if count else tr("Subtitles"))
 
     # --------------------------------------------------------------- Slots
 
-    def _on_cell_clicked(self, row: int, _col: int) -> None:
+    def _on_clicked(self, index: QModelIndex) -> None:
+        row = index.row()
         if self._track and 0 <= row < len(self._track):
             self.seek_requested.emit(self._track[row].start_ms)
 
-    def _on_cell_double_clicked(self, row: int, col: int) -> None:
+    def _on_double_clicked(self, index: QModelIndex) -> None:
+        row, col = index.row(), index.column()
         if not self._track or row < 0 or row >= len(self._track):
             return
 
-        if col == 3:
-            # Enable inline editing for the text column
-            item = self._table.item(row, 3)
-            if item:
-                self._table.editItem(item)
-        elif col == 4:
-            # Enable inline editing for the volume column
-            item = self._table.item(row, 4)
-            if item:
-                self._table.editItem(item)
+        if col in (3, 4):
+            self._table.edit(index)
         elif col in (1, 2):
-            # Open time edit dialog
             seg = self._track[row]
-
-            # Get FPS from settings
             from src.services.settings_manager import SettingsManager
             settings = SettingsManager()
             fps = settings.get_frame_seek_fps()
@@ -232,133 +307,66 @@ class SubtitlePanel(QWidget):
                         self.time_edited.emit(row, start, end)
                     else:
                         QMessageBox.warning(
-                            self, "Invalid Time Range",
-                            "End time must be greater than start time."
+                            self, tr("Invalid Time Range"),
+                            tr("End time must be greater than start time.")
                         )
                 except ValueError as e:
                     QMessageBox.warning(
-                        self, "Invalid Timecode",
-                        f"Could not parse timecode: {str(e)}"
+                        self, tr("Invalid Timecode"),
+                        f"{tr('Could not parse timecode')}: {str(e)}"
                     )
-
-    def _on_cell_changed(self, row: int, col: int) -> None:
-        if self._editing:
-            return
-        if not self._track or row < 0 or row >= len(self._track):
-            return
-        if col == 3:
-            item = self._table.item(row, 3)
-            if item:
-                new_text = item.text().strip()
-                if new_text and new_text != self._track[row].text:
-                    self.text_edited.emit(row, new_text)
-        elif col == 4:
-            item = self._table.item(row, 4)
-            if item:
-                raw = item.text().strip().rstrip("%")
-                try:
-                    pct = int(raw)
-                    volume = max(0.0, min(2.0, pct / 100.0))
-                    if volume != self._track[row].volume:
-                        self.volume_edited.emit(row, volume)
-                except ValueError:
-                    # Revert to current value on invalid input
-                    self._editing = True
-                    item.setText(f"{int(self._track[row].volume * 100)}%")
-                    self._editing = False
 
     # --------------------------------------------------------------- Search
 
     def _setup_shortcuts(self) -> None:
-        """Setup keyboard shortcuts for search."""
-        # Ctrl+F - show search bar
         search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         search_shortcut.activated.connect(self._show_search_bar)
 
-        # F3 - find next
         next_shortcut = QShortcut(QKeySequence("F3"), self)
         next_shortcut.activated.connect(self._on_next_result)
 
-        # Shift+F3 - find previous
         prev_shortcut = QShortcut(QKeySequence("Shift+F3"), self)
         prev_shortcut.activated.connect(self._on_previous_result)
 
-        # Escape - hide search bar
         esc_shortcut = QShortcut(QKeySequence("Escape"), self)
         esc_shortcut.activated.connect(self._hide_search_bar)
 
     def _show_search_bar(self) -> None:
-        """Show the search bar and focus it."""
         self._search_bar.set_focus()
 
     def _hide_search_bar(self) -> None:
-        """Hide the search bar and clear search."""
         self._search_bar.close_search()
         self._clear_search_results()
 
     def _on_search(self, text: str, case_sensitive: bool) -> None:
-        """Perform search and highlight results."""
         self._clear_search_results()
-
         if not text or not self._track:
             return
 
-        # Find matching segments
         for i, seg in enumerate(self._track):
             if self._text_matches(seg.text, text, case_sensitive):
                 self._search_results.append(i)
 
-        # Highlight the table rows
-        self._highlight_search_results()
-
-        # Update result counter
+        self._model.set_search_rows(set(self._search_results))
         self._search_bar.update_result_count(len(self._search_results))
 
-        # Go to first result if any
         if self._search_results:
             self._goto_result(0)
 
-    def _text_matches(self, text: str, search: str, case_sensitive: bool) -> bool:
-        """Check if text matches search criteria."""
+    @staticmethod
+    def _text_matches(text: str, search: str, case_sensitive: bool) -> bool:
         if not case_sensitive:
             return search.lower() in text.lower()
         return search in text
 
-    def _highlight_search_results(self) -> None:
-        """Highlight rows that match search criteria."""
-        for row in range(self._table.rowCount()):
-            # Reset background
-            for col in range(self._table.columnCount()):
-                item = self._table.item(row, col)
-                if item:
-                    item.setBackground(QColor(0, 0, 0, 0))  # Transparent
-
-        # Highlight matches
-        highlight_color = QColor(100, 150, 240, 50)  # Light blue with alpha
-        for idx in self._search_results:
-            for col in range(self._table.columnCount()):
-                item = self._table.item(idx, col)
-                if item:
-                    item.setBackground(highlight_color)
-
     def _clear_search_results(self) -> None:
-        """Clear search results and highlighting."""
         self._search_results = []
         self._current_result = -1
-
-        # Clear all row highlighting
-        for row in range(self._table.rowCount()):
-            for col in range(self._table.columnCount()):
-                item = self._table.item(row, col)
-                if item:
-                    item.setBackground(QColor(0, 0, 0, 0))  # Transparent
+        self._model.set_search_rows(set())
 
     def _goto_result(self, index: int) -> None:
-        """Go to a specific search result."""
         if not self._search_results:
             return
-
-        # Wrap around if out of bounds
         if index < 0:
             index = len(self._search_results) - 1
         elif index >= len(self._search_results):
@@ -367,57 +375,48 @@ class SubtitlePanel(QWidget):
         self._current_result = index
         row = self._search_results[index]
 
-        # Select and scroll to row
         self._table.selectRow(row)
-        self._table.scrollToItem(self._table.item(row, 0))
+        self._table.scrollTo(self._model.index(row, 0))
 
-        # Seek to this subtitle
         self.seek_requested.emit(self._track[row].start_ms)
-
-        # Update result counter with current position
         self._search_bar.update_result_count(len(self._search_results), self._current_result)
 
     def _on_next_result(self) -> None:
-        """Go to the next search result."""
         if self._current_result >= 0 and self._search_results:
             self._goto_result(self._current_result + 1)
 
     def _on_previous_result(self) -> None:
-        """Go to the previous search result."""
         if self._current_result >= 0 and self._search_results:
             self._goto_result(self._current_result - 1)
 
     # --------------------------------------------------------------- Context Menu
 
     def _on_context_menu(self, pos) -> None:
-        row = self._table.rowAt(pos.y())
+        index = self._table.indexAt(pos)
+        row = index.row() if index.isValid() else -1
         menu = QMenu(self)
 
-        add_action = menu.addAction("Add Subtitle Here")
+        add_action = menu.addAction(tr("Add Subtitle Here"))
         delete_action = None
         style_action = None
         if self._track and 0 <= row < len(self._track):
-            delete_action = menu.addAction("Delete Subtitle")
+            delete_action = menu.addAction(tr("Delete Subtitle"))
             menu.addSeparator()
-            style_action = menu.addAction("Edit Style...")
+            style_action = menu.addAction(tr("Edit Style..."))
 
-        # Add search option to context menu
         menu.addSeparator()
-        search_action = menu.addAction("Find in Subtitles...")
+        search_action = menu.addAction(tr("Find in Subtitles..."))
         search_action.triggered.connect(self._show_search_bar)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
         if action is not None and action == style_action:
             self.style_edit_requested.emit(row)
         elif action == add_action:
-            # Insert at the clicked row position or at end
             if self._track and 0 <= row < len(self._track):
                 seg = self._track[row]
-                # Place new segment after this one
                 start = seg.end_ms
                 end = start + 2000
             else:
-                # Add at the end
                 if self._track and len(self._track) > 0:
                     last = self._track[-1]
                     start = last.end_ms
