@@ -40,6 +40,7 @@ from src.ui.commands import (
     EditStyleCommand,
     EditTextCommand,
     EditTimeCommand,
+    EditVolumeCommand,
     MergeCommand,
     MoveSegmentCommand,
     SplitCommand,
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
 
         # Playback controls
         self._controls = PlaybackControls(self._player, self._audio_output)
+        self._controls.set_tts_audio_output(self._tts_audio_output)
 
         # Timeline
         self._timeline = TimelineWidget()
@@ -449,6 +451,7 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.segment_add_requested.connect(self._on_segment_add)
         self._subtitle_panel.segment_delete_requested.connect(self._on_segment_delete)
         self._subtitle_panel.style_edit_requested.connect(self._on_edit_segment_style)
+        self._subtitle_panel.volume_edited.connect(self._on_segment_volume_edited)
 
         # Timeline editing signals
         self._timeline.segment_selected.connect(self._on_timeline_segment_selected)
@@ -497,6 +500,14 @@ class MainWindow(QMainWindow):
             cmd = EditTimeCommand(track, index, seg.start_ms, seg.end_ms, start_ms, end_ms)
             self._undo_stack.push(cmd)
             self.statusBar().showMessage(f"Time updated (segment {index + 1})")
+
+    def _on_segment_volume_edited(self, index: int, volume: float) -> None:
+        track = self._project.subtitle_track
+        if 0 <= index < len(track):
+            old_volume = track[index].volume
+            cmd = EditVolumeCommand(track, index, old_volume, volume)
+            self._undo_stack.push(cmd)
+            self.statusBar().showMessage(f"Volume updated: {int(volume * 100)}% (segment {index + 1})")
 
     def _on_segment_add(self, start_ms: int, end_ms: int) -> None:
         seg = SubtitleSegment(start_ms, end_ms, "New subtitle")
@@ -709,6 +720,12 @@ class MainWindow(QMainWindow):
                     "Make sure FFmpeg is installed."
                 )
                 return
+
+        # Detect if video has audio
+        try:
+            self._project.video_has_audio = AudioMerger.has_audio_stream(path)
+        except Exception:
+            self._project.video_has_audio = False
 
         self._player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._player.play()
@@ -1197,7 +1214,12 @@ class MainWindow(QMainWindow):
             return
 
         from src.ui.dialogs.export_dialog import ExportDialog
-        dialog = ExportDialog(self._project.video_path, self._project.subtitle_track, parent=self)
+        dialog = ExportDialog(
+            self._project.video_path,
+            self._project.subtitle_track,
+            parent=self,
+            video_has_audio=self._project.video_has_audio,
+        )
         dialog.exec()
 
     def _on_save_project(self) -> None:
@@ -1287,11 +1309,19 @@ class MainWindow(QMainWindow):
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
         """Handle TTS player position change."""
-        # If no video, use TTS position + audio_start_ms for timeline
-        if not self._project.has_video:
-            track = self._project.subtitle_track
-            if track and track.audio_path:
-                timeline_pos = track.audio_start_ms + position_ms
+        track = self._project.subtitle_track
+        if track and track.audio_path:
+            timeline_pos = track.audio_start_ms + position_ms
+
+            # Apply per-segment volume
+            seg = track.segment_at(timeline_pos)
+            if seg:
+                self._tts_audio_output.setVolume(seg.volume)
+            else:
+                self._tts_audio_output.setVolume(1.0)
+
+            # If no video, use TTS position for timeline
+            if not self._project.has_video:
                 self._timeline.set_playhead(timeline_pos)
                 # Update subtitle display based on timeline position
                 self._video_widget._update_subtitle(timeline_pos)

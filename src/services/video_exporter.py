@@ -17,6 +17,7 @@ def export_video(
     track: SubtitleTrack,
     output_path: Path,
     on_progress: callable | None = None,
+    audio_path: Path | None = None,
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -25,6 +26,8 @@ def export_video(
         track: Subtitle track to burn.
         output_path: Destination video file.
         on_progress: Optional callback(duration_sec, current_sec) for progress.
+        audio_path: Optional path to replacement audio file (e.g. TTS mixed audio).
+                    When provided, replaces the original audio with this file.
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -49,17 +52,34 @@ def export_video(
         from src.utils.hw_accel import get_hw_encoder
         video_encoder, encoder_flags = get_hw_encoder("h264")
 
-        cmd = [
-            ffmpeg,
-            "-i", str(video_path),
-            "-vf", srt_filter,
-            "-c:v", video_encoder,  # Use hardware encoder
-            *encoder_flags,  # Add encoder-specific flags
-            "-c:a", "copy",  # Copy audio stream
-            "-y",
-            "-progress", "pipe:1",
-            str(output_path),
-        ]
+        if audio_path and audio_path.exists():
+            # Use replacement audio: video from input 0, audio from input 1
+            cmd = [
+                ffmpeg,
+                "-i", str(video_path),
+                "-i", str(audio_path),
+                "-vf", srt_filter,
+                "-map", "0:v",
+                "-map", "1:a",
+                "-c:v", video_encoder,
+                *encoder_flags,
+                "-c:a", "aac", "-b:a", "192k",
+                "-y",
+                "-progress", "pipe:1",
+                str(output_path),
+            ]
+        else:
+            cmd = [
+                ffmpeg,
+                "-i", str(video_path),
+                "-vf", srt_filter,
+                "-c:v", video_encoder,  # Use hardware encoder
+                *encoder_flags,  # Add encoder-specific flags
+                "-c:a", "copy",  # Copy audio stream
+                "-y",
+                "-progress", "pipe:1",
+                str(output_path),
+            ]
 
         process = subprocess.Popen(
             cmd,

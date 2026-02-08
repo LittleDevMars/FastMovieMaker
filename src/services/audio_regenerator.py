@@ -20,7 +20,8 @@ class AudioRegenerator:
         output_path: Path,
         video_audio_path: Path | None = None,
         bg_volume: float = 0.5,
-        tts_volume: float = 1.0
+        tts_volume: float = 1.0,
+        apply_segment_volumes: bool = True,
     ) -> tuple[Path, int]:
         """
         Regenerate merged audio file based on current segment timing.
@@ -31,6 +32,7 @@ class AudioRegenerator:
             video_audio_path: Optional background audio to mix with
             bg_volume: Background audio volume (0.0-1.0)
             tts_volume: TTS audio volume (0.0-1.0)
+            apply_segment_volumes: Whether to apply per-segment volume settings
 
         Returns:
             tuple[Path, int]: (output_path, total_duration_ms)
@@ -53,7 +55,8 @@ class AudioRegenerator:
             tts_audio = AudioRegenerator._create_timeline_audio(
                 segments=audio_segments,
                 temp_dir=temp_dir,
-                timeline_file=timeline_file
+                timeline_file=timeline_file,
+                apply_segment_volumes=apply_segment_volumes,
             )
 
             # Calculate total duration
@@ -84,13 +87,20 @@ class AudioRegenerator:
     def _create_timeline_audio(
         segments: List,
         temp_dir: Path,
-        timeline_file: Path
+        timeline_file: Path,
+        apply_segment_volumes: bool = True,
     ) -> Path:
         """
         Create audio file with segments positioned at their timeline positions.
 
         Uses FFmpeg concat with silence padding to position audio segments
         at exact timeline positions.
+
+        Args:
+            segments: List of SubtitleSegment with audio_file paths
+            temp_dir: Temporary directory for intermediate files
+            timeline_file: Path to write the concat file list
+            apply_segment_volumes: Whether to apply per-segment volume settings
         """
         from src.utils.ffmpeg_utils import find_ffmpeg
 
@@ -145,9 +155,23 @@ class AudioRegenerator:
                     subprocess.run(frac_cmd, check=True, capture_output=True)
                     concat_list.append(f"file '{frac_silence}'")
 
-            # Add audio segment
+            # Add audio segment (with optional volume adjustment)
             if seg.audio_file and Path(seg.audio_file).exists():
-                concat_list.append(f"file '{seg.audio_file}'")
+                audio_file_path = seg.audio_file
+                # Apply per-segment volume if enabled and volume != 1.0
+                if apply_segment_volumes and hasattr(seg, 'volume') and seg.volume != 1.0:
+                    vol_adjusted = temp_dir / f"vol_{i}.mp3"
+                    vol_cmd = [
+                        str(ffmpeg),
+                        "-i", str(seg.audio_file),
+                        "-af", f"volume={seg.volume:.2f}",
+                        "-q:a", "2",
+                        "-y",
+                        str(vol_adjusted)
+                    ]
+                    subprocess.run(vol_cmd, check=True, capture_output=True)
+                    audio_file_path = str(vol_adjusted)
+                concat_list.append(f"file '{audio_file_path}'")
                 current_time_ms = seg.end_ms
             else:
                 # If audio file missing, add silence for segment duration

@@ -190,6 +190,26 @@ class MergeCommand(QUndoCommand):
         self._track.segments.sort(key=lambda s: s.start_ms)
 
 
+class EditVolumeCommand(QUndoCommand):
+    """Change the volume of a subtitle segment."""
+
+    def __init__(self, track: SubtitleTrack, index: int,
+                 old_volume: float, new_volume: float):
+        super().__init__(f"Edit volume (segment {index + 1})")
+        self._track = track
+        self._index = index
+        self._old_volume = old_volume
+        self._new_volume = new_volume
+
+    def redo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            self._track[self._index].volume = self._new_volume
+
+    def undo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            self._track[self._index].volume = self._old_volume
+
+
 class BatchShiftCommand(QUndoCommand):
     """Shift all subtitle times by a given offset."""
 

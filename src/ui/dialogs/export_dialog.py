@@ -1,17 +1,24 @@
-"""Video export progress dialog."""
+"""Video export progress dialog with TTS audio integration."""
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSlider,
     QVBoxLayout,
 )
 
@@ -20,36 +27,129 @@ from src.workers.export_worker import ExportWorker
 
 
 class ExportDialog(QDialog):
-    """Dialog that shows export progress."""
+    """Dialog that shows export options and progress."""
 
-    def __init__(self, video_path: Path, track: SubtitleTrack, parent=None):
+    def __init__(
+        self,
+        video_path: Path,
+        track: SubtitleTrack,
+        parent=None,
+        video_has_audio: bool = False,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Export Video")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(450)
         self.setModal(True)
 
         self._video_path = video_path
         self._track = track
+        self._video_has_audio = video_has_audio
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
+        self._temp_audio_path: Path | None = None
+
+        # Check if track has TTS audio segments
+        self._has_tts = any(seg.audio_file for seg in track.segments)
 
         self._build_ui()
-        self._ask_output_and_start()
+        self._show_options()
+
+    # ------------------------------------------------------------------ UI
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
+        # --- Audio options group ---
+        self._options_group = QGroupBox("Audio Options")
+        options_layout = QVBoxLayout(self._options_group)
+
+        # TTS include checkbox
+        self._tts_checkbox = QCheckBox("Include TTS audio")
+        self._tts_checkbox.setChecked(self._has_tts)
+        self._tts_checkbox.setEnabled(self._has_tts)
+        self._tts_checkbox.toggled.connect(self._on_tts_toggled)
+        options_layout.addWidget(self._tts_checkbox)
+
+        if not self._has_tts:
+            hint = QLabel("(No TTS audio in this track)")
+            hint.setStyleSheet("color: gray; font-size: 11px;")
+            options_layout.addWidget(hint)
+
+        # Background volume slider
+        bg_row = QHBoxLayout()
+        bg_row.addWidget(QLabel("Background volume:"))
+        self._bg_slider = QSlider(Qt.Orientation.Horizontal)
+        self._bg_slider.setRange(0, 100)
+        self._bg_slider.setValue(50)
+        self._bg_slider.setEnabled(self._has_tts)
+        bg_row.addWidget(self._bg_slider)
+        self._bg_label = QLabel("50%")
+        self._bg_label.setMinimumWidth(40)
+        bg_row.addWidget(self._bg_label)
+        self._bg_slider.valueChanged.connect(lambda v: self._bg_label.setText(f"{v}%"))
+        options_layout.addLayout(bg_row)
+
+        # TTS volume slider
+        tts_row = QHBoxLayout()
+        tts_row.addWidget(QLabel("TTS volume:"))
+        self._tts_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_slider.setRange(0, 200)
+        self._tts_slider.setValue(100)
+        self._tts_slider.setEnabled(self._has_tts)
+        tts_row.addWidget(self._tts_slider)
+        self._tts_label = QLabel("100%")
+        self._tts_label.setMinimumWidth(40)
+        tts_row.addWidget(self._tts_label)
+        self._tts_slider.valueChanged.connect(lambda v: self._tts_label.setText(f"{v}%"))
+        options_layout.addLayout(tts_row)
+
+        # Segment volume checkbox
+        self._seg_vol_checkbox = QCheckBox("Apply per-segment volumes")
+        self._seg_vol_checkbox.setChecked(True)
+        self._seg_vol_checkbox.setEnabled(self._has_tts)
+        options_layout.addWidget(self._seg_vol_checkbox)
+
+        layout.addWidget(self._options_group)
+
+        # --- Progress section (hidden initially) ---
+        self._progress_section = QGroupBox("Export Progress")
+        progress_layout = QVBoxLayout(self._progress_section)
+
         self._status_label = QLabel("Preparing export...")
-        layout.addWidget(self._status_label)
+        progress_layout.addWidget(self._status_label)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
-        layout.addWidget(self._progress_bar)
+        progress_layout.addWidget(self._progress_bar)
+
+        self._progress_section.setVisible(False)
+        layout.addWidget(self._progress_section)
+
+        # --- Buttons ---
+        btn_layout = QHBoxLayout()
+        self._export_btn = QPushButton("Export...")
+        self._export_btn.clicked.connect(self._ask_output_and_start)
+        btn_layout.addWidget(self._export_btn)
 
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.clicked.connect(self._on_cancel)
-        layout.addWidget(self._cancel_btn)
+        btn_layout.addWidget(self._cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _show_options(self) -> None:
+        """Show the options UI phase."""
+        self._options_group.setVisible(True)
+        self._progress_section.setVisible(False)
+        self._export_btn.setVisible(True)
+
+    def _on_tts_toggled(self, checked: bool) -> None:
+        self._bg_slider.setEnabled(checked)
+        self._tts_slider.setEnabled(checked)
+        self._seg_vol_checkbox.setEnabled(checked)
+
+    # ------------------------------------------------------------------ Export
 
     def _ask_output_and_start(self) -> None:
         default_name = self._video_path.stem + "_subtitled.mp4"
@@ -59,19 +159,45 @@ class ExportDialog(QDialog):
             "MP4 Files (*.mp4);;All Files (*)",
         )
         if not path:
-            # User cancelled file dialog, close this dialog too
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, self.reject)
             return
 
         self._output_path = Path(path)
+
+        # Transition to progress phase
+        self._options_group.setEnabled(False)
+        self._export_btn.setVisible(False)
+        self._progress_section.setVisible(True)
+
         self._start_export()
 
     def _start_export(self) -> None:
+        audio_path = None
+
+        if self._tts_checkbox.isChecked() and self._has_tts:
+            # Prepare TTS audio
+            self._status_label.setText("Preparing TTS audio...")
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+
+            try:
+                audio_path = self._prepare_tts_audio()
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Audio Preparation Error",
+                    f"Failed to prepare TTS audio:\n{e}\n\n"
+                    "Exporting without TTS audio."
+                )
+                audio_path = None
+
         self._status_label.setText("Exporting video with subtitles...")
 
         self._thread = QThread()
-        self._worker = ExportWorker(self._video_path, self._track, self._output_path)
+        self._worker = ExportWorker(
+            self._video_path,
+            self._track,
+            self._output_path,
+            audio_path=audio_path,
+        )
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
@@ -82,6 +208,37 @@ class ExportDialog(QDialog):
         self._worker.error.connect(self._cleanup_thread)
 
         self._thread.start()
+
+    def _prepare_tts_audio(self) -> Path | None:
+        """Regenerate TTS audio with current settings and return the path."""
+        from src.services.audio_regenerator import AudioRegenerator
+
+        bg_volume = self._bg_slider.value() / 100.0
+        tts_volume = self._tts_slider.value() / 100.0
+        apply_seg_vol = self._seg_vol_checkbox.isChecked()
+
+        # Create temp output for the mixed audio
+        temp_dir = Path(tempfile.mkdtemp(prefix="export_audio_"))
+        output_audio = temp_dir / f"export_tts_{uuid.uuid4().hex[:8]}.mp3"
+
+        # Determine background audio source
+        video_audio_path = None
+        if self._video_has_audio:
+            video_audio_path = self._video_path
+
+        regenerated_path, _ = AudioRegenerator.regenerate_track_audio(
+            track=self._track,
+            output_path=output_audio,
+            video_audio_path=video_audio_path,
+            bg_volume=bg_volume,
+            tts_volume=tts_volume,
+            apply_segment_volumes=apply_seg_vol,
+        )
+
+        self._temp_audio_path = regenerated_path
+        return regenerated_path
+
+    # ------------------------------------------------------------------ Callbacks
 
     def _on_progress(self, total_sec: float, current_sec: float) -> None:
         if total_sec > 0:
@@ -95,16 +252,19 @@ class ExportDialog(QDialog):
         self._progress_bar.setValue(100)
         self._status_label.setText("Export complete!")
         self._cancel_btn.setText("Close")
+        self._cleanup_temp_audio()
         QMessageBox.information(self, "Export Complete", f"Video exported to:\n{output_path}")
         self.accept()
 
     def _on_error(self, message: str) -> None:
         self._status_label.setText(f"Error: {message}")
         self._cancel_btn.setText("Close")
+        self._cleanup_temp_audio()
         QMessageBox.critical(self, "Export Error", message)
 
     def _on_cancel(self) -> None:
         self._cleanup_thread()
+        self._cleanup_temp_audio()
         self.reject()
 
     def _cleanup_thread(self) -> None:
@@ -113,6 +273,16 @@ class ExportDialog(QDialog):
             self._thread.wait(5000)
         self._thread = None
         self._worker = None
+
+    def _cleanup_temp_audio(self) -> None:
+        """Remove temporary audio file and its parent directory."""
+        if self._temp_audio_path:
+            parent = self._temp_audio_path.parent
+            if parent.name.startswith("export_audio_"):
+                shutil.rmtree(parent, ignore_errors=True)
+            elif self._temp_audio_path.exists():
+                self._temp_audio_path.unlink(missing_ok=True)
+            self._temp_audio_path = None
 
     def closeEvent(self, event) -> None:
         self._on_cancel()

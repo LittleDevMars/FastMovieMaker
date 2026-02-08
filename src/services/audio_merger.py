@@ -66,15 +66,18 @@ class AudioMerger:
     def merge_audio_files(
         audio_files: List[Path],
         output_path: Path,
-        add_silence_ms: int = 0
+        add_silence_ms: int = 0,
+        volumes: List[float] | None = None,
     ) -> Path:
         """
-        Merge multiple audio files into one using FFmpeg concat.
+        Merge multiple audio files into one using FFmpeg.
 
         Args:
             audio_files: List of audio file paths (in order)
             output_path: Where to save the merged audio
             add_silence_ms: Milliseconds of silence to add between segments
+            volumes: Optional per-file volume multipliers (0.0~2.0).
+                     If provided, must match length of audio_files.
 
         Returns:
             Path to the output file
@@ -93,7 +96,16 @@ class AudioMerger:
         if not ffmpeg_path:
             raise Exception("FFmpeg not found")
 
-        # Create temporary concat file
+        # Check if any volume differs from 1.0
+        needs_volume = volumes and any(v != 1.0 for v in volumes)
+
+        if needs_volume:
+            # Use filter_complex approach for per-file volume
+            return AudioMerger._merge_with_volumes(
+                ffmpeg_path, audio_files, output_path, volumes
+            )
+
+        # Create temporary concat file (simple concat, no volume changes)
         with tempfile.NamedTemporaryFile(
             mode='w',
             suffix='.txt',
@@ -142,6 +154,38 @@ class AudioMerger:
             # Clean up temp file
             if concat_file.exists():
                 concat_file.unlink()
+
+    @staticmethod
+    def _merge_with_volumes(
+        ffmpeg_path: str,
+        audio_files: List[Path],
+        output_path: Path,
+        volumes: List[float],
+    ) -> Path:
+        """Merge audio files with per-file volume using FFmpeg filter_complex."""
+        # Build inputs and filter
+        cmd = [ffmpeg_path]
+        for audio_file in audio_files:
+            if not audio_file.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_file}")
+            cmd.extend(["-i", str(audio_file)])
+
+        # Build filter_complex: apply volume to each input, then concat
+        parts = []
+        for i, vol in enumerate(volumes):
+            parts.append(f"[{i}:a]volume={vol:.2f}[a{i}]")
+
+        concat_inputs = "".join(f"[a{i}]" for i in range(len(audio_files)))
+        parts.append(f"{concat_inputs}concat=n={len(audio_files)}:v=0:a=1[out]")
+
+        filter_complex = ";".join(parts)
+        cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", "-y", str(output_path)])
+
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return output_path
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"FFmpeg merge with volumes failed: {e.stderr}")
 
     @staticmethod
     def has_audio_stream(file_path: Path) -> bool:

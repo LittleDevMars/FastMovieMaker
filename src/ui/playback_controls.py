@@ -22,6 +22,7 @@ class PlaybackControls(QWidget):
         super().__init__(parent)
         self._player = player
         self._audio_output = audio_output
+        self._tts_audio_output: QAudioOutput | None = None
         self._is_seeking = False
 
         # --- Widgets ---
@@ -96,8 +97,16 @@ class PlaybackControls(QWidget):
     def _on_seek_moved(self, value: int) -> None:
         self._time_label.setText(ms_to_display(value))
 
+    def set_tts_audio_output(self, tts_audio_output: QAudioOutput) -> None:
+        """Set TTS audio output so volume slider controls both."""
+        self._tts_audio_output = tts_audio_output
+        tts_audio_output.setVolume(self._audio_output.volume())
+
     def _on_volume_changed(self, value: int) -> None:
-        self._audio_output.setVolume(value / 100.0)
+        vol = value / 100.0
+        self._audio_output.setVolume(vol)
+        if self._tts_audio_output:
+            self._tts_audio_output.setVolume(vol)
 
     def _on_position_changed(self, position: int) -> None:
         if not self._is_seeking:

@@ -18,6 +18,7 @@ class SubtitleSegment:
     text: str
     style: SubtitleStyle | None = None
     audio_file: str | None = None  # Path to individual audio file for this segment (TTS)
+    volume: float = 1.0  # Per-segment volume (0.0~2.0, default 1.0=100%)
 
     @property
     def duration_ms(self) -> int:

@@ -82,6 +82,7 @@ class SubtitlePanel(QWidget):
     seek_requested = Signal(int)  # ms
     text_edited = Signal(int, str)  # (segment index, new text)
     time_edited = Signal(int, int, int)  # (segment index, start_ms, end_ms)
+    volume_edited = Signal(int, float)  # (segment index, new volume 0.0~2.0)
     segment_add_requested = Signal(int, int)  # (start_ms, end_ms)
     segment_delete_requested = Signal(int)  # segment index
     style_edit_requested = Signal(int)  # segment index
@@ -109,8 +110,8 @@ class SubtitlePanel(QWidget):
         layout.addWidget(self._search_bar)
 
         # Subtitle table
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["#", "Start", "End", "Text"])
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["#", "Start", "End", "Text", "Vol"])
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -122,6 +123,7 @@ class SubtitlePanel(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
 
         self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
@@ -187,6 +189,10 @@ class SubtitlePanel(QWidget):
             text_item = QTableWidgetItem(seg.text)
             self._table.setItem(row, 3, text_item)
 
+            vol_item = QTableWidgetItem(f"{int(seg.volume * 100)}%")
+            vol_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 4, vol_item)
+
         self._editing = False
 
     # --------------------------------------------------------------- Slots
@@ -202,6 +208,11 @@ class SubtitlePanel(QWidget):
         if col == 3:
             # Enable inline editing for the text column
             item = self._table.item(row, 3)
+            if item:
+                self._table.editItem(item)
+        elif col == 4:
+            # Enable inline editing for the volume column
+            item = self._table.item(row, 4)
             if item:
                 self._table.editItem(item)
         elif col in (1, 2):
@@ -231,15 +242,30 @@ class SubtitlePanel(QWidget):
                     )
 
     def _on_cell_changed(self, row: int, col: int) -> None:
-        if self._editing or col != 3:
+        if self._editing:
             return
         if not self._track or row < 0 or row >= len(self._track):
             return
-        item = self._table.item(row, 3)
-        if item:
-            new_text = item.text().strip()
-            if new_text and new_text != self._track[row].text:
-                self.text_edited.emit(row, new_text)
+        if col == 3:
+            item = self._table.item(row, 3)
+            if item:
+                new_text = item.text().strip()
+                if new_text and new_text != self._track[row].text:
+                    self.text_edited.emit(row, new_text)
+        elif col == 4:
+            item = self._table.item(row, 4)
+            if item:
+                raw = item.text().strip().rstrip("%")
+                try:
+                    pct = int(raw)
+                    volume = max(0.0, min(2.0, pct / 100.0))
+                    if volume != self._track[row].volume:
+                        self.volume_edited.emit(row, volume)
+                except ValueError:
+                    # Revert to current value on invalid input
+                    self._editing = True
+                    item.setText(f"{int(self._track[row].volume * 100)}%")
+                    self._editing = False
 
     # --------------------------------------------------------------- Search
 

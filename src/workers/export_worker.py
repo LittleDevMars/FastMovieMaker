@@ -23,11 +23,18 @@ class ExportWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, video_path: Path, track: SubtitleTrack, output_path: Path):
+    def __init__(
+        self,
+        video_path: Path,
+        track: SubtitleTrack,
+        output_path: Path,
+        audio_path: Path | None = None,
+    ):
         super().__init__()
         self._video_path = video_path
         self._track = track
         self._output_path = output_path
+        self._audio_path = audio_path
 
     def run(self) -> None:
         try:
@@ -36,6 +43,7 @@ class ExportWorker(QObject):
                 self._track,
                 self._output_path,
                 on_progress=lambda total, cur: self.progress.emit(total, cur),
+                audio_path=self._audio_path,
             )
             self.finished.emit(str(self._output_path))
         except Exception as e:

@@ -2,6 +2,104 @@
 
 ---
 
+## 2026-02-08 (Day 9) 작업 요약
+
+**비디오 내보내기 고도화 - TTS 오디오 + 자막 통합 내보내기**
+
+### 구현 내용
+
+#### 1. ExportDialog UI 확장 (`src/ui/dialogs/export_dialog.py`)
+- 내보내기 옵션 UI 추가 (파일 선택 전에 설정)
+- **TTS 오디오 포함** 체크박스 (트랙에 audio_file이 있을 때만 활성화)
+- **배경음 볼륨** 슬라이더 (0~100%, 기본 50%)
+- **TTS 볼륨** 슬라이더 (0~200%, 기본 100%)
+- **세그먼트별 볼륨 적용** 체크박스 (기본 ON)
+- Export 버튼 → 파일 선택 → 오디오 준비 → 내보내기 순서
+
+#### 2. ExportWorker 오디오 경로 전달 (`src/workers/export_worker.py`)
+- `audio_path: Path | None` 파라미터 추가
+- `export_video()`에 `audio_path` 전달
+
+#### 3. video_exporter 오디오 교체 로직 (`src/services/video_exporter.py`)
+- `audio_path` 파라미터 추가
+- audio_path 존재 시: `-i audio_path`, `-map 0:v -map 1:a`, `-c:a aac -b:a 192k`
+- audio_path 없을 때: 기존대로 `-c:a copy`
+
+#### 4. AudioRegenerator 세그먼트별 볼륨 지원 (`src/services/audio_regenerator.py`)
+- `apply_segment_volumes: bool = True` 파라미터 추가
+- `_create_timeline_audio()`에서 세그먼트별 volume 값 사용
+- volume != 1.0인 세그먼트: FFmpeg `volume` 필터로 볼륨 조정된 임시 파일 생성
+
+#### 5. MainWindow 비디오 오디오 감지 (`src/ui/main_window.py`)
+- `_load_video()`에서 `AudioMerger.has_audio_stream()`으로 오디오 존재 여부 감지
+- `ExportDialog` 호출 시 `video_has_audio` 전달
+
+#### 6. 테스트 추가 (`tests/test_video_export.py`)
+- 10개 테스트 추가 (총 129/129 통과)
+- FFmpeg 커맨드 구성 검증 (audio_path 유무에 따른 분기)
+- ExportWorker 파라미터 전달 검증
+- AudioRegenerator 시그니처 검증
+- TTS 감지 로직 단위 테스트
+
+### 수정 파일
+- `src/ui/dialogs/export_dialog.py` - 옵션 UI + 오디오 준비 파이프라인
+- `src/workers/export_worker.py` - audio_path 파라미터
+- `src/services/video_exporter.py` - 오디오 교체 FFmpeg 커맨드
+- `src/services/audio_regenerator.py` - 세그먼트별 볼륨 적용
+- `src/ui/main_window.py` - video_has_audio 감지 + ExportDialog 호출
+- `tests/test_video_export.py` - 내보내기 테스트 10개
+
+---
+
+## 2026-02-08 (Day 8b) 작업 요약
+
+**세그먼트별 볼륨 조절 기능 구현**
+
+### 구현 내용
+
+#### 1. SubtitleSegment에 volume 필드 추가
+- `volume: float = 1.0` (0.0~2.0, 기본 1.0=100%)
+- 개별 자막 구간별 볼륨 설정 가능
+
+#### 2. SubtitlePanel Vol 컬럼 추가
+- 테이블 5컬럼: `#`, `Start`, `End`, `Text`, `Vol`
+- 더블클릭으로 볼륨 직접 편집 (0~200 정수 → 0.0~2.0 float)
+- `volume_edited` 시그널 추가
+- 잘못된 입력 시 기존값으로 복원
+
+#### 3. EditVolumeCommand (Undo/Redo)
+- `src/ui/commands.py`에 `EditVolumeCommand` 클래스 추가
+- 볼륨 변경 시 Ctrl+Z/Ctrl+Shift+Z로 되돌리기/다시하기
+
+#### 4. 실시간 볼륨 반영
+- `_on_tts_position_changed()`에서 현재 세그먼트의 volume을 `_tts_audio_output.setVolume()`에 적용
+- 세그먼트 전환 시 자동으로 볼륨 변경
+
+#### 5. 프로젝트 저장/로드
+- `volume != 1.0`일 때만 JSON에 저장 (공간 절약)
+- 이전 버전 프로젝트 파일 호환 (기본값 1.0)
+
+#### 6. 오디오 병합 시 볼륨 적용
+- `merge_audio_files()`에 `volumes` 파라미터 추가
+- FFmpeg `filter_complex`로 세그먼트별 볼륨 적용 후 concat
+
+### 수정 파일
+| 파일 | 변경 |
+|------|------|
+| `src/models/subtitle.py` | volume 필드 추가 |
+| `src/ui/subtitle_panel.py` | Vol 컬럼 + 편집 |
+| `src/ui/commands.py` | EditVolumeCommand |
+| `src/ui/main_window.py` | 시그널 연결 + 실시간 볼륨 |
+| `src/services/project_io.py` | 직렬화/역직렬화 |
+| `src/services/audio_merger.py` | 병합 시 볼륨 적용 |
+| `tests/test_segment_volume.py` | 10개 테스트 추가 |
+
+### 테스트 결과
+- `pytest tests/ -v` → 119/119 passed (GUI 테스트 제외)
+- 10개 새 테스트: 모델, I/O, Undo/Redo, 호환성
+
+---
+
 ## 2026-02-08 (Day 8) 작업 요약
 
 **스크린샷 캡처 기능 추가 및 TTS 오디오 재생 동기화 구현**

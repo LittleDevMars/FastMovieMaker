@@ -56,6 +56,8 @@ def _segment_to_dict(seg: SubtitleSegment) -> dict:
         d["style"] = _style_to_dict(seg.style)
     if seg.audio_file is not None:
         d["audio_file"] = seg.audio_file
+    if seg.volume != 1.0:
+        d["volume"] = seg.volume
     return d
 
 
@@ -67,6 +69,7 @@ def _dict_to_segment(d: dict) -> SubtitleSegment:
         text=d["text"],
         style=style,
         audio_file=d.get("audio_file"),
+        volume=d.get("volume", 1.0),
     )
 
 
