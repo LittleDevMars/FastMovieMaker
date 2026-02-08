@@ -18,6 +18,9 @@ def export_video(
     output_path: Path,
     on_progress: callable | None = None,
     audio_path: Path | None = None,
+    scale_width: int = 0,
+    scale_height: int = 0,
+    codec: str = "h264",
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -28,6 +31,9 @@ def export_video(
         on_progress: Optional callback(duration_sec, current_sec) for progress.
         audio_path: Optional path to replacement audio file (e.g. TTS mixed audio).
                     When provided, replaces the original audio with this file.
+        scale_width: Target width in pixels (0 = keep original).
+        scale_height: Target height in pixels (0 = keep original).
+        codec: Video codec - "h264" or "hevc" (default "h264").
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -48,9 +54,27 @@ def export_video(
             srt_str = srt_str.replace(":", "\\:")
             srt_filter = f"subtitles={srt_str}"
 
-        # Get hardware-accelerated encoder
+        # Determine encoder based on output container
         from src.utils.hw_accel import get_hw_encoder
-        video_encoder, encoder_flags = get_hw_encoder("h264")
+
+        if output_path.suffix.lower() == ".webm":
+            video_encoder = "libvpx-vp9"
+            encoder_flags = ["-crf", "30", "-b:v", "0"]
+            audio_codec_flags = ["-c:a", "libvorbis", "-b:a", "128k"]
+        else:
+            video_encoder, encoder_flags = get_hw_encoder(codec)
+            audio_codec_flags = ["-c:a", "aac", "-b:a", "192k"]
+
+        # Build video filter chain
+        vf_parts: list[str] = []
+        if scale_width > 0 and scale_height > 0:
+            vf_parts.append(
+                f"scale={scale_width}:{scale_height}"
+                f":force_original_aspect_ratio=decrease,"
+                f"pad={scale_width}:{scale_height}:(ow-iw)/2:(oh-ih)/2"
+            )
+        vf_parts.append(srt_filter)
+        vf_string = ",".join(vf_parts)
 
         if audio_path and audio_path.exists():
             # Use replacement audio: video from input 0, audio from input 1
@@ -58,12 +82,12 @@ def export_video(
                 ffmpeg,
                 "-i", str(video_path),
                 "-i", str(audio_path),
-                "-vf", srt_filter,
+                "-vf", vf_string,
                 "-map", "0:v",
                 "-map", "1:a",
                 "-c:v", video_encoder,
                 *encoder_flags,
-                "-c:a", "aac", "-b:a", "192k",
+                *audio_codec_flags,
                 "-y",
                 "-progress", "pipe:1",
                 str(output_path),
@@ -72,10 +96,10 @@ def export_video(
             cmd = [
                 ffmpeg,
                 "-i", str(video_path),
-                "-vf", srt_filter,
-                "-c:v", video_encoder,  # Use hardware encoder
-                *encoder_flags,  # Add encoder-specific flags
-                "-c:a", "copy",  # Copy audio stream
+                "-vf", vf_string,
+                "-c:v", video_encoder,
+                *encoder_flags,
+                "-c:a", "copy",
                 "-y",
                 "-progress", "pipe:1",
                 str(output_path),

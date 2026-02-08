@@ -38,6 +38,19 @@ VIDEO_FILTER = "Video Files ({});;All Files (*)".format(
     " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS)
 )
 
+# Supported image formats
+IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff"]
+IMAGE_FILTER = "Image Files ({});;All Files (*)".format(
+    " ".join(f"*{ext}" for ext in IMAGE_EXTENSIONS)
+)
+
+# Combined media filter (for media library import)
+MEDIA_FILTER = "Media Files ({});;Video Files ({});;Image Files ({});;All Files (*)".format(
+    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS),
+    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS),
+    " ".join(f"*{ext}" for ext in IMAGE_EXTENSIONS),
+)
+
 # TTS settings
 TTS_DEFAULT_VOICE = "ko-KR-SunHiNeural"
 TTS_DEFAULT_RATE = "+0%"

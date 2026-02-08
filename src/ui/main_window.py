@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +46,7 @@ from src.ui.commands import (
     MoveSegmentCommand,
     SplitCommand,
 )
+from src.ui.media_library_panel import MediaLibraryPanel
 from src.ui.playback_controls import PlaybackControls
 from src.ui.subtitle_panel import SubtitlePanel
 from src.ui.timeline_widget import TimelineWidget
@@ -129,17 +131,26 @@ class MainWindow(QMainWindow):
         self._track_selector = TrackSelector()
         self._subtitle_panel = SubtitlePanel()
 
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        right_layout.addWidget(self._track_selector)
-        right_layout.addWidget(self._subtitle_panel, 1)
+        # Subtitles tab
+        subtitle_tab = QWidget()
+        subtitle_layout = QVBoxLayout(subtitle_tab)
+        subtitle_layout.setContentsMargins(0, 0, 0, 0)
+        subtitle_layout.setSpacing(0)
+        subtitle_layout.addWidget(self._track_selector)
+        subtitle_layout.addWidget(self._subtitle_panel, 1)
 
-        # Top splitter: video | subtitle panel
+        # Media library tab
+        self._media_panel = MediaLibraryPanel()
+
+        # Right tabs
+        self._right_tabs = QTabWidget()
+        self._right_tabs.addTab(subtitle_tab, "Subtitles")
+        self._right_tabs.addTab(self._media_panel, "Media")
+
+        # Top splitter: video | right tabs
         self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._top_splitter.addWidget(self._video_widget)
-        self._top_splitter.addWidget(right_widget)
+        self._top_splitter.addWidget(self._right_tabs)
         self._top_splitter.setStretchFactor(0, 3)
         self._top_splitter.setStretchFactor(1, 1)
         self._top_splitter.setSizes([1050, 390])
@@ -193,6 +204,10 @@ class MainWindow(QMainWindow):
         export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
         export_video_action.triggered.connect(self._on_export_video)
         file_menu.addAction(export_video_action)
+
+        batch_export_action = QAction("&Batch Export...", self)
+        batch_export_action.triggered.connect(self._on_batch_export)
+        file_menu.addAction(batch_export_action)
 
         file_menu.addSeparator()
 
@@ -473,6 +488,11 @@ class MainWindow(QMainWindow):
         self._track_selector.track_added.connect(self._on_track_added)
         self._track_selector.track_removed.connect(self._on_track_removed)
         self._track_selector.track_renamed.connect(self._on_track_renamed)
+
+        # Media library signals
+        self._media_panel.video_open_requested.connect(
+            lambda path: self._load_video(Path(path))
+        )
 
         # Undo stack
         self._undo_stack.indexChanged.connect(lambda _: self._refresh_all_widgets())
@@ -1231,6 +1251,26 @@ class MainWindow(QMainWindow):
 
         from src.ui.dialogs.export_dialog import ExportDialog
         dialog = ExportDialog(
+            self._project.video_path,
+            self._project.subtitle_track,
+            parent=self,
+            video_has_audio=self._project.video_has_audio,
+        )
+        dialog.exec()
+
+    def _on_batch_export(self) -> None:
+        if not self._project.has_video:
+            QMessageBox.warning(self, "No Video", "Please open a video file first.")
+            return
+        if not self._project.has_subtitles:
+            QMessageBox.warning(self, "No Subtitles", "There are no subtitles to burn in.")
+            return
+        if not find_ffmpeg():
+            QMessageBox.critical(self, "FFmpeg Missing", "FFmpeg is required for video export.")
+            return
+
+        from src.ui.dialogs.batch_export_dialog import BatchExportDialog
+        dialog = BatchExportDialog(
             self._project.video_path,
             self._project.subtitle_track,
             parent=self,
