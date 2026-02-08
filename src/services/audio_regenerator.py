@@ -1,0 +1,198 @@
+"""
+Audio regeneration service for timeline editing.
+Regenerates merged audio when segment timing changes.
+"""
+from pathlib import Path
+from typing import List
+import subprocess
+import tempfile
+import shutil
+
+from src.models.subtitle import SubtitleTrack
+
+
+class AudioRegenerator:
+    """Regenerates audio files when segment timing changes."""
+
+    @staticmethod
+    def regenerate_track_audio(
+        track: SubtitleTrack,
+        output_path: Path,
+        video_audio_path: Path | None = None,
+        bg_volume: float = 0.5,
+        tts_volume: float = 1.0
+    ) -> tuple[Path, int]:
+        """
+        Regenerate merged audio file based on current segment timing.
+
+        Args:
+            track: SubtitleTrack with segments containing audio_file paths
+            output_path: Where to save the regenerated merged audio
+            video_audio_path: Optional background audio to mix with
+            bg_volume: Background audio volume (0.0-1.0)
+            tts_volume: TTS audio volume (0.0-1.0)
+
+        Returns:
+            tuple[Path, int]: (output_path, total_duration_ms)
+
+        Raises:
+            ValueError: If segments don't have audio files
+            RuntimeError: If FFmpeg command fails
+        """
+        # Check if segments have audio files
+        audio_segments = [seg for seg in track.segments if seg.audio_file]
+        if not audio_segments:
+            raise ValueError("No audio files found in segments")
+
+        # Create temporary directory for intermediate files
+        temp_dir = Path(tempfile.mkdtemp(prefix="audio_regen_"))
+
+        try:
+            # Step 1: Create timeline with audio segments and silence gaps
+            timeline_file = temp_dir / "timeline.txt"
+            tts_audio = AudioRegenerator._create_timeline_audio(
+                segments=audio_segments,
+                temp_dir=temp_dir,
+                timeline_file=timeline_file
+            )
+
+            # Calculate total duration
+            total_duration_ms = max(seg.end_ms for seg in audio_segments)
+
+            # Step 2: Mix with background audio if provided
+            if video_audio_path and video_audio_path.exists():
+                from src.services.audio_merger import AudioMerger
+                AudioMerger.mix_audio_tracks(
+                    track1_path=video_audio_path,
+                    track2_path=tts_audio,
+                    output_path=output_path,
+                    track1_volume=bg_volume,
+                    track2_volume=tts_volume
+                )
+            else:
+                # Just copy the TTS audio
+                shutil.copy2(tts_audio, output_path)
+
+            return output_path, total_duration_ms
+
+        finally:
+            # Cleanup temporary directory
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _create_timeline_audio(
+        segments: List,
+        temp_dir: Path,
+        timeline_file: Path
+    ) -> Path:
+        """
+        Create audio file with segments positioned at their timeline positions.
+
+        Uses FFmpeg concat with silence padding to position audio segments
+        at exact timeline positions.
+        """
+        from src.utils.ffmpeg_utils import find_ffmpeg
+
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            raise RuntimeError("FFmpeg not found")
+
+        # Sort segments by start time
+        sorted_segments = sorted(segments, key=lambda s: s.start_ms)
+
+        # Create silence audio file (1 second of silence)
+        silence_file = temp_dir / "silence.mp3"
+        silence_cmd = [
+            str(ffmpeg),
+            "-f", "lavfi",
+            "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", "1",
+            "-q:a", "9",
+            "-acodec", "libmp3lame",
+            "-y",
+            str(silence_file)
+        ]
+        subprocess.run(silence_cmd, check=True, capture_output=True)
+
+        # Build concat list with audio segments and silence gaps
+        concat_list = []
+        current_time_ms = 0
+
+        for i, seg in enumerate(sorted_segments):
+            # Add silence gap if needed
+            gap_ms = seg.start_ms - current_time_ms
+            if gap_ms > 0:
+                # Calculate number of silence segments needed (1s each)
+                num_silence = int(gap_ms / 1000)
+                for _ in range(num_silence):
+                    concat_list.append(f"file '{silence_file}'")
+
+                # Add fractional silence if needed
+                remaining_ms = gap_ms % 1000
+                if remaining_ms > 50:  # Only add if > 50ms
+                    frac_silence = temp_dir / f"silence_{i}_frac.mp3"
+                    frac_cmd = [
+                        str(ffmpeg),
+                        "-f", "lavfi",
+                        "-i", "anullsrc=r=44100:cl=stereo",
+                        "-t", f"{remaining_ms/1000:.3f}",
+                        "-q:a", "9",
+                        "-acodec", "libmp3lame",
+                        "-y",
+                        str(frac_silence)
+                    ]
+                    subprocess.run(frac_cmd, check=True, capture_output=True)
+                    concat_list.append(f"file '{frac_silence}'")
+
+            # Add audio segment
+            if seg.audio_file and Path(seg.audio_file).exists():
+                concat_list.append(f"file '{seg.audio_file}'")
+                current_time_ms = seg.end_ms
+            else:
+                # If audio file missing, add silence for segment duration
+                duration_s = (seg.end_ms - seg.start_ms) / 1000
+                missing_silence = temp_dir / f"missing_{i}.mp3"
+                missing_cmd = [
+                    str(ffmpeg),
+                    "-f", "lavfi",
+                    "-i", "anullsrc=r=44100:cl=stereo",
+                    "-t", f"{duration_s:.3f}",
+                    "-q:a", "9",
+                    "-acodec", "libmp3lame",
+                    "-y",
+                    str(missing_silence)
+                ]
+                subprocess.run(missing_cmd, check=True, capture_output=True)
+                concat_list.append(f"file '{missing_silence}'")
+                current_time_ms = seg.end_ms
+
+        # Write concat file
+        timeline_file.write_text("\n".join(concat_list), encoding="utf-8")
+
+        # Concatenate all segments
+        output_audio = temp_dir / "merged.mp3"
+        concat_cmd = [
+            str(ffmpeg),
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(timeline_file),
+            "-c", "copy",
+            "-y",
+            str(output_audio)
+        ]
+        result = subprocess.run(concat_cmd, capture_output=True)
+        if result.returncode != 0:
+            # If copy fails, try re-encoding
+            concat_cmd = [
+                str(ffmpeg),
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(timeline_file),
+                "-q:a", "2",
+                "-y",
+                str(output_audio)
+            ]
+            subprocess.run(concat_cmd, check=True, capture_output=True)
+
+        return output_audio

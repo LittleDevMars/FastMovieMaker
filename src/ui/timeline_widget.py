@@ -33,6 +33,8 @@ class _DragMode(Enum):
     AUDIO_MOVE = auto()
     AUDIO_RESIZE_LEFT = auto()
     AUDIO_RESIZE_RIGHT = auto()
+    PLAYHEAD_DRAG = auto()  # Dragging the playhead
+    PAN_VIEW = auto()  # Dragging timeline view to scroll
 
 
 _EDGE_PX = 6  # pixels from segment edge that trigger resize
@@ -203,59 +205,47 @@ class TimelineWidget(QWidget):
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "🎬 Video Audio")
 
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
-        """Draw audio track below subtitle segments."""
-        # Debug: File logging
-        import datetime
-        log_file = "/tmp/timeline_audio_debug.log"
-
-        def log(msg):
-            with open(log_file, "a") as f:
-                f.write(f"[{datetime.datetime.now()}] {msg}\n")
-
-        # Debug: Check why audio track is not showing
+        """Draw individual audio segments for each subtitle segment."""
         if not self._track:
-            log("_draw_audio_track - no track")
             return
-
-        log(f"_draw_audio_track - track={self._track.name}, "
-            f"audio_path={self._track.audio_path}, "
-            f"audio_duration_ms={self._track.audio_duration_ms}")
-
-        if not self._track.audio_path or self._track.audio_duration_ms <= 0:
-            log(f"_draw_audio_track - early return (no audio or duration <= 0)")
-            return
-
-        log(f"_draw_audio_track - DRAWING AUDIO BOX!")
 
         audio_y = 75
         audio_h = 40
 
-        x1 = self._ms_to_x(self._track.audio_start_ms)
-        x2 = self._ms_to_x(self._track.audio_start_ms + self._track.audio_duration_ms)
+        # Draw individual audio segments
+        for i, seg in enumerate(self._track):
+            # Only draw if this segment has audio
+            if not seg.audio_file:
+                continue
 
-        if x2 < 0 or x1 > self.width():
-            return
+            x1 = self._ms_to_x(seg.start_ms)
+            x2 = self._ms_to_x(seg.end_ms)
 
-        rect = QRectF(x1, audio_y, max(x2 - x1, 2), audio_h)
+            if x2 < 0 or x1 > self.width():
+                continue
 
-        if self._audio_selected:
-            painter.setPen(QPen(self._AUDIO_SELECTED_BORDER, 2))
-            painter.setBrush(QBrush(self._AUDIO_SELECTED_COLOR))
-        else:
-            painter.setPen(QPen(self._AUDIO_BORDER, 1))
-            painter.setBrush(QBrush(self._AUDIO_COLOR))
-        painter.drawRoundedRect(rect, 3, 3)
+            rect = QRectF(x1, audio_y, max(x2 - x1, 2), audio_h)
 
-        # Draw label
-        if rect.width() > 50:
-            painter.setPen(QColor("white"))
-            painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-            text_rect = rect.adjusted(4, 2, -4, -2)
-            painter.drawText(
-                text_rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                "🔊 TTS Audio",
-            )
+            # Highlight selected audio segment
+            if i == self._selected_index:
+                painter.setPen(QPen(self._AUDIO_SELECTED_BORDER, 2))
+                painter.setBrush(QBrush(self._AUDIO_SELECTED_COLOR))
+            else:
+                painter.setPen(QPen(self._AUDIO_BORDER, 1))
+                painter.setBrush(QBrush(self._AUDIO_COLOR))
+
+            painter.drawRoundedRect(rect, 3, 3)
+
+            # Draw label (segment number)
+            if rect.width() > 30:
+                painter.setPen(QColor("white"))
+                painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+                text_rect = rect.adjusted(4, 2, -4, -2)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                    f"🔊 {i+1}",
+                )
 
     def _draw_segments(self, painter: QPainter, h: int) -> None:
         seg_y = 20
@@ -304,41 +294,57 @@ class TimelineWidget(QWidget):
     # ----------------------------------------------------------- Mouse
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() != Qt.MouseButton.LeftButton or self._duration_ms <= 0:
+        if self._duration_ms <= 0:
             return
 
         x = event.position().x()
         y = event.position().y()
-        seg_idx, hit = self._hit_test(x, y)
 
-        if hit == "audio_left_edge":
-            self._audio_selected = True
-            self._selected_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_RESIZE_LEFT, x)
-        elif hit == "audio_right_edge":
-            self._audio_selected = True
-            self._selected_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_RESIZE_RIGHT, x)
-        elif hit == "audio_body":
-            self._audio_selected = True
-            self._selected_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_MOVE, x)
-        elif hit == "left_edge":
-            self._audio_selected = False
-            self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
-        elif hit == "right_edge":
-            self._audio_selected = False
-            self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
-        elif hit == "body":
-            self._audio_selected = False
-            self._selected_index = seg_idx
-            self.segment_selected.emit(seg_idx)
-            self._start_drag(_DragMode.MOVE, seg_idx, x)
-        else:
-            self._audio_selected = False
-            self._selected_index = -1
-            self._drag_mode = _DragMode.SEEK
-            self._seek_to_x(x)
+        # Middle mouse button → Pan view
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._drag_mode = _DragMode.PAN_VIEW
+            self._drag_start_x = x
+            self._drag_start_visible_ms = self._visible_start_ms
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            return
+
+        # Shift + Left click on empty space → Pan view
+        if event.button() == Qt.MouseButton.LeftButton:
+            from PySide6.QtCore import Qt
+            modifiers = event.modifiers()
+
+            seg_idx, hit = self._hit_test(x, y)
+
+            # Check if Shift is pressed and clicking on empty space
+            if modifiers & Qt.KeyboardModifier.ShiftModifier and hit == "":
+                self._drag_mode = _DragMode.PAN_VIEW
+                self._drag_start_x = x
+                self._drag_start_visible_ms = self._visible_start_ms
+                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+                return
+
+            # Check if clicking on playhead
+            if hit == "playhead":
+                self._drag_mode = _DragMode.PLAYHEAD_DRAG
+                self._seek_to_x(x)
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            # Audio segments now share the same hit zones as subtitle segments (linked movement)
+            elif hit == "left_edge":
+                self._audio_selected = False
+                self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
+            elif hit == "right_edge":
+                self._audio_selected = False
+                self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
+            elif hit == "body":
+                self._audio_selected = False
+                self._selected_index = seg_idx
+                self.segment_selected.emit(seg_idx)
+                self._start_drag(_DragMode.MOVE, seg_idx, x)
+            else:
+                self._audio_selected = False
+                self._selected_index = -1
+                self._drag_mode = _DragMode.SEEK
+                self._seek_to_x(x)
 
         self.update()
 
@@ -346,13 +352,28 @@ class TimelineWidget(QWidget):
         x = event.position().x()
         y = event.position().y()
 
+        # Handle pan view drag
+        if self._drag_mode == _DragMode.PAN_VIEW:
+            self._handle_pan_view(x)
+            return
+
+        # Handle playhead drag
+        if self._drag_mode == _DragMode.PLAYHEAD_DRAG:
+            self._seek_to_x(x)
+            return
+
+        # Handle seek (click and drag anywhere)
         if self._drag_mode == _DragMode.SEEK:
             self._seek_to_x(x)
             return
 
-        if self._drag_mode in (_DragMode.AUDIO_MOVE, _DragMode.AUDIO_RESIZE_LEFT, _DragMode.AUDIO_RESIZE_RIGHT):
-            self._handle_audio_drag(x)
-            return
+        # Show cursor feedback when hovering over playhead (not dragging)
+        if self._drag_mode == _DragMode.NONE:
+            _, hit = self._hit_test(x, y)
+            if hit == "playhead":
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
         if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
             self._handle_drag(x)
@@ -368,14 +389,8 @@ class TimelineWidget(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if self._drag_mode in (_DragMode.AUDIO_MOVE, _DragMode.AUDIO_RESIZE_LEFT, _DragMode.AUDIO_RESIZE_RIGHT):
-            # Emit final audio position
-            if self._track:
-                if (self._track.audio_start_ms != self._drag_orig_audio_start_ms or
-                    self._track.audio_duration_ms != self._drag_orig_audio_duration_ms):
-                    self.audio_moved.emit(self._track.audio_start_ms, self._track.audio_duration_ms)
-        elif self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
-            # Emit final position
+        if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
+            # Emit final position (for both subtitle and linked audio)
             if self._track and 0 <= self._drag_seg_index < len(self._track):
                 seg = self._track[self._drag_seg_index]
                 if seg.start_ms != self._drag_orig_start_ms or seg.end_ms != self._drag_orig_end_ms:
@@ -438,6 +453,27 @@ class TimelineWidget(QWidget):
 
         self.update()
 
+    def _handle_pan_view(self, x: float) -> None:
+        """Handle panning the timeline view by dragging."""
+        if self._px_per_ms <= 0:
+            return
+
+        # Calculate how much to pan based on drag distance
+        dx_px = x - self._drag_start_x
+        dx_ms = -dx_px / self._px_per_ms  # Negative because dragging right should scroll left
+
+        # Update visible start position
+        new_visible_start = self._drag_start_visible_ms + dx_ms
+        visible_range = self._visible_range_ms()
+
+        # Clamp to valid range
+        new_visible_start = max(0, new_visible_start)
+        max_start = max(0, self._duration_ms - visible_range)
+        new_visible_start = min(new_visible_start, max_start)
+
+        self._visible_start_ms = new_visible_start
+        self.update()
+
     def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
         """Start dragging audio track."""
         self._drag_mode = mode
@@ -473,23 +509,32 @@ class TimelineWidget(QWidget):
 
     def _hit_test(self, x: float, y: float) -> tuple[int, str]:
         """Return (segment_index, hit_zone) or (-1, '') if nothing hit."""
+        # Check playhead first (highest priority)
+        playhead_x = self._ms_to_x(self._playhead_ms)
+        if abs(x - playhead_x) <= _EDGE_PX:
+            return -3, "playhead"
+
         if not self._track:
             return -1, ""
 
-        # Check audio track first (below subtitles)
+        # Check audio segments (below subtitles) - treat as linked to subtitle segments
         audio_y = 75
         audio_h = 40
         if audio_y <= y <= audio_y + audio_h:
-            if self._track.audio_path and self._track.audio_duration_ms > 0:
-                x1 = self._ms_to_x(self._track.audio_start_ms)
-                x2 = self._ms_to_x(self._track.audio_start_ms + self._track.audio_duration_ms)
-                if x1 - _EDGE_PX <= x <= x2 + _EDGE_PX:
-                    if abs(x - x1) <= _EDGE_PX:
-                        return -2, "audio_left_edge"
-                    if abs(x - x2) <= _EDGE_PX:
-                        return -2, "audio_right_edge"
-                    if x1 <= x <= x2:
-                        return -2, "audio_body"
+            for i, seg in enumerate(self._track):
+                if not seg.audio_file:
+                    continue
+                x1 = self._ms_to_x(seg.start_ms)
+                x2 = self._ms_to_x(seg.end_ms)
+                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                    continue
+                # Audio segments use same hit zones as subtitles (linked movement)
+                if abs(x - x1) <= _EDGE_PX:
+                    return i, "left_edge"
+                if abs(x - x2) <= _EDGE_PX:
+                    return i, "right_edge"
+                if x1 <= x <= x2:
+                    return i, "body"
 
         # Check subtitle segments
         seg_y = 20

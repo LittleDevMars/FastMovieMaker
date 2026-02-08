@@ -45,11 +45,17 @@ def export_video(
             srt_str = srt_str.replace(":", "\\:")
             srt_filter = f"subtitles={srt_str}"
 
+        # Get hardware-accelerated encoder
+        from src.utils.hw_accel import get_hw_encoder
+        video_encoder, encoder_flags = get_hw_encoder("h264")
+
         cmd = [
             ffmpeg,
             "-i", str(video_path),
             "-vf", srt_filter,
-            "-c:a", "copy",
+            "-c:v", video_encoder,  # Use hardware encoder
+            *encoder_flags,  # Add encoder-specific flags
+            "-c:a", "copy",  # Copy audio stream
             "-y",
             "-progress", "pipe:1",
             str(output_path),

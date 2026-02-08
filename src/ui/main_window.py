@@ -258,6 +258,11 @@ class MainWindow(QMainWindow):
         play_tts_action.triggered.connect(self._on_play_tts_audio)
         sub_menu.addAction(play_tts_action)
 
+        regen_audio_action = QAction("&Regenerate Audio from Timeline", self)
+        regen_audio_action.setShortcut(QKeySequence("Ctrl+R"))
+        regen_audio_action.triggered.connect(self._on_regenerate_audio)
+        sub_menu.addAction(regen_audio_action)
+
         clear_action = QAction("&Clear Subtitles", self)
         clear_action.triggered.connect(self._on_clear_subtitles)
         sub_menu.addAction(clear_action)
@@ -517,6 +522,13 @@ class MainWindow(QMainWindow):
             seg = track[index]
             cmd = MoveSegmentCommand(track, index, seg.start_ms, seg.end_ms, new_start, new_end)
             self._undo_stack.push(cmd)
+
+            # Force video player to refresh subtitle display
+            self._video_widget.set_subtitle_track(track)
+
+            # Refresh subtitle panel
+            self._subtitle_panel.set_track(track)
+
             self.statusBar().showMessage(f"Segment {index + 1} moved")
 
     def _on_timeline_audio_moved(self, new_start_ms: int, new_duration_ms: int) -> None:
@@ -901,6 +913,103 @@ class MainWindow(QMainWindow):
             f"Playing TTS audio: {current_track.name}"
         )
 
+    def _on_regenerate_audio(self) -> None:
+        """Regenerate merged audio file from timeline segment positions."""
+        from src.services.audio_regenerator import AudioRegenerator
+
+        # Get current track
+        current_track = self._project.subtitle_track
+
+        # Check if track has audio segments
+        audio_segments = [seg for seg in current_track.segments if seg.audio_file]
+        if not audio_segments:
+            QMessageBox.information(
+                self,
+                "No Audio Segments",
+                "The current track doesn't have audio segments.\n\n"
+                "Generate TTS audio first (Ctrl+T)."
+            )
+            return
+
+        # Confirm regeneration
+        reply = QMessageBox.question(
+            self,
+            "Regenerate Audio?",
+            f"Regenerate merged audio based on current timeline positions?\n\n"
+            f"This will create a new audio file with segments positioned "
+            f"according to the timeline.\n\n"
+            f"Segments: {len(audio_segments)}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            # Show progress
+            self.statusBar().showMessage("Regenerating audio from timeline...")
+            QApplication.processEvents()
+
+            # Prepare output path
+            from src.utils.config import APP_NAME
+            import uuid
+            user_data_dir = Path.home() / f".{APP_NAME.lower()}"
+            user_data_dir.mkdir(parents=True, exist_ok=True)
+            output_path = user_data_dir / f"tts_regen_{uuid.uuid4().hex[:8]}.mp3"
+
+            # Get video audio path if exists
+            video_audio_path = None
+            if self._project.video_path and self._project.video_has_audio:
+                video_audio_path = self._project.video_path
+
+            # Regenerate audio
+            regenerated_audio, total_duration_ms = AudioRegenerator.regenerate_track_audio(
+                track=current_track,
+                output_path=output_path,
+                video_audio_path=video_audio_path,
+                bg_volume=0.5,
+                tts_volume=1.0
+            )
+
+            # Update track with new audio
+            current_track.audio_path = str(regenerated_audio)
+            current_track.audio_start_ms = 0
+            current_track.audio_duration_ms = total_duration_ms
+
+            # Update timeline
+            if not self._project.has_video:
+                self._timeline.set_duration(total_duration_ms)
+
+            self._refresh_all_widgets()
+
+            # Stop current playback and load new audio
+            self._player.pause()
+            self._tts_player.stop()
+
+            self.statusBar().showMessage(
+                f"Audio regenerated: {len(audio_segments)} segments, "
+                f"{total_duration_ms/1000:.1f}s",
+                5000
+            )
+
+            QMessageBox.information(
+                self,
+                "Audio Regenerated",
+                f"Audio has been regenerated successfully!\n\n"
+                f"Segments: {len(audio_segments)}\n"
+                f"Duration: {total_duration_ms/1000:.1f}s\n\n"
+                f"Play to hear the updated audio."
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Regeneration Failed",
+                f"Failed to regenerate audio:\n\n{e}"
+            )
+            self.statusBar().showMessage("Audio regeneration failed", 5000)
+
     def _on_toggle_position_edit(self, checked: bool) -> None:
         """Toggle subtitle position editing mode."""
         self._video_widget.set_subtitle_edit_mode(checked)
@@ -1170,12 +1279,8 @@ class MainWindow(QMainWindow):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_path = Path(f"/tmp/fastmoviemaker_screenshot_{timestamp}.png")
 
-            # Capture the window - use screen() for full window capture
-            from PySide6.QtGui import QGuiApplication
-            screen = QGuiApplication.primaryScreen()
-            window_geometry = self.frameGeometry()
-            pixmap = screen.grabWindow(0, window_geometry.x(), window_geometry.y(),
-                                      window_geometry.width(), window_geometry.height())
+            # Capture the window directly (more reliable on macOS)
+            pixmap = self.grab()
             pixmap.save(str(screenshot_path))
 
             # Show status message with path
@@ -1183,7 +1288,6 @@ class MainWindow(QMainWindow):
                 f"Screenshot saved: {screenshot_path} ({pixmap.width()}x{pixmap.height()})", 5000
             )
             print(f"✅ Screenshot saved to: {screenshot_path}")
-            print(f"   Window geometry: {window_geometry}")
             print(f"   Pixmap size: {pixmap.width()}x{pixmap.height()}")
 
         except Exception as e:

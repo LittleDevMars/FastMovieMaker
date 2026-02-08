@@ -52,6 +52,9 @@ class VideoPlayerWidget(QGraphicsView):
         self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemIsMovable, False)
         self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
 
+        # Install event filter to track subtitle movement
+        self._subtitle_item.installEventFilter(self)
+
         # Apply default style
         self._apply_style(self._default_style)
 
@@ -127,6 +130,7 @@ class VideoPlayerWidget(QGraphicsView):
         # Use custom position if set
         if style.custom_x is not None and style.custom_y is not None:
             self._subtitle_item.setPos(style.custom_x, style.custom_y)
+            self._update_edit_border()
             return
 
         view_rect = self.viewport().rect()
@@ -152,6 +156,16 @@ class VideoPlayerWidget(QGraphicsView):
             y = scene_rect.bottom() - text_height - style.margin_bottom
 
         self._subtitle_item.setPos(x, y)
+        self._update_edit_border()
+
+    def _update_edit_border(self) -> None:
+        """Update edit mode border position to match subtitle."""
+        if hasattr(self, '_edit_border') and self._edit_border.isVisible():
+            rect = self._subtitle_item.boundingRect()
+            pos = self._subtitle_item.pos()
+            border_rect = rect.adjusted(-10, -10, 10, 10)
+            self._edit_border.setRect(border_rect)
+            self._edit_border.setPos(pos)
 
     def _on_native_size_changed(self, size: QSizeF) -> None:
         self._fit_video()
@@ -171,11 +185,31 @@ class VideoPlayerWidget(QGraphicsView):
         self._edit_mode = enabled
         self._subtitle_item.setFlag(QGraphicsTextItem.GraphicsItemFlag.ItemIsMovable, enabled)
 
-        # Visual feedback: change cursor when hovering
+        # Visual feedback: change cursor and add border
         if enabled:
             self._subtitle_item.setCursor(Qt.CursorShape.OpenHandCursor)
+            # Add visual border to indicate edit mode
+            from PySide6.QtWidgets import QGraphicsRectItem
+            from PySide6.QtGui import QPen, QBrush
+            if not hasattr(self, '_edit_border'):
+                self._edit_border = QGraphicsRectItem()
+                self._edit_border.setZValue(9)  # Just below subtitle
+                self._scene.addItem(self._edit_border)
+
+            # Update border position and style
+            rect = self._subtitle_item.boundingRect()
+            pos = self._subtitle_item.pos()
+            border_rect = rect.adjusted(-10, -10, 10, 10)
+            self._edit_border.setRect(border_rect)
+            self._edit_border.setPos(pos)
+            self._edit_border.setPen(QPen(QColor(255, 165, 0), 3, Qt.PenStyle.DashLine))  # Orange dashed border
+            self._edit_border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            self._edit_border.setVisible(True)
         else:
             self._subtitle_item.setCursor(Qt.CursorShape.ArrowCursor)
+            # Hide border when not in edit mode
+            if hasattr(self, '_edit_border'):
+                self._edit_border.setVisible(False)
 
     def get_subtitle_position(self) -> tuple[int, int] | None:
         """Get current subtitle position (x, y) in scene coordinates."""
@@ -187,3 +221,12 @@ class VideoPlayerWidget(QGraphicsView):
     def is_edit_mode(self) -> bool:
         """Check if subtitle edit mode is enabled."""
         return self._edit_mode
+
+    def eventFilter(self, obj, event):
+        """Filter events to track subtitle item position changes."""
+        from PySide6.QtCore import QEvent
+        if obj == self._subtitle_item and event.type() == QEvent.Type.GraphicsSceneMouseMove:
+            # Update border position while dragging
+            if self._edit_mode:
+                self._update_edit_border()
+        return super().eventFilter(obj, event)

@@ -17,6 +17,7 @@ class SubtitleSegment:
     end_ms: int
     text: str
     style: SubtitleStyle | None = None
+    audio_file: str | None = None  # Path to individual audio file for this segment (TTS)
 
     @property
     def duration_ms(self) -> int:

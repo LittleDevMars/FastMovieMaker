@@ -156,27 +156,34 @@ class TTSWorker(QObject):
             track = SubtitleTrack()
             current_time_ms = 0
 
-            for i, audio_seg in enumerate(audio_segments):
-                duration_ms = int(audio_seg.duration_sec * 1000)
-
-                segment = SubtitleSegment(
-                    start_ms=current_time_ms,
-                    end_ms=current_time_ms + duration_ms,
-                    text=audio_seg.text
-                )
-
-                track.add_segment(segment)
-                current_time_ms += duration_ms
-
-            # Step 7: Copy final audio to a persistent location
-            # Use the user's .fastmoviemaker directory
+            # Prepare persistent storage for audio segments
             from src.utils.config import APP_NAME
             user_data_dir = Path.home() / f".{APP_NAME.lower()}"
             user_data_dir.mkdir(parents=True, exist_ok=True)
 
             import shutil
             import uuid
-            persistent_audio = user_data_dir / f"tts_audio_{uuid.uuid4().hex[:8]}.mp3"
+            session_id = uuid.uuid4().hex[:8]
+
+            for i, audio_seg in enumerate(audio_segments):
+                duration_ms = int(audio_seg.duration_sec * 1000)
+
+                # Copy individual segment audio to persistent location
+                persistent_segment_audio = user_data_dir / f"tts_seg_{session_id}_{i:04d}.mp3"
+                shutil.copy2(audio_seg.audio_path, persistent_segment_audio)
+
+                segment = SubtitleSegment(
+                    start_ms=current_time_ms,
+                    end_ms=current_time_ms + duration_ms,
+                    text=audio_seg.text,
+                    audio_file=str(persistent_segment_audio)  # Store individual audio file path
+                )
+
+                track.add_segment(segment)
+                current_time_ms += duration_ms
+
+            # Step 7: Copy merged audio to a persistent location
+            persistent_audio = user_data_dir / f"tts_audio_{session_id}.mp3"
             shutil.copy2(final_audio_path, persistent_audio)
 
             if not self._cancelled:
