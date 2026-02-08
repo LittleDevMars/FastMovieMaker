@@ -987,6 +987,11 @@ class MainWindow(QMainWindow):
             self._player.pause()
             self._tts_player.stop()
 
+            # Refresh subtitle display with updated timeline positions
+            self._video_widget.set_subtitle_track(current_track)
+            current_pos = self._player.position()
+            self._on_player_position_changed(current_pos)
+
             self.statusBar().showMessage(
                 f"Audio regenerated: {len(audio_segments)} segments, "
                 f"{total_duration_ms/1000:.1f}s",
@@ -1030,6 +1035,13 @@ class MainWindow(QMainWindow):
                     self._project.default_style.custom_x = x
                     self._project.default_style.custom_y = y
                     self._video_widget.set_default_style(self._project.default_style)
+
+                    # Refresh subtitle display with new position
+                    self._video_widget.set_subtitle_track(current_track)
+
+                    # Force update at current playback position
+                    current_pos = self._player.position()
+                    self._on_player_position_changed(current_pos)
 
                     self.statusBar().showMessage(
                         f"Subtitle position saved: ({x}, {y})"
@@ -1259,6 +1271,8 @@ class MainWindow(QMainWindow):
         # If video is loaded, use video position
         if self._project.has_video:
             self._timeline.set_playhead(position_ms)
+            # Update subtitle display based on current position
+            self._video_widget._update_subtitle(position_ms)
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
         """Handle TTS player position change."""
@@ -1268,6 +1282,8 @@ class MainWindow(QMainWindow):
             if track and track.audio_path:
                 timeline_pos = track.audio_start_ms + position_ms
                 self._timeline.set_playhead(timeline_pos)
+                # Update subtitle display based on timeline position
+                self._video_widget._update_subtitle(timeline_pos)
 
     def _on_player_error(self, error, error_string: str) -> None:
         self.statusBar().showMessage(f"Player error: {error_string}")

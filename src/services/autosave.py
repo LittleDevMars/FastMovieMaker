@@ -67,7 +67,11 @@ class AutoSaveManager(QObject):
     def notify_edit(self) -> None:
         """Called whenever the project is edited."""
         self._edited = True
-        self._idle_timer.start(self._idle_timeout * 1000)
+        try:
+            self._idle_timer.start(self._idle_timeout * 1000)
+        except RuntimeError:
+            # Timer already deleted (app shutting down)
+            pass
 
     def save_now(self) -> None:
         """Force an immediate autosave."""

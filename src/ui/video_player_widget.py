@@ -225,7 +225,8 @@ class VideoPlayerWidget(QGraphicsView):
     def eventFilter(self, obj, event):
         """Filter events to track subtitle item position changes."""
         from PySide6.QtCore import QEvent
-        if obj == self._subtitle_item and event.type() == QEvent.Type.GraphicsSceneMouseMove:
+        # Check if _subtitle_item exists first (may not be initialized yet)
+        if hasattr(self, '_subtitle_item') and obj == self._subtitle_item and event.type() == QEvent.Type.GraphicsSceneMouseMove:
             # Update border position while dragging
             if self._edit_mode:
                 self._update_edit_border()

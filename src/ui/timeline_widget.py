@@ -38,6 +38,7 @@ class _DragMode(Enum):
 
 
 _EDGE_PX = 6  # pixels from segment edge that trigger resize
+_PLAYHEAD_HIT_PX = 20  # pixels from playhead that trigger drag (wider for easier clicking)
 
 
 class TimelineWidget(QWidget):
@@ -294,7 +295,7 @@ class TimelineWidget(QWidget):
     # ----------------------------------------------------------- Mouse
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._duration_ms <= 0:
+        if self._duration_ms <= 0 or self._px_per_ms <= 0:
             return
 
         x = event.position().x()
@@ -310,7 +311,6 @@ class TimelineWidget(QWidget):
 
         # Shift + Left click on empty space → Pan view
         if event.button() == Qt.MouseButton.LeftButton:
-            from PySide6.QtCore import Qt
             modifiers = event.modifiers()
 
             seg_idx, hit = self._hit_test(x, y)
@@ -367,26 +367,22 @@ class TimelineWidget(QWidget):
             self._seek_to_x(x)
             return
 
-        # Show cursor feedback when hovering over playhead (not dragging)
-        if self._drag_mode == _DragMode.NONE:
-            _, hit = self._hit_test(x, y)
-            if hit == "playhead":
-                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-            else:
-                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-
         if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
             self._handle_drag(x)
             return
 
-        # Update cursor based on hover
-        seg_idx, hit = self._hit_test(x, y)
-        if hit in ("left_edge", "right_edge", "audio_left_edge", "audio_right_edge"):
-            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-        elif hit in ("body", "audio_body"):
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
-        else:
-            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        # Update cursor based on hover (including playhead)
+        if self._drag_mode == _DragMode.NONE:
+            seg_idx, hit = self._hit_test(x, y)
+            if hit == "playhead":
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+                return  # Don't process other hit zones
+            elif hit in ("left_edge", "right_edge", "audio_left_edge", "audio_right_edge"):
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            elif hit in ("body", "audio_body"):
+                self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self._drag_mode in (_DragMode.MOVE, _DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT):
@@ -400,7 +396,7 @@ class TimelineWidget(QWidget):
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if self._duration_ms <= 0:
+        if self._duration_ms <= 0 or self._px_per_ms <= 0:
             return
         delta = event.angleDelta().y()
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -409,7 +405,8 @@ class TimelineWidget(QWidget):
             old_range = self._visible_range_ms()
             new_range = max(1000, min(self._duration_ms, old_range * factor))
             mouse_frac = event.position().x() / max(self.width(), 1)
-            self._visible_start_ms = mouse_ms - new_range * mouse_frac
+            # Immediately clamp to prevent negative values
+            self._visible_start_ms = max(0, mouse_ms - new_range * mouse_frac)
             self._clamp_visible_start(new_range)
         else:
             shift = self._visible_range_ms() * 0.1 * (-1 if delta > 0 else 1)
@@ -509,9 +506,9 @@ class TimelineWidget(QWidget):
 
     def _hit_test(self, x: float, y: float) -> tuple[int, str]:
         """Return (segment_index, hit_zone) or (-1, '') if nothing hit."""
-        # Check playhead first (highest priority)
+        # Check playhead first (highest priority, wider hit zone for easier dragging)
         playhead_x = self._ms_to_x(self._playhead_ms)
-        if abs(x - playhead_x) <= _EDGE_PX:
+        if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
             return -3, "playhead"
 
         if not self._track:
@@ -565,7 +562,8 @@ class TimelineWidget(QWidget):
 
     def _x_to_ms(self, x: float) -> float:
         if self._px_per_ms <= 0:
-            return 0
+            # Return current playhead position instead of 0 to avoid unwanted seeking
+            return float(self._playhead_ms)
         return self._visible_start_ms + x / self._px_per_ms
 
     def _seek_to_x(self, x: float) -> None:
