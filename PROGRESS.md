@@ -2,6 +2,31 @@
 
 ---
 
+## 다음 단계 (Next Session)
+
+**현재 상태**
+- Day 9 완료: TTS 오디오 + 자막 통합 내보내기 (Export 옵션, 세그먼트별 볼륨)
+- **Waveform** 이미 구현됨 (비디오 로드 시 오디오 파형 배경 생성) — 커밋 대기
+  - `src/services/waveform_service.py`, `src/workers/waveform_worker.py`, `tests/test_waveform_service.py`
+  - 타임라인: `set_waveform` / `clear_waveform`, 캐시된 QImage로 그리기
+
+**즉시 할 일**
+1. **수동 GUI 테스트** (선택)
+   - 비디오 로드 → Waveform 로딩 표시 확인
+   - TTS 생성 → 내보내기 시 "TTS 오디오 포함" 옵션 동작 확인
+   - TESTING.md / PROGRESS.md 수동 체크리스트 참고
+2. **Git commit and push**
+   - Day 9 변경분 + Waveform 신규 파일 스테이징 후 커밋
+3. **Phase 4 Week 3 나머지** (우선순위 선택)
+   - **Batch Export**: 여러 프로젝트/트랙 일괄 내보내기
+   - **키보드 커스터마이징**: 단축키 사용자 설정
+4. **Phase 5** 계획 검토 (필요 시)
+
+**참고**
+- `audio_merger.py`에 `from __future__ import annotations` 추가함 (Python 3.9에서 `List[float] | None` 수집 에러 방지)
+
+---
+
 ## 2026-02-08 (Day 9) 작업 요약
 
 **비디오 내보내기 고도화 - TTS 오디오 + 자막 통합 내보내기**
