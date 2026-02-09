@@ -18,16 +18,34 @@ class TestVideoClip:
         d = clip.to_dict()
         assert d == {"source_in_ms": 100, "source_out_ms": 200}
 
+    def test_to_dict_with_source_path(self):
+        clip = VideoClip(100, 200, source_path="C:/videos/extra.mp4")
+        d = clip.to_dict()
+        assert d["source_path"] == "C:/videos/extra.mp4"
+
     def test_from_dict(self):
         clip = VideoClip.from_dict({"source_in_ms": 500, "source_out_ms": 1500})
         assert clip.source_in_ms == 500
         assert clip.source_out_ms == 1500
+        assert clip.source_path is None
+
+    def test_from_dict_with_source_path(self):
+        clip = VideoClip.from_dict({
+            "source_in_ms": 500, "source_out_ms": 1500,
+            "source_path": "D:/clip2.mp4",
+        })
+        assert clip.source_path == "D:/clip2.mp4"
 
     def test_roundtrip(self):
         original = VideoClip(1234, 5678)
         restored = VideoClip.from_dict(original.to_dict())
         assert restored.source_in_ms == original.source_in_ms
         assert restored.source_out_ms == original.source_out_ms
+
+    def test_roundtrip_with_source_path(self):
+        original = VideoClip(1234, 5678, source_path="extra.mp4")
+        restored = VideoClip.from_dict(original.to_dict())
+        assert restored.source_path == original.source_path
 
 
 # ------------------------------------------------------------------ VideoClipTrack
@@ -255,6 +273,62 @@ class TestVideoClipTrack:
     def test_is_full_video_false_trimmed(self):
         track = VideoClipTrack(clips=[VideoClip(500, 10000)])
         assert track.is_full_video(10000) is False
+
+    # ---- Iteration ----
+
+    # ---- Multi-source ----
+
+    def test_split_preserves_source_path(self):
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 10000, source_path="extra.mp4"),
+        ])
+        track.split_at_timeline(5000)
+        assert len(track) == 2
+        assert track[0].source_path == "extra.mp4"
+        assert track[1].source_path == "extra.mp4"
+
+    def test_has_multiple_sources_false(self):
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),
+            VideoClip(5000, 10000),
+        ])
+        assert track.has_multiple_sources() is False
+
+    def test_has_multiple_sources_true(self):
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),
+            VideoClip(0, 3000, source_path="extra.mp4"),
+        ])
+        assert track.has_multiple_sources() is True
+
+    def test_unique_source_paths(self):
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),
+            VideoClip(0, 3000, source_path="a.mp4"),
+            VideoClip(0, 2000, source_path="b.mp4"),
+            VideoClip(3000, 6000, source_path="a.mp4"),
+        ])
+        paths = track.unique_source_paths()
+        assert set(paths) == {"a.mp4", "b.mp4"}
+
+    def test_source_to_timeline_multi_source(self):
+        """source_to_timeline with source_path filter only considers matching clips."""
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),                              # timeline 0-5000
+            VideoClip(0, 3000, source_path="extra.mp4"),     # timeline 5000-8000
+            VideoClip(5000, 10000),                          # timeline 8000-13000
+        ])
+        # source_ms=1000 in extra.mp4 → timeline 6000
+        assert track.source_to_timeline(1000, source_path="extra.mp4") == 6000
+        # source_ms=1000 in primary (None) → first matching clip → timeline 1000
+        assert track.source_to_timeline(1000, source_path=None) == 1000
+        # Without filter → first clip match
+        assert track.source_to_timeline(1000) == 1000
+
+    def test_from_full_video_with_source_path(self):
+        track = VideoClipTrack.from_full_video(5000, source_path="input.mp4")
+        assert len(track) == 1
+        assert track[0].source_path == "input.mp4"
 
     # ---- Iteration ----
 

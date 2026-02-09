@@ -469,6 +469,10 @@ STRINGS: dict[str, str] = {
     # ── Subtitle panel (extra) ──
     "Could not parse timecode": "타임코드를 파싱할 수 없음",
 
+    # ── Multi-video ──
+    "Could not read video duration.": "영상 길이를 읽을 수 없습니다.",
+    "Added video clip": "영상 클립 추가됨",
+
     # ── Common ──
     "Ok": "확인",
     "Yes": "예",

@@ -14,25 +14,51 @@ from src.services.subtitle_exporter import export_srt
 from src.utils.config import find_ffmpeg
 
 
-def _build_concat_filter(clips: list) -> tuple[list[str], str, str]:
+def _build_concat_filter(
+    clips: list,
+    source_index_map: dict | None = None,
+    out_w: int = 0,
+    out_h: int = 0,
+) -> tuple[list[str], str, str]:
     """Build FFmpeg trim+concat filter parts for video clips.
 
+    Args:
+        clips: List of VideoClip objects.
+        source_index_map: Maps ``source_path`` → FFmpeg input index.
+            When ``None``, all clips use input 0 (single-source mode).
+        out_w, out_h: Output resolution for multi-source normalization.
+            When > 0, each clip is scaled+padded to match.
+
     Returns:
-        (filter_parts, video_label, audio_label) where labels are e.g. "[concatv]", "[concata]".
+        (filter_parts, video_label, audio_label) where labels are
+        e.g. ``"[concatv]"``, ``"[concata]"``.
     """
     parts: list[str] = []
     v_labels = []
     a_labels = []
+    need_scale = out_w > 0 and out_h > 0 and source_index_map is not None
+
     for i, clip in enumerate(clips):
+        if source_index_map is not None:
+            idx = source_index_map.get(clip.source_path, 0)
+        else:
+            idx = 0
         start_s = clip.source_in_ms / 1000.0
         end_s = clip.source_out_ms / 1000.0
         vl = f"cv{i}"
         al = f"ca{i}"
+
+        v_filter = f"[{idx}:v]trim=start={start_s:.3f}:end={end_s:.3f},setpts=PTS-STARTPTS"
+        if need_scale:
+            v_filter += (
+                f",scale={out_w}:{out_h}:force_original_aspect_ratio=decrease"
+                f",pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
+            )
+        v_filter += f"[{vl}]"
+        parts.append(v_filter)
+
         parts.append(
-            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},setpts=PTS-STARTPTS[{vl}]"
-        )
-        parts.append(
-            f"[0:a]atrim=start={start_s:.3f}:end={end_s:.3f},asetpts=PTS-STARTPTS[{al}]"
+            f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f},asetpts=PTS-STARTPTS[{al}]"
         )
         v_labels.append(f"[{vl}]")
         a_labels.append(f"[{al}]")
@@ -111,12 +137,29 @@ def export_video(
             video_clips is not None
             and len(video_clips.clips) > 1
         )
+        multi_source = (
+            multi_clip
+            and video_clips is not None
+            and video_clips.has_multiple_sources()
+        )
         use_filter_complex = use_overlay or bool(valid_image_overlays) or multi_clip
 
         if use_filter_complex:
-            # ---- Collect all inputs ----
-            input_args: list[str] = ["-i", str(video_path)]
-            next_idx = 1
+            # ---- Collect all inputs (multi-source: one per unique source) ----
+            source_index_map: dict[str | None, int] = {}
+            if multi_source and video_clips is not None:
+                # Primary video is input 0 (source_path=None)
+                input_args: list[str] = ["-i", str(video_path)]
+                source_index_map[None] = 0
+                next_idx = 1
+                for sp in video_clips.unique_source_paths():
+                    input_args.extend(["-i", sp])
+                    source_index_map[sp] = next_idx
+                    next_idx += 1
+            else:
+                input_args = ["-i", str(video_path)]
+                source_index_map[None] = 0
+                next_idx = 1
 
             template_idx = -1
             if use_overlay:
@@ -142,7 +185,21 @@ def export_video(
 
             # Multi-clip concat (trim + concat)
             if multi_clip:
-                concat_parts, v_label, a_label = _build_concat_filter(video_clips.clips)
+                if multi_source:
+                    # Get output resolution for normalization
+                    norm_w = scale_width if scale_width > 0 else 0
+                    norm_h = scale_height if scale_height > 0 else 0
+                    if norm_w == 0 or norm_h == 0:
+                        norm_w, norm_h = _get_video_resolution(ffmpeg, video_path)
+                        if norm_w <= 0 or norm_h <= 0:
+                            norm_w, norm_h = 1920, 1080
+                    concat_parts, v_label, a_label = _build_concat_filter(
+                        video_clips.clips, source_index_map, norm_w, norm_h,
+                    )
+                else:
+                    concat_parts, v_label, a_label = _build_concat_filter(
+                        video_clips.clips,
+                    )
                 fc_parts.extend(concat_parts)
                 current = v_label  # e.g. "[concatv]"
                 concat_audio_label = a_label  # e.g. "[concata]"

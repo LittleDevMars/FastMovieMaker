@@ -49,6 +49,12 @@ class VideoPlayerWidget(QGraphicsView):
         self._player.setVideoOutput(self._video_item)
         self._video_item.nativeSizeChanged.connect(self._on_native_size_changed)
 
+        # Cached frame preview layer (Z=1: above video, below overlays)
+        self._frame_preview_item = QGraphicsPixmapItem()
+        self._frame_preview_item.setZValue(1)
+        self._frame_preview_item.setVisible(False)
+        self._scene.addItem(self._frame_preview_item)
+
         # Overlay template layer (between video and subtitle)
         self._overlay_item = QGraphicsPixmapItem()
         self._overlay_item.setZValue(5)
@@ -314,12 +320,37 @@ class VideoPlayerWidget(QGraphicsView):
         y = (view_size.height() - scaled.height()) / 2
         self._overlay_item.setPos(x, y)
 
+    def show_cached_frame(self, pixmap: QPixmap) -> None:
+        """Show a cached frame thumbnail, covering the video area."""
+        if pixmap.isNull():
+            return
+        view_size = self.viewport().size()
+        scaled = pixmap.scaled(
+            view_size.width(), view_size.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._frame_preview_item.setPixmap(scaled)
+        x = (view_size.width() - scaled.width()) / 2
+        y = (view_size.height() - scaled.height()) / 2
+        self._frame_preview_item.setPos(x, y)
+        self._frame_preview_item.setVisible(True)
+
+    def hide_cached_frame(self) -> None:
+        """Hide the cached frame preview, showing live video again."""
+        self._frame_preview_item.setVisible(False)
+
     def _fit_video(self) -> None:
         view_size = self.viewport().size()
         self._video_item.setSize(QSizeF(view_size.width(), view_size.height()))
         self._scene.setSceneRect(0, 0, view_size.width(), view_size.height())
         self._fit_overlay()
         self._position_subtitle()
+        # Re-fit cached frame preview if visible
+        if self._frame_preview_item.isVisible():
+            pixmap = self._frame_preview_item.pixmap()
+            if pixmap and not pixmap.isNull():
+                self.show_cached_frame(pixmap)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

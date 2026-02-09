@@ -17,6 +17,16 @@ PYTHON_VERSION=$(python3 --version)
 echo "   ✓ $PYTHON_VERSION"
 echo ""
 
+# 가상환경 설정 (선택 사항)
+echo "1️⃣-ⓑ 가상환경(venv) 확인..."
+if [ ! -d "venv" ]; then
+    echo "   ⚙️  가상환경 생성 중..."
+    python3 -m venv venv
+fi
+source venv/bin/activate
+echo "   ✓ 가상환경 활성화"
+echo ""
+
 # pip 업그레이드
 echo "2️⃣ pip 업그레이드..."
 python3 -m pip install --upgrade pip

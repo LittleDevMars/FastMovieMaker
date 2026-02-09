@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl, Signal
-from PySide6.QtGui import QCursor, QDrag, QMouseEvent, QPixmap
+from PySide6.QtGui import QColor, QCursor, QDrag, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -38,6 +38,7 @@ class _ThumbnailWidget(QWidget):
     def __init__(self, item: MediaItem, parent=None):
         super().__init__(parent)
         self._item = item
+        self._selected = False
         self.setFixedSize(self.THUMB_SIZE + 10, self.THUMB_SIZE + 30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -78,9 +79,24 @@ class _ThumbnailWidget(QWidget):
         name_label.setWordWrap(False)
         layout.addWidget(name_label)
 
-        # Favorite indicator
-        if item.favorite:
-            self.setStyleSheet("border: 2px solid #00bcd4; border-radius: 6px;")
+    def set_selected(self, selected: bool) -> None:
+        """Toggle visual selection state."""
+        self._selected = selected
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if not self._selected:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Tinted background
+        painter.fillRect(self.rect(), QColor(0, 188, 212, 25))
+        # Border
+        pen = QPen(QColor("#00bcd4"), 2)
+        painter.setPen(pen)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+        painter.end()
 
     def _load_thumbnail(self) -> QPixmap | None:
         if self._item.thumbnail_path and Path(self._item.thumbnail_path).exists():
@@ -142,6 +158,8 @@ class MediaLibraryPanel(QWidget):
         super().__init__(parent)
         self._service = MediaLibraryService()
         self._filter: str | None = None  # None = all, "video", "image"
+        self._selected_id: str | None = None
+        self._thumb_widgets: dict[str, _ThumbnailWidget] = {}
         self._build_ui()
         self._refresh()
 
@@ -237,6 +255,14 @@ class MediaLibraryPanel(QWidget):
         self._refresh()
 
     def _on_item_clicked(self, item_id: str) -> None:
+        # Deselect previous
+        if self._selected_id and self._selected_id in self._thumb_widgets:
+            self._thumb_widgets[self._selected_id].set_selected(False)
+        # Select new
+        self._selected_id = item_id
+        if item_id in self._thumb_widgets:
+            self._thumb_widgets[item_id].set_selected(True)
+
         item = self._service.get_item(item_id)
         if item and item.media_type == "image":
             self.image_selected.emit(item.file_path)
@@ -314,6 +340,7 @@ class MediaLibraryPanel(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
+        self._thumb_widgets.clear()
         items = self._service.list_items(media_type=self._filter)
 
         # Favorites section
@@ -345,6 +372,9 @@ class MediaLibraryPanel(QWidget):
             thumb.clicked.connect(self._on_item_clicked)
             thumb.double_clicked.connect(self._on_item_double_clicked)
             thumb.context_menu_requested.connect(self._on_context_menu)
+            self._thumb_widgets[item.item_id] = thumb
+            if item.item_id == self._selected_id:
+                thumb.set_selected(True)
             self._grid_layout.addWidget(thumb, row, col)
             col += 1
             if col >= self.GRID_COLUMNS:

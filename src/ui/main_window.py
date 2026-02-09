@@ -31,6 +31,8 @@ from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.audio_merger import AudioMerger
+from src.services.frame_cache_service import FrameCacheService
+from src.workers.frame_cache_worker import FrameCacheWorker
 from src.services.autosave import AutoSaveManager
 from src.services.subtitle_exporter import export_srt, import_srt
 from src.services.translator import TranslatorService
@@ -40,6 +42,7 @@ from src.ui.dialogs.translate_dialog import TranslateDialog
 from src.models.video_clip import VideoClipTrack
 from src.ui.commands import (
     AddSegmentCommand,
+    AddVideoClipCommand,
     BatchShiftCommand,
     DeleteClipCommand,
     DeleteSegmentCommand,
@@ -104,6 +107,9 @@ class MainWindow(QMainWindow):
         self._audio_output.setVolume(1.0)  # Ensure volume is at maximum
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
+        self._current_playback_source: str | None = None  # track which video is loaded
+        self._current_clip_index: int = 0  # track which clip in the clip track is playing
+        self._pending_seek_ms: int | None = None  # seek after source switch
 
         # TTS audio player (separate from video player)
         self._tts_audio_output = QAudioOutput()
@@ -114,6 +120,12 @@ class MainWindow(QMainWindow):
         # Waveform worker
         self._waveform_thread: QThread | None = None
         self._waveform_worker: WaveformWorker | None = None
+
+        # Frame cache
+        self._frame_cache_service: FrameCacheService | None = None
+        self._frame_cache_thread: QThread | None = None
+        self._frame_cache_worker: FrameCacheWorker | None = None
+        self._showing_cached_frame = False
 
         self._build_ui()
         self._build_menu()
@@ -449,6 +461,8 @@ class MainWindow(QMainWindow):
         else:
             # Play
             if self._project.has_video:
+                # Sync clip index from current position before playing
+                self._sync_clip_index_from_position()
                 # Video exists - play video and sync TTS
                 self._player.play()
                 self._sync_tts_playback()
@@ -600,6 +614,7 @@ class MainWindow(QMainWindow):
         # Player signals
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.positionChanged.connect(self._on_player_position_changed)
+        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
         self._player.errorOccurred.connect(self._on_player_error)
         self._controls.play_toggled.connect(self._toggle_play_pause)
         self._controls.stop_requested.connect(self._on_stop_all)
@@ -657,9 +672,7 @@ class MainWindow(QMainWindow):
 
         # Timeline drag-and-drop signals
         self._timeline.image_file_dropped.connect(self._on_image_file_dropped)
-        self._timeline.video_file_dropped.connect(
-            lambda path: self._load_video(Path(path))
-        )
+        self._timeline.video_file_dropped.connect(self._on_video_file_dropped)
 
         # Template signals
         self._templates_panel.template_applied.connect(self._on_template_applied)
@@ -968,6 +981,89 @@ class MainWindow(QMainWindow):
         self._autosave.notify_edit()
         self.statusBar().showMessage(f"Image overlay inserted from library: {Path(file_path).name}")
 
+    def _on_video_file_dropped(self, path_str: str, position_ms: int) -> None:
+        """Handle video file dropped onto the timeline."""
+        path = Path(path_str)
+        if not self._project.has_video:
+            # No video loaded yet → load as primary
+            self._load_video(path)
+        else:
+            # Already have a video → add as new clip
+            self._add_video_to_timeline(path, position_ms)
+
+    def _add_video_to_timeline(self, path: Path, position_ms: int) -> None:
+        """Add an external video file as a new clip on the timeline."""
+        from src.services.video_probe import probe_video
+        from src.models.video_clip import VideoClip
+
+        info = probe_video(path)
+        if info.duration_ms <= 0:
+            QMessageBox.warning(
+                self, tr("Error"),
+                tr("Could not read video duration.") + f"\n{path.name}",
+            )
+            return
+
+        clip = VideoClip(
+            source_in_ms=0,
+            source_out_ms=info.duration_ms,
+            source_path=str(path.resolve()),
+        )
+
+        clip_track = self._project.video_clip_track
+        if clip_track is None:
+            # Legacy project: initialize clip track from primary video
+            from src.models.video_clip import VideoClipTrack
+            if self._project.video_path and self._project.duration_ms > 0:
+                clip_track = VideoClipTrack.from_full_video(self._project.duration_ms)
+                self._project.video_clip_track = clip_track
+            else:
+                return
+
+        # Determine insert position: find which clip the drop position falls in
+        result = clip_track.clip_at_timeline(position_ms)
+        if result is not None:
+            idx, existing_clip = result
+            clip_start = clip_track.clip_timeline_start(idx)
+            local_offset = position_ms - clip_start
+
+            # If dropping near the end of a clip (>80% into it), insert after
+            if local_offset > existing_clip.duration_ms * 0.8:
+                insert_index = idx + 1
+            # If dropping near the start (<20%), insert before
+            elif local_offset < existing_clip.duration_ms * 0.2:
+                insert_index = idx
+            else:
+                # Split the existing clip and insert between the halves
+                source_split = existing_clip.source_in_ms + local_offset
+                first = VideoClip(existing_clip.source_in_ms, source_split,
+                                  source_path=existing_clip.source_path)
+                second = VideoClip(source_split, existing_clip.source_out_ms,
+                                   source_path=existing_clip.source_path)
+                clip_track.clips[idx] = first
+                clip_track.clips.insert(idx + 1, second)
+                insert_index = idx + 1
+        else:
+            # Beyond end → append
+            insert_index = len(clip_track.clips)
+
+        cmd = AddVideoClipCommand(clip_track, clip, insert_index)
+        self._undo_stack.push(cmd)
+
+        # Update duration and refresh
+        self._project.duration_ms = clip_track.output_duration_ms
+        self._timeline.set_duration(clip_track.output_duration_ms, has_video=True)
+        self._timeline.set_clip_track(clip_track)
+        self._timeline.refresh()
+        self._controls.set_output_duration(clip_track.output_duration_ms)
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(
+            f"{tr('Added video clip')}: {path.name} ({info.duration_ms // 1000}s)"
+        )
+
+        # Cache frames for the newly added source
+        self._start_frame_cache_generation()
+
     def _on_delete_image_overlay(self, index: int) -> None:
         """Delete an image overlay by index."""
         io_track = self._project.image_overlay_track
@@ -1173,6 +1269,8 @@ class MainWindow(QMainWindow):
         except Exception:
             self._project.video_has_audio = False
 
+        self._current_playback_source = str(playback_path)
+        self._current_clip_index = 0
         self._player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._player.play()
 
@@ -1187,6 +1285,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"{path.name} – {APP_NAME}")
         self.statusBar().showMessage(f"{tr('Loaded')}: {path.name}")
+
+        # Start frame cache generation
+        self._start_frame_cache_generation()
 
     def _convert_to_mp4(self, source: Path) -> Path | None:
         """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
@@ -1264,6 +1365,10 @@ class MainWindow(QMainWindow):
         self._temp_video_path = None
 
     def _on_duration_changed(self, duration_ms: int) -> None:
+        # Skip during source switching — don't overwrite project duration
+        # with an external video's duration
+        if self._pending_seek_ms is not None:
+            return
         self._project.duration_ms = duration_ms
         # Only update timeline if duration > 0; ignore durationChanged(0)
         # which would overwrite a TTS-derived timeline duration.
@@ -1777,6 +1882,8 @@ class MainWindow(QMainWindow):
 
             # Load video if it exists
             if project.video_path and project.video_path.is_file():
+                self._current_playback_source = str(project.video_path)
+                self._current_clip_index = 0
                 self._player.setSource(QUrl.fromLocalFile(str(project.video_path)))
                 self._player.play()
                 self.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
@@ -1798,9 +1905,25 @@ class MainWindow(QMainWindow):
 
             # Apply video clip track
             if project.video_clip_track:
+                output_dur = project.video_clip_track.output_duration_ms
+                self._timeline.set_duration(output_dur, has_video=True)
                 self._timeline.set_clip_track(project.video_clip_track)
                 self._controls.enable_output_time_mode()
-                self._controls.set_output_duration(project.video_clip_track.output_duration_ms)
+                self._controls.set_output_duration(output_dur)
+            elif project.has_video and project.duration_ms > 0:
+                # Legacy project (v2/v3): initialize clip track from primary video
+                from src.models.video_clip import VideoClipTrack
+                project.video_clip_track = VideoClipTrack.from_full_video(project.duration_ms)
+                self._timeline.set_duration(project.duration_ms, has_video=True)
+                self._timeline.set_clip_track(project.video_clip_track)
+                self._controls.enable_output_time_mode()
+                self._controls.set_output_duration(project.duration_ms)
+
+            # Refresh timeline to update display
+            self._timeline.refresh()
+
+            # Start frame cache generation
+            self._start_frame_cache_generation()
 
             self._update_recent_menu()
             self.statusBar().showMessage(f"{tr('Project loaded')}: {path}")
@@ -1811,9 +1934,19 @@ class MainWindow(QMainWindow):
         if self._project.has_video:
             clip_track = self._project.video_clip_track
             if clip_track:
-                source_ms = clip_track.timeline_to_source(position_ms)
-                if source_ms is not None:
-                    self._player.setPosition(source_ms)
+                result = clip_track.clip_at_timeline(position_ms)
+                if result is not None:
+                    idx, clip = result
+                    self._current_clip_index = idx
+                    local_offset = position_ms - clip_track.clip_timeline_start(idx)
+                    source_ms = clip.source_in_ms + local_offset
+                    target_source = clip.source_path or str(self._project.video_path)
+                    if target_source != self._current_playback_source:
+                        was_playing = self._player.isPlaying()
+                        self._switch_player_source(target_source, source_ms,
+                                                   auto_play=was_playing)
+                    else:
+                        self._player.setPosition(source_ms)
                 else:
                     self._player.setPosition(position_ms)
             else:
@@ -1834,46 +1967,127 @@ class MainWindow(QMainWindow):
         """Handle position change from playback controls slider (output time)."""
         clip_track = self._project.video_clip_track
         if clip_track:
-            source_ms = clip_track.timeline_to_source(position_ms)
-            if source_ms is not None:
-                self._player.setPosition(source_ms)
+            result = clip_track.clip_at_timeline(position_ms)
+            if result is not None:
+                idx, clip = result
+                self._current_clip_index = idx
+                local_offset = position_ms - clip_track.clip_timeline_start(idx)
+                source_ms = clip.source_in_ms + local_offset
+                target_source = clip.source_path or str(self._project.video_path)
+                if target_source != self._current_playback_source:
+                    was_playing = self._player.isPlaying()
+                    self._switch_player_source(target_source, source_ms,
+                                               auto_play=was_playing)
+                else:
+                    self._player.setPosition(source_ms)
             self._timeline.set_playhead(position_ms)
         else:
             self._player.setPosition(position_ms)
         self._sync_tts_playback()
 
+    def _sync_clip_index_from_position(self) -> None:
+        """Recalculate _current_clip_index from current player position/source."""
+        clip_track = self._project.video_clip_track
+        if not clip_track:
+            return
+        source = self._current_playback_source
+        pos = self._player.position()
+        for i, clip in enumerate(clip_track.clips):
+            clip_source = clip.source_path or (str(self._project.video_path) if self._project.video_path else None)
+            if clip_source == source and clip.source_in_ms <= pos < clip.source_out_ms:
+                self._current_clip_index = i
+                return
+
     def _on_player_position_changed(self, position_ms: int) -> None:
-        """Handle video player position change (source_ms from QMediaPlayer)."""
+        """Handle video player position change (source_ms from QMediaPlayer).
+
+        Uses _current_clip_index to track which clip is playing,
+        avoiding ambiguous source_to_timeline mapping when same-source
+        clips have contiguous ranges.
+        """
         if not self._project.has_video:
             return
 
         clip_track = self._project.video_clip_track
         if clip_track:
-            timeline_ms = clip_track.source_to_timeline(position_ms)
-            if timeline_ms is None:
-                # Source position is in a deleted region — skip to next clip
-                next_in = clip_track.next_clip_source_in(position_ms)
-                if next_in is not None:
-                    self._player.setPosition(next_in)
-                return
+            clips = clip_track.clips
+            idx = self._current_clip_index
+
+            # Validate clip index
+            if not (0 <= idx < len(clips)):
+                idx = 0
+                self._current_clip_index = 0
+
+            current_clip = clips[idx]
+
+            # Check if position exceeded current clip boundary → transition
+            if position_ms >= current_clip.source_out_ms - 30:
+                if idx + 1 < len(clips):
+                    next_clip = clips[idx + 1]
+                    self._current_clip_index = idx + 1
+                    next_source = next_clip.source_path or str(self._project.video_path)
+                    if next_source != self._current_playback_source:
+                        was_playing = self._player.isPlaying()
+                        self._switch_player_source(
+                            next_source, next_clip.source_in_ms,
+                            auto_play=was_playing,
+                        )
+                    else:
+                        self._player.setPosition(next_clip.source_in_ms)
+                    return
+
+            # Calculate timeline position from known clip index
+            clip_start = clip_track.clip_timeline_start(idx)
+            elapsed = max(0, position_ms - current_clip.source_in_ms)
+            timeline_ms = min(clip_start + elapsed, clip_track.output_duration_ms)
+
             self._timeline.set_playhead(timeline_ms)
             self._controls.set_output_position(timeline_ms)
             self._video_widget._update_subtitle(timeline_ms)
-
-            # Auto-skip at clip boundaries
-            result = clip_track.clip_at_timeline(timeline_ms)
-            if result is not None:
-                idx, clip = result
-                # Calculate this clip's end in source time
-                clip_source_end = clip.source_out_ms
-                if abs(position_ms - clip_source_end) < 50:
-                    # Near clip end — check for next clip
-                    if idx + 1 < len(clip_track.clips):
-                        next_clip = clip_track.clips[idx + 1]
-                        self._player.setPosition(next_clip.source_in_ms)
         else:
             self._timeline.set_playhead(position_ms)
             self._video_widget._update_subtitle(position_ms)
+
+    def _switch_player_source(self, source_path: str, seek_ms: int,
+                              auto_play: bool = False) -> None:
+        """Switch QMediaPlayer to a different source video file."""
+        # Show cached frame immediately while QMediaPlayer loads
+        if self._frame_cache_service:
+            from PySide6.QtGui import QPixmap
+            frame_path = self._frame_cache_service.get_nearest_frame(
+                source_path, seek_ms,
+            )
+            if frame_path:
+                pixmap = QPixmap(str(frame_path))
+                if not pixmap.isNull():
+                    self._video_widget.show_cached_frame(pixmap)
+                    self._showing_cached_frame = True
+
+        self._current_playback_source = source_path
+        self._pending_seek_ms = seek_ms
+        self._pending_auto_play = auto_play
+        self._player.setSource(QUrl.fromLocalFile(source_path))
+
+    def _on_media_status_changed(self, status) -> None:
+        """Handle media status change — seek to pending position after source switch."""
+        from PySide6.QtMultimedia import QMediaPlayer as _QMP
+        if status == _QMP.MediaStatus.LoadedMedia and self._pending_seek_ms is not None:
+            seek_ms = self._pending_seek_ms
+            auto_play = getattr(self, "_pending_auto_play", False)
+            self._pending_seek_ms = None
+            self._pending_auto_play = False
+            self._player.setPosition(seek_ms)
+            if auto_play:
+                self._player.play()
+            else:
+                # play+pause to force video frame render in StoppedState
+                self._player.play()
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(50, self._player.pause)
+            # Hide cached frame now that live video is ready
+            if self._showing_cached_frame:
+                self._video_widget.hide_cached_frame()
+                self._showing_cached_frame = False
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
         """Handle TTS player position change."""
@@ -1926,8 +2140,8 @@ class MainWindow(QMainWindow):
 
         from src.models.video_clip import VideoClip
         original = clip
-        first = VideoClip(clip.source_in_ms, split_source)
-        second = VideoClip(split_source, clip.source_out_ms)
+        first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path)
+        second = VideoClip(split_source, clip.source_out_ms, source_path=clip.source_path)
 
         cmd = SplitClipCommand(clip_track, clip_idx, original, first, second)
         self._undo_stack.push(cmd)
@@ -2170,6 +2384,9 @@ class MainWindow(QMainWindow):
         settings.setValue("window_state", self.saveState())
         self._player.stop()
         self._stop_waveform_generation()
+        self._stop_frame_cache_generation()
+        if self._frame_cache_service:
+            self._frame_cache_service.cleanup()
         self._cleanup_temp_video()
         # Final save before closing
         self._autosave.save_now()
@@ -2220,3 +2437,79 @@ class MainWindow(QMainWindow):
             self._waveform_thread.wait(5000)
         self._waveform_thread = None
         self._waveform_worker = None
+
+    # ------------------------------------------------ Frame cache generation
+
+    def _start_frame_cache_generation(self) -> None:
+        """Start background frame cache extraction for all video sources."""
+        self._stop_frame_cache_generation()
+
+        # Collect all unique source paths and durations
+        source_paths: list[str] = []
+        durations: dict[str, int] = {}
+
+        if self._project.video_path:
+            primary = str(self._project.video_path)
+            source_paths.append(primary)
+            durations[primary] = self._project.duration_ms
+
+        clip_track = self._project.video_clip_track
+        if clip_track:
+            for sp in clip_track.unique_source_paths():
+                if sp not in source_paths:
+                    source_paths.append(sp)
+                    from src.services.video_probe import probe_video
+                    info = probe_video(sp)
+                    durations[sp] = info.duration_ms
+
+        if not source_paths:
+            return
+
+        # Create or reuse cache service
+        if self._frame_cache_service is None:
+            self._frame_cache_service = FrameCacheService()
+        self._frame_cache_service.initialize()
+
+        # Skip already-cached sources
+        uncached = [
+            sp for sp in source_paths
+            if not self._frame_cache_service.is_cached(sp)
+        ]
+        if not uncached:
+            return
+
+        self._frame_cache_thread = QThread()
+        self._frame_cache_worker = FrameCacheWorker(
+            uncached, durations, self._frame_cache_service,
+        )
+        self._frame_cache_worker.moveToThread(self._frame_cache_thread)
+
+        self._frame_cache_thread.started.connect(self._frame_cache_worker.run)
+        self._frame_cache_worker.status_update.connect(
+            lambda msg: self.statusBar().showMessage(msg, 3000)
+        )
+        self._frame_cache_worker.finished.connect(self._on_frame_cache_finished)
+        self._frame_cache_worker.error.connect(self._on_frame_cache_error)
+        self._frame_cache_worker.finished.connect(self._cleanup_frame_cache_thread)
+        self._frame_cache_worker.error.connect(self._cleanup_frame_cache_thread)
+
+        self._frame_cache_thread.start()
+
+    def _on_frame_cache_finished(self, cache_service) -> None:
+        self.statusBar().showMessage(tr("Frame cache ready"), 3000)
+
+    def _on_frame_cache_error(self, message: str) -> None:
+        print(f"Warning: Frame cache generation failed: {message}")
+        self.statusBar().showMessage(tr("Frame cache unavailable"), 3000)
+
+    def _stop_frame_cache_generation(self) -> None:
+        if self._frame_cache_worker:
+            self._frame_cache_worker.cancel()
+        self._cleanup_frame_cache_thread()
+
+    def _cleanup_frame_cache_thread(self) -> None:
+        if self._frame_cache_thread and self._frame_cache_thread.isRunning():
+            self._frame_cache_thread.quit()
+            self._frame_cache_thread.wait(5000)
+        self._frame_cache_thread = None
+        self._frame_cache_worker = None

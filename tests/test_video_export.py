@@ -166,3 +166,75 @@ class TestExportDialogOptions:
 
         seg_default = SubtitleSegment(0, 1000, "Test")
         assert seg_default.volume == 1.0
+
+
+# --- Multi-source concat filter tests ---
+
+class TestMultiSourceConcatFilter:
+    """Test _build_concat_filter for multi-source video clips."""
+
+    def test_single_source_no_index_map(self):
+        """Without source_index_map, all clips use input 0."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        clips = [VideoClip(0, 5000), VideoClip(8000, 15000)]
+        parts, v_label, a_label = _build_concat_filter(clips)
+
+        assert v_label == "[concatv]"
+        assert a_label == "[concata]"
+        # All clips should reference [0:v] and [0:a]
+        for part in parts[:-1]:  # last part is concat
+            assert "[0:v]" in part or "[0:a]" in part
+
+    def test_multi_source_index_map(self):
+        """With source_index_map, clips map to correct input indices."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        clips = [
+            VideoClip(0, 5000),                          # primary (None)
+            VideoClip(0, 3000, source_path="extra.mp4"), # extra
+        ]
+        source_map = {None: 0, "extra.mp4": 1}
+        parts, v_label, a_label = _build_concat_filter(
+            clips, source_map, out_w=1920, out_h=1080,
+        )
+
+        assert v_label == "[concatv]"
+        assert a_label == "[concata]"
+        # First clip: input 0
+        assert "[0:v]" in parts[0]
+        assert "[0:a]" in parts[1]
+        # Second clip: input 1
+        assert "[1:v]" in parts[2]
+        assert "[1:a]" in parts[3]
+
+    def test_multi_source_resolution_normalization(self):
+        """Multi-source with out_w/out_h adds scale+pad."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        clips = [
+            VideoClip(0, 5000),
+            VideoClip(0, 3000, source_path="extra.mp4"),
+        ]
+        source_map = {None: 0, "extra.mp4": 1}
+        parts, _, _ = _build_concat_filter(clips, source_map, 1920, 1080)
+
+        # Each video filter part should have scale and pad for normalization
+        video_parts = [p for p in parts if ":v]trim=" in p]
+        for vp in video_parts:
+            assert "scale=1920:1080" in vp
+            assert "pad=1920:1080" in vp
+
+    def test_concat_n_matches_clip_count(self):
+        """concat=n=N should match the number of clips."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        clips = [VideoClip(0, 2000), VideoClip(2000, 4000), VideoClip(4000, 6000)]
+        parts, _, _ = _build_concat_filter(clips)
+
+        concat_part = parts[-1]
+        assert "concat=n=3:v=1:a=1" in concat_part

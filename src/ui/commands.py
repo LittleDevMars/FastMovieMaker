@@ -370,3 +370,30 @@ class TrimClipCommand(QUndoCommand):
             clip = self._clip_track.clips[self._index]
             clip.source_in_ms = self._old_in
             clip.source_out_ms = self._old_out
+
+
+class AddVideoClipCommand(QUndoCommand):
+    """Insert a video clip from an external source file into the clip track."""
+
+    def __init__(self, clip_track: VideoClipTrack, clip: VideoClip,
+                 insert_index: int | None = None):
+        from pathlib import Path
+        name = Path(clip.source_path).stem if clip.source_path else "clip"
+        super().__init__(f"Add video clip ({name})")
+        self._clip_track = clip_track
+        self._clip = clip
+        # None → append at end
+        self._index = insert_index
+
+    def redo(self) -> None:
+        if self._index is not None and 0 <= self._index <= len(self._clip_track.clips):
+            self._clip_track.clips.insert(self._index, self._clip)
+        else:
+            self._clip_track.clips.append(self._clip)
+            self._index = len(self._clip_track.clips) - 1
+
+    def undo(self) -> None:
+        try:
+            self._clip_track.clips.remove(self._clip)
+        except ValueError:
+            pass

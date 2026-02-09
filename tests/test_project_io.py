@@ -44,7 +44,7 @@ class TestSaveLoadV2:
         path = tmp_path / "test.fmm.json"
         save_project(sample_project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["version"] == 3
+        assert data["version"] == 4
         assert "tracks" in data
         assert "default_style" in data
 
@@ -312,8 +312,49 @@ class TestVideoClipTrack:
         save_project(project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
 
-        assert data["version"] == 3
+        assert data["version"] == 4
         assert "video_clips" in data
         assert len(data["video_clips"]) == 1
         assert data["video_clips"][0]["source_in_ms"] == 1000
         assert data["video_clips"][0]["source_out_ms"] == 5000
+
+    def test_v4_source_path_roundtrip(self, tmp_path):
+        """source_path should survive save/load."""
+        from src.models.video_clip import VideoClip, VideoClipTrack
+        project = ProjectState()
+        project.video_clip_track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),
+            VideoClip(0, 3000, source_path="D:/extra.mp4"),
+        ])
+        track = SubtitleTrack(name="Default")
+        project.subtitle_track = track
+
+        path = tmp_path / "test_v4.fmm.json"
+        save_project(project, path)
+
+        loaded = load_project(path)
+        assert loaded.video_clip_track is not None
+        assert len(loaded.video_clip_track.clips) == 2
+        assert loaded.video_clip_track.clips[0].source_path is None
+        assert loaded.video_clip_track.clips[1].source_path == "D:/extra.mp4"
+
+    def test_v3_compat_no_source_path(self, tmp_path):
+        """v3 project without source_path should load with source_path=None."""
+        v3_data = {
+            "version": 3,
+            "video_path": None,
+            "duration_ms": 10000,
+            "default_style": {},
+            "active_track_index": 0,
+            "tracks": [{"name": "Default", "language": "", "segments": []}],
+            "image_overlays": [],
+            "video_clips": [
+                {"source_in_ms": 0, "source_out_ms": 10000},
+            ],
+        }
+        path = tmp_path / "v3_compat.fmm.json"
+        path.write_text(json.dumps(v3_data), encoding="utf-8")
+
+        loaded = load_project(path)
+        assert loaded.video_clip_track is not None
+        assert loaded.video_clip_track.clips[0].source_path is None

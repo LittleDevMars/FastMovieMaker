@@ -86,7 +86,7 @@ class TimelineWidget(QWidget):
     image_overlay_resize = Signal(int, str)  # (index, mode: "fit_width"/"full"/"16:9"/"9:16")
     insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
     image_file_dropped = Signal(str, int)  # (file_path, position_ms)
-    video_file_dropped = Signal(str)  # (file_path)
+    video_file_dropped = Signal(str, int)  # (file_path, position_ms)
     clip_selected = Signal(int)            # 클립 인덱스
     clip_split_requested = Signal(int)     # 분할 위치(timeline_ms)
     clip_deleted = Signal(int)             # 클립 인덱스
@@ -119,6 +119,16 @@ class TimelineWidget(QWidget):
     _CLIP_SELECTED_COLOR = QColor(60, 210, 210, 200)
     _CLIP_SELECTED_BORDER = QColor(100, 240, 240)
     _CLIP_SPLIT_LINE = QColor(255, 255, 255, 120)
+
+    # Multi-source clip color palette (index 0 = primary/no source_path)
+    _SOURCE_COLORS = [
+        (QColor(0, 170, 170, 180), QColor(0, 200, 200)),          # teal (primary)
+        (QColor(170, 100, 0, 180), QColor(200, 130, 30)),          # orange
+        (QColor(130, 50, 180, 180), QColor(160, 80, 210)),         # purple
+        (QColor(0, 150, 60, 180), QColor(30, 180, 90)),            # green
+        (QColor(180, 50, 80, 180), QColor(210, 80, 110)),          # red
+        (QColor(50, 100, 180, 180), QColor(80, 130, 210)),         # steel blue
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -211,6 +221,9 @@ class TimelineWidget(QWidget):
         if has_video is not None:
             self._has_video = has_video
         self._visible_start_ms = 0
+        # _px_per_ms 즉시 초기화 (paintEvent 전에도 set_playhead 등이 올바로 작동하도록)
+        if duration_ms > 0 and self.width() > 0:
+            self._px_per_ms = self.width() / float(duration_ms)
         self._invalidate_static_cache()
         self.update()
 
@@ -326,6 +339,15 @@ class TimelineWidget(QWidget):
         self.update()
 
     # ----------------------------------------------------------- 그리기
+
+    def resizeEvent(self, event) -> None:
+        """위젯 크기 변경 시 _px_per_ms를 비례 스케일링하여 동일 시간 범위 유지."""
+        super().resizeEvent(event)
+        old_w = event.oldSize().width()
+        new_w = event.size().width()
+        if old_w > 0 and new_w > 0 and self._px_per_ms > 0:
+            self._px_per_ms = self._px_per_ms * new_w / old_w
+            self._invalidate_static_cache()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         w = self.width()
@@ -556,9 +578,17 @@ class TimelineWidget(QWidget):
                 )
 
     def _draw_clips(self, painter: QPainter, w: int) -> None:
-        """비디오 클립 트랙 그리기."""
+        """비디오 클립 트랙 그리기 (멀티 소스: 소스별 색상 구분)."""
         if not self._clip_track or len(self._clip_track) == 0:
             return
+
+        # Build source_path → color index mapping
+        source_color_map: dict[str | None, int] = {None: 0}
+        next_color_idx = 1
+        for clip in self._clip_track:
+            if clip.source_path not in source_color_map:
+                source_color_map[clip.source_path] = next_color_idx
+                next_color_idx += 1
 
         offset = 0
         for i, clip in enumerate(self._clip_track):
@@ -575,8 +605,10 @@ class TimelineWidget(QWidget):
                 painter.setPen(QPen(self._CLIP_SELECTED_BORDER, 2))
                 painter.setBrush(QBrush(self._CLIP_SELECTED_COLOR))
             else:
-                painter.setPen(QPen(self._CLIP_BORDER, 1))
-                painter.setBrush(QBrush(self._CLIP_COLOR))
+                color_idx = source_color_map.get(clip.source_path, 0) % len(self._SOURCE_COLORS)
+                fill_color, border_color = self._SOURCE_COLORS[color_idx]
+                painter.setPen(QPen(border_color, 1))
+                painter.setBrush(QBrush(fill_color))
             painter.drawRoundedRect(rect, 3, 3)
 
             # 클립 경계선 (첫 번째 이후)
@@ -584,11 +616,17 @@ class TimelineWidget(QWidget):
                 painter.setPen(QPen(self._CLIP_SPLIT_LINE, 1, Qt.PenStyle.DashLine))
                 painter.drawLine(int(x1), _CLIP_Y, int(x1), _CLIP_Y + _CLIP_H)
 
-            # 라벨: 소스 시간 범위
+            # 라벨: 소스 파일명 + 시간 범위
             if rect.width() > 60:
                 painter.setPen(QColor("white"))
                 painter.setFont(QFont("Arial", 8))
-                label = f"{ms_to_display(clip.source_in_ms)}-{ms_to_display(clip.source_out_ms)}"
+                time_range = f"{ms_to_display(clip.source_in_ms)}-{ms_to_display(clip.source_out_ms)}"
+                if clip.source_path:
+                    from pathlib import Path as _P
+                    source_name = _P(clip.source_path).stem
+                    label = f"{source_name} | {time_range}"
+                else:
+                    label = time_range
                 text_rect = rect.adjusted(4, 2, -4, -2)
                 painter.drawText(
                     text_rect,
@@ -728,15 +766,15 @@ class TimelineWidget(QWidget):
     def _draw_playhead(self, painter: QPainter, h: int) -> None:
         """현재 재생 위치 세로선 + 상단 삼각형."""
         x = self._ms_to_x(self._playhead_ms)
-        if 0 <= x <= self.width():
-            painter.setPen(QPen(self._PLAYHEAD_COLOR, 2))
-            painter.drawLine(int(x), 0, int(x), h)
-            painter.setBrush(QBrush(self._PLAYHEAD_COLOR))
-            painter.drawPolygon(QPolygon([
-                QPoint(int(x) - 5, 0),
-                QPoint(int(x) + 5, 0),
-                QPoint(int(x), 7),
-            ]))
+        # QPainter가 위젯 영역 밖은 자동 클리핑하므로 범위 체크 불필요
+        painter.setPen(QPen(self._PLAYHEAD_COLOR, 2))
+        painter.drawLine(int(x), 0, int(x), h)
+        painter.setBrush(QBrush(self._PLAYHEAD_COLOR))
+        painter.drawPolygon(QPolygon([
+            QPoint(int(x) - 5, 0),
+            QPoint(int(x) + 5, 0),
+            QPoint(int(x), 7),
+        ]))
 
     # ----------------------------------------------------------- 마우스
 
@@ -1285,12 +1323,21 @@ class TimelineWidget(QWidget):
 
     def _is_valid_media_drop(self, event) -> bool:
         """미디어 드롭 가능 여부 확인."""
-        if self._duration_ms <= 0:
-            return False
         mime = event.mimeData()
-        if mime.hasUrls() and mime.urls():
-            return True
-        return False
+        if not (mime.hasUrls() and mime.urls()):
+            return False
+        # Allow video drops even when no video loaded (will load as primary)
+        if self._duration_ms <= 0:
+            media_type = bytes(mime.data("application/x-fmm-media-type")).decode("utf-8", errors="ignore")
+            if media_type == "video":
+                return True
+            # Also check file extension
+            from pathlib import Path
+            from src.utils.config import VIDEO_EXTENSIONS
+            url = mime.urls()[0]
+            suffix = Path(url.toLocalFile()).suffix.lower()
+            return suffix in VIDEO_EXTENSIONS
+        return True
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._is_valid_media_drop(event):
@@ -1327,13 +1374,16 @@ class TimelineWidget(QWidget):
             return
 
         suffix = Path(file_path).suffix.lower()
-        position_ms = int(max(0, min(self._duration_ms, self._x_to_ms(event.position().x()))))
+        if self._duration_ms > 0:
+            position_ms = int(max(0, min(self._duration_ms, self._x_to_ms(event.position().x()))))
+        else:
+            position_ms = 0
 
         if suffix in IMAGE_EXTENSIONS:
             self.image_file_dropped.emit(file_path, position_ms)
             event.acceptProposedAction()
         elif suffix in VIDEO_EXTENSIONS:
-            self.video_file_dropped.emit(file_path)
+            self.video_file_dropped.emit(file_path, position_ms)
             event.acceptProposedAction()
         else:
             event.ignore()

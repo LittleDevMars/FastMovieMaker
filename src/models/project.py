@@ -48,6 +48,17 @@ class ProjectState:
     def has_subtitles(self) -> bool:
         return len(self.subtitle_track) > 0
 
+    def all_video_paths(self) -> list[Path]:
+        """Return all unique video file paths used in the project."""
+        paths: set[Path] = set()
+        if self.video_path:
+            paths.add(self.video_path)
+        if self.video_clip_track:
+            for clip in self.video_clip_track:
+                if clip.source_path:
+                    paths.add(Path(clip.source_path))
+        return sorted(paths)
+
     def reset(self) -> None:
         self.video_path = None
         self.subtitle_tracks = [SubtitleTrack(name="Default")]

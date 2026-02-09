@@ -11,7 +11,7 @@ from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.video_clip import VideoClip, VideoClipTrack
 
-PROJECT_VERSION = 3
+PROJECT_VERSION = 4
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:
@@ -76,7 +76,7 @@ def _dict_to_segment(d: dict) -> SubtitleSegment:
 
 
 def save_project(project: ProjectState, path: Path) -> None:
-    """Serialize *project* to a JSON file (v3 format)."""
+    """Serialize *project* to a JSON file (v4 format)."""
     tracks_data = []
     for track in project.subtitle_tracks:
         tracks_data.append({
@@ -110,7 +110,7 @@ def save_project(project: ProjectState, path: Path) -> None:
 
 
 def load_project(path: Path) -> ProjectState:
-    """Deserialize a project from a JSON file (v1 or v2)."""
+    """Deserialize a project from a JSON file (v1-v4)."""
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     version = data.get("version", 1)
 
