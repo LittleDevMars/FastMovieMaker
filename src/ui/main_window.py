@@ -2408,6 +2408,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------ Waveform generation
 
+    def _on_worker_status(self, msg: str) -> None:
+        """Show worker status message on status bar (thread-safe slot)."""
+        self.statusBar().showMessage(msg, 3000)
+
     def _start_waveform_generation(self, video_path: Path) -> None:
         """Start background waveform peak computation."""
         self._stop_waveform_generation()
@@ -2418,9 +2422,7 @@ class MainWindow(QMainWindow):
         self._waveform_worker.moveToThread(self._waveform_thread)
 
         self._waveform_thread.started.connect(self._waveform_worker.run)
-        self._waveform_worker.status_update.connect(
-            lambda msg: self.statusBar().showMessage(msg, 3000)
-        )
+        self._waveform_worker.status_update.connect(self._on_worker_status)
         self._waveform_worker.finished.connect(self._on_waveform_finished)
         self._waveform_worker.error.connect(self._on_waveform_error)
         self._waveform_worker.finished.connect(self._cleanup_waveform_thread)
@@ -2499,9 +2501,7 @@ class MainWindow(QMainWindow):
         self._frame_cache_worker.moveToThread(self._frame_cache_thread)
 
         self._frame_cache_thread.started.connect(self._frame_cache_worker.run)
-        self._frame_cache_worker.status_update.connect(
-            lambda msg: self.statusBar().showMessage(msg, 3000)
-        )
+        self._frame_cache_worker.status_update.connect(self._on_worker_status)
         self._frame_cache_worker.finished.connect(self._on_frame_cache_finished)
         self._frame_cache_worker.error.connect(self._on_frame_cache_error)
         self._frame_cache_worker.finished.connect(self._cleanup_frame_cache_thread)
