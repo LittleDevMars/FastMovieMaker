@@ -1416,13 +1416,18 @@ class MainWindow(QMainWindow):
         # with an external video's duration
         if self._pending_seek_ms is not None:
             return
+
+        # If we already have a multi-source clip track, ignore source duration changes
+        # (otherwise switching between A/B sources would keep changing the slider range)
+        if self._project.video_clip_track is not None:
+            return
+
         self._project.duration_ms = duration_ms
         # Only update timeline if duration > 0; ignore durationChanged(0)
         # which would overwrite a TTS-derived timeline duration.
         if duration_ms > 0:
-            # Initialize clip track if not already set
-            if self._project.video_clip_track is None:
-                self._project.video_clip_track = VideoClipTrack.from_full_video(duration_ms)
+            # Initialize clip track for the first video
+            self._project.video_clip_track = VideoClipTrack.from_full_video(duration_ms)
             output_dur = self._project.video_clip_track.output_duration_ms
             self._timeline.set_duration(output_dur, has_video=True)
             self._timeline.set_clip_track(self._project.video_clip_track)
@@ -1999,14 +2004,17 @@ class MainWindow(QMainWindow):
                         self._player.setPosition(source_ms)
                         if self._play_intent:
                             self._player.play()
-                    # Update timeline playhead
+                    # Update timeline playhead and slider
                     self._timeline.set_playhead(position_ms)
+                    self._controls.set_output_position(position_ms)
                 else:
                     self._player.setPosition(position_ms)
                     self._timeline.set_playhead(position_ms)
+                    self._controls.set_output_position(position_ms)
             else:
                 self._player.setPosition(position_ms)
                 self._timeline.set_playhead(position_ms)
+                self._controls.set_output_position(position_ms)
             self._sync_tts_playback()
         else:
             # No video - directly seek TTS player
@@ -2041,8 +2049,10 @@ class MainWindow(QMainWindow):
                     if self._play_intent:
                         self._player.play()
             self._timeline.set_playhead(position_ms)
+            self._controls.set_output_position(position_ms)
         else:
             self._player.setPosition(position_ms)
+            self._timeline.set_playhead(position_ms)
         self._sync_tts_playback()
 
     def _sync_clip_index_from_position(self) -> None:
@@ -2088,8 +2098,27 @@ class MainWindow(QMainWindow):
 
             # Sanity check: position should be within the current clip's source range
             # (with tolerance for boundary timing). If wildly out of range,
-            # re-sync instead of processing potentially stale data.
+            # search all clips to find the correct one.
             if position_ms > current_clip.source_out_ms + 500 or position_ms < current_clip.source_in_ms - 500:
+                # Find which clip contains this source position
+                found = False
+                for i, clip in enumerate(clips):
+                    clip_source = clip.source_path or str(self._project.video_path)
+                    if clip_source == self._current_playback_source:
+                        if clip.source_in_ms <= position_ms <= clip.source_out_ms + 100:
+                            # Found the correct clip
+                            self._current_clip_index = i
+                            clip_start = clip_track.clip_timeline_start(i)
+                            elapsed = max(0, position_ms - clip.source_in_ms)
+                            timeline_ms = min(clip_start + elapsed, clip_track.output_duration_ms)
+                            self._timeline.set_playhead(timeline_ms)
+                            self._controls.set_output_position(timeline_ms)
+                            self._video_widget._update_subtitle(timeline_ms)
+                            found = True
+                            break
+                if found:
+                    return
+                # If not found, fall back to sync from timeline playhead
                 self._sync_clip_index_from_position()
                 return
 
@@ -2099,6 +2128,13 @@ class MainWindow(QMainWindow):
                     next_clip = clips[idx + 1]
                     self._current_clip_index = idx + 1
                     next_source = next_clip.source_path or str(self._project.video_path)
+
+                    # Calculate timeline position for next clip start
+                    next_clip_start = clip_track.clip_timeline_start(idx + 1)
+                    self._timeline.set_playhead(next_clip_start)
+                    self._controls.set_output_position(next_clip_start)
+                    self._video_widget._update_subtitle(next_clip_start)
+
                     if next_source != self._current_playback_source:
                         self._switch_player_source(
                             next_source, next_clip.source_in_ms,

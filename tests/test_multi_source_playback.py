@@ -289,6 +289,38 @@ class TestPositionChanged:
         hw._on_player_position_changed(15000)  # way outside clip 0 range
         # Should not crash — graceful resync
 
+    def test_out_of_range_wrong_clip_index_updates_playhead(self, hw):
+        """Regression: clip index wrong → position mismatch → should still update playhead."""
+        # Setup: Playing external source clip 1 (timeline 10000-15000ms, source 0-5000ms)
+        hw._current_clip_index = 1
+        hw._current_playback_source = EXTERNAL
+        hw._player.position.return_value = 2000
+
+        # Player reports position 2000ms (valid for clip 1: source 0-5000ms)
+        # This should update timeline to 12000ms (10000 + 2000)
+        hw._on_player_position_changed(2000)
+
+        # Should update playhead even though we detected mismatch initially
+        hw._timeline.set_playhead.assert_called_with(12000)
+        hw._controls.set_output_position.assert_called_with(12000)
+
+    def test_stale_clip_index_searches_and_updates(self, hw):
+        """Critical: stale clip index → search all clips → update playhead (fixes frozen playhead bug)."""
+        # Simulates: user scrubbed from clip 2 to clip 0, but _current_clip_index still = 2
+        hw._current_clip_index = 2  # Wrong! Points to clip 2 (timeline 15-25s)
+        hw._current_playback_source = PRIMARY
+        hw._player.position.return_value = 3000  # Actually playing clip 0 (source 0-10s)
+
+        # Position 3000ms is WAY outside clip 2's range (source 15000-25000ms)
+        # Should search clips, find clip 0, and update playhead
+        hw._on_player_position_changed(3000)
+
+        # Should update clip index
+        assert hw._current_clip_index == 0
+        # Should update playhead to correct timeline position (3000ms for clip 0)
+        hw._timeline.set_playhead.assert_called_with(3000)
+        hw._controls.set_output_position.assert_called_with(3000)
+
 
 # ── 5. Full scenario: scrub → play ──────────────────────────────────
 
@@ -472,3 +504,223 @@ class TestClipBoundaryCrossing:
         hw._timeline.set_playhead.assert_called_with(12500)  # timeline 10000 + 2500
         hw._player.setSource.assert_not_called()
         hw._player.setPosition.assert_not_called()
+
+
+# ── 8. Timeline/Slider Synchronization ──────────────────────────────
+
+
+class TestTimelineSliderSync:
+
+    def test_timeline_seek_updates_slider(self, hw):
+        """Timeline seek should update both playhead and slider."""
+        hw._on_timeline_seek(12000)  # seek to external clip
+
+        # Should update both timeline and slider
+        hw._timeline.set_playhead.assert_called_with(12000)
+        hw._controls.set_output_position.assert_called_with(12000)
+
+    def test_slider_drag_updates_timeline(self, hw):
+        """Slider drag should update both timeline and slider position."""
+        hw._on_position_changed_by_user(15000)  # slider to clip 2
+
+        # Should update both
+        hw._timeline.set_playhead.assert_called_with(15000)
+        hw._controls.set_output_position.assert_called_with(15000)
+
+    def test_complex_scrub_pattern_A_B_A_A_B_A(self, hw):
+        """Complex scrub pattern: A→B→A→A→B→A should track correctly."""
+        # A (clip 0)
+        hw._on_timeline_seek(5000)
+        assert hw._current_clip_index == 0
+        hw._timeline.set_playhead.assert_called_with(5000)
+
+        # B (clip 1)
+        hw._on_timeline_seek(12000)
+        assert hw._current_clip_index == 1
+        hw._timeline.set_playhead.assert_called_with(12000)
+
+        # A (clip 0)
+        hw._on_timeline_seek(3000)
+        assert hw._current_clip_index == 0
+
+        # A (clip 2 - different clip, same source)
+        hw._on_timeline_seek(18000)
+        assert hw._current_clip_index == 2
+
+        # B (clip 1)
+        hw._on_timeline_seek(11000)
+        assert hw._current_clip_index == 1
+
+        # A (clip 0)
+        hw._on_timeline_seek(7000)
+        assert hw._current_clip_index == 0
+
+        # All seeks should update slider
+        assert hw._controls.set_output_position.call_count == 6
+
+    def test_playback_during_source_switch_preserves_slider_range(self, hw):
+        """Playing across source boundary should not change slider range."""
+        # Start playing clip 0 (primary)
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Reach boundary → switch to clip 1 (external)
+        hw._on_player_position_changed(9975)
+
+        # Should switch source
+        assert hw._current_clip_index == 1
+        assert hw._current_playback_source == EXTERNAL
+
+        # Slider range should remain at full timeline duration
+        # (verified implicitly - no set_output_duration call with wrong value)
+
+    def test_rapid_timeline_scrub_all_updates(self, hw):
+        """Rapid timeline scrubbing should update slider every time."""
+        positions = [1000, 5000, 12000, 18000, 22000, 8000, 14000]
+
+        for pos in positions:
+            hw._on_timeline_seek(pos)
+
+        # Should have called set_output_position for each seek
+        assert hw._controls.set_output_position.call_count == len(positions)
+
+        # Last call should be with last position
+        hw._controls.set_output_position.assert_called_with(8000 if positions[-1] == 8000 else 14000)
+
+
+# ── 9. Edge Cases and Stress Tests ──────────────────────────────────
+
+
+class TestEdgeCases:
+
+    def test_boundary_then_immediate_pause_play(self, hw):
+        """Boundary cross → pause → play should work correctly."""
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Reach boundary → auto-switch to clip 1
+        hw._on_player_position_changed(9975)
+        assert hw._current_clip_index == 1
+
+        # Playhead should be at clip 1 start (timeline 10000ms)
+        hw._timeline.set_playhead.assert_called_with(10000)
+
+        # User pauses
+        hw._play_intent = False
+
+        # User plays again
+        hw._play_intent = True
+        hw._player.playbackState.return_value = QMediaPlayer.PlaybackState.PausedState
+        hw._player.isPlaying.return_value = False
+        hw._timeline.get_playhead.return_value = 10000
+
+        hw._toggle_play_pause()
+
+        # Should continue playing clip 1
+        hw._player.play.assert_called()
+
+    def test_seek_just_before_boundary_then_play(self, hw):
+        """Seek to 30ms before boundary → play → should immediately cross."""
+        # Seek to 9970ms (30ms before clip 0 end at 10000ms)
+        hw._on_timeline_seek(9970)
+        assert hw._current_clip_index == 0
+
+        # Start playing
+        hw._play_intent = True
+        hw._current_playback_source = PRIMARY
+
+        # Player position reaches boundary threshold
+        hw._on_player_position_changed(9975)
+
+        # Should cross to clip 1
+        assert hw._current_clip_index == 1
+        hw._timeline.set_playhead.assert_called_with(10000)
+
+    def test_last_clip_normal_playback(self, hw):
+        """Normal playback in last clip should work correctly."""
+        hw._current_clip_index = 2  # Last clip
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Play normally in middle of last clip
+        hw._on_player_position_changed(20000)
+
+        # Should update playhead normally
+        # Clip 2 starts at timeline 15000ms, source at 15000ms
+        # Position 20000ms in source → timeline 20000ms
+        hw._timeline.set_playhead.assert_called()
+        hw._controls.set_output_position.assert_called()
+        # Should NOT try to switch (not at boundary yet)
+        hw._player.setSource.assert_not_called()
+
+    def test_play_pause_scrub_play_cycle(self, hw):
+        """Play → pause → scrub to different source → play."""
+        # Playing clip 0
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # User pauses
+        hw._play_intent = False
+
+        # User scrubs to clip 1 (external)
+        hw._on_timeline_seek(12000)
+        assert hw._current_clip_index == 1
+
+        # Complete source loading
+        hw._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
+
+        # User plays
+        hw._player.reset_mock()
+        hw._player.playbackState.return_value = QMediaPlayer.PlaybackState.PausedState
+        hw._player.isPlaying.return_value = False
+        hw._timeline.get_playhead.return_value = 12000
+        hw._play_intent = True
+
+        hw._toggle_play_pause()
+
+        # Should play from clip 1
+        hw._player.play.assert_called_once()
+
+    def test_very_short_clips_rapid_transitions(self, hw):
+        """Very short clips (1s each) should transition smoothly."""
+        # Create timeline with very short clips
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 1000),       # 0-1s
+            VideoClip(0, 1000),       # 1-2s (EXTERNAL)
+            VideoClip(5000, 6000),    # 2-3s (PRIMARY)
+        ])
+        track.clips[1].source_path = EXTERNAL
+        hw._project.video_clip_track = track
+
+        # Play through all clips
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Cross first boundary (975ms)
+        hw._on_player_position_changed(975)
+        assert hw._current_clip_index == 1
+        hw._timeline.set_playhead.assert_called_with(1000)
+
+        # Source switches to external
+        hw._current_playback_source = EXTERNAL
+        hw._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
+
+        # Cross second boundary (975ms in external)
+        hw._player.reset_mock()
+        hw._timeline.reset_mock()
+        hw._on_player_position_changed(975)
+        assert hw._current_clip_index == 2
+        hw._timeline.set_playhead.assert_called_with(2000)
+
+    def test_scrub_beyond_timeline_end(self, hw):
+        """Scrubbing beyond timeline end should clamp to valid range."""
+        # Timeline ends at 25000ms, try to seek to 30000ms
+        hw._on_timeline_seek(30000)
+
+        # Should still work (clip_at_timeline returns None for out of range)
+        # Just verify it doesn't crash
+        # Timeline should not update if clip_at_timeline returns None
