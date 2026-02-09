@@ -2008,6 +2008,10 @@ class MainWindow(QMainWindow):
         if not self._project.has_video:
             return
 
+        # Ignore stale position updates during source switch
+        if self._pending_seek_ms is not None:
+            return
+
         clip_track = self._project.video_clip_track
         if clip_track:
             clips = clip_track.clips
@@ -2019,6 +2023,13 @@ class MainWindow(QMainWindow):
                 self._current_clip_index = 0
 
             current_clip = clips[idx]
+
+            # Sanity check: position should be within the current clip's source range
+            # (with tolerance for boundary timing). If wildly out of range,
+            # re-sync instead of processing potentially stale data.
+            if position_ms > current_clip.source_out_ms + 500 or position_ms < current_clip.source_in_ms - 500:
+                self._sync_clip_index_from_position()
+                return
 
             # Check if position exceeded current clip boundary → transition
             if position_ms >= current_clip.source_out_ms - 30:
@@ -2110,6 +2121,9 @@ class MainWindow(QMainWindow):
                 self._video_widget._update_subtitle(timeline_pos)
 
     def _on_player_error(self, error, error_string: str) -> None:
+        # Clear pending seek state so position updates are not blocked forever
+        self._pending_seek_ms = None
+        self._pending_auto_play = False
         self.statusBar().showMessage(f"{tr('Player error')}: {error_string}")
 
     # -------------------------------------------------------- Video clip editing
