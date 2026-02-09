@@ -1954,6 +1954,9 @@ class MainWindow(QMainWindow):
                         was_playing = self._player.isPlaying()
                         self._switch_player_source(target_source, source_ms,
                                                    auto_play=was_playing)
+                    elif self._pending_seek_ms is not None:
+                        # Source is still loading — update pending position
+                        self._pending_seek_ms = source_ms
                     else:
                         self._player.setPosition(source_ms)
                 else:
@@ -1987,6 +1990,9 @@ class MainWindow(QMainWindow):
                     was_playing = self._player.isPlaying()
                     self._switch_player_source(target_source, source_ms,
                                                auto_play=was_playing)
+                elif self._pending_seek_ms is not None:
+                    # Source is still loading — update pending position
+                    self._pending_seek_ms = source_ms
                 else:
                     self._player.setPosition(source_ms)
             self._timeline.set_playhead(position_ms)
