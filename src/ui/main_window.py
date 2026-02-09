@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self._current_playback_source: str | None = None  # track which video is loaded
         self._current_clip_index: int = 0  # track which clip in the clip track is playing
         self._pending_seek_ms: int | None = None  # seek after source switch
+        self._pending_auto_play: bool = False  # auto-play after source switch
 
         # TTS audio player (separate from video player)
         self._tts_audio_output = QAudioOutput()
