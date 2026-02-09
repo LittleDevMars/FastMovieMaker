@@ -401,3 +401,74 @@ class TestPlayButtonSync:
         # Should seek to correct position then play
         hw._player.setPosition.assert_called_with(5000)
         hw._player.play.assert_called_once()
+
+
+# ── 7. Clip boundary crossing during playback ──────────────────────
+
+
+class TestClipBoundaryCrossing:
+
+    def test_boundary_cross_to_different_source(self, hw):
+        """Playback reaches end of clip 0 → auto-switch to clip 1 (different source)."""
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Player position = 9975ms (within 30ms of clip 0 end at 10000ms)
+        hw._on_player_position_changed(9975)
+
+        # Should switch to clip 1 (external)
+        assert hw._current_clip_index == 1
+        assert hw._current_playback_source == EXTERNAL
+        assert hw._pending_seek_ms == 0  # clip 1 starts at source 0ms
+        hw._player.setSource.assert_called_once()
+
+    def test_boundary_cross_to_same_source(self, hw):
+        """Playback reaches end of clip 1 → auto-switch to clip 2 (different source)."""
+        hw._current_clip_index = 1
+        hw._current_playback_source = EXTERNAL
+        hw._play_intent = True
+        hw._player.position.return_value = 4975  # near end of clip 1 (0-5000ms)
+
+        # Player position = 4975ms (within 30ms of clip 1 end at 5000ms)
+        hw._on_player_position_changed(4975)
+
+        # Should switch to clip 2 (primary, source 10000ms)
+        # NOTE: Clip 1 is EXTERNAL, clip 2 is PRIMARY → different source
+        assert hw._current_clip_index == 2
+        assert hw._current_playback_source == PRIMARY
+        assert hw._pending_seek_ms == 10000  # source switch, not setPosition
+        hw._player.setSource.assert_called_once()  # different source!
+
+    def test_boundary_cross_same_source_different_clips(self, hw):
+        """Same source, different clips: A(0-5s) → A(10-15s)."""
+        # Create timeline with same source but gap: A(0-5s), A(10-15s)
+        track = VideoClipTrack(clips=[
+            VideoClip(0, 5000),      # clip 0: timeline 0-5s
+            VideoClip(10000, 15000), # clip 1: timeline 5-10s, SAME source
+        ])
+        hw._project.video_clip_track = track
+        hw._current_clip_index = 0
+        hw._current_playback_source = PRIMARY
+        hw._play_intent = True
+
+        # Reach boundary of clip 0
+        hw._on_player_position_changed(4975)
+
+        # Should stay on same source but setPosition to clip 1 start
+        assert hw._current_clip_index == 1
+        hw._player.setPosition.assert_called_with(10000)
+        hw._player.setSource.assert_not_called()
+
+    def test_no_boundary_cross_mid_clip(self, hw):
+        """Normal position update in middle of clip → just update timeline."""
+        hw._current_clip_index = 1
+        hw._current_playback_source = EXTERNAL
+
+        hw._on_player_position_changed(2500)  # middle of clip 1
+
+        # Should just update timeline, no switch
+        assert hw._current_clip_index == 1
+        hw._timeline.set_playhead.assert_called_with(12500)  # timeline 10000 + 2500
+        hw._player.setSource.assert_not_called()
+        hw._player.setPosition.assert_not_called()
