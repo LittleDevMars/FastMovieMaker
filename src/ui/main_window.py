@@ -111,6 +111,14 @@ class MainWindow(QMainWindow):
         self._current_clip_index: int = 0  # track which clip in the clip track is playing
         self._pending_seek_ms: int | None = None  # seek after source switch
         self._pending_auto_play: bool = False  # auto-play after source switch
+        self._play_intent: bool = False  # user intended playback; persists across clip switches
+
+        # Watchdog timer: clear stuck pending seek when media status callbacks
+        # fail to arrive (observed on rapid multi-source scrubs)
+        self._pending_seek_timer = QTimer(self)
+        self._pending_seek_timer.setSingleShot(True)
+        self._pending_seek_timer.setInterval(1500)  # 1.5s timeout
+        self._pending_seek_timer.timeout.connect(self._on_pending_seek_timeout)
 
         # Cancellable timer for play+pause render trick
         self._render_pause_timer = QTimer(self)
@@ -468,8 +476,10 @@ class MainWindow(QMainWindow):
             # If source is loading, cancel pending auto-play
             if self._pending_seek_ms is not None:
                 self._pending_auto_play = False
+            self._play_intent = False
         else:
             # Play
+            self._play_intent = True
             if self._project.has_video:
                 # If source is still loading after a switch, just flag
                 # auto_play so _on_media_status_changed will call play()
@@ -477,8 +487,28 @@ class MainWindow(QMainWindow):
                 if self._pending_seek_ms is not None:
                     self._pending_auto_play = True
                     return
-                # Sync clip index from current position before playing
-                self._sync_clip_index_from_position()
+
+                # Ensure player source/position matches timeline playhead
+                clip_track = self._project.video_clip_track
+                if clip_track:
+                    timeline_ms = self._timeline.get_playhead()
+                    result = clip_track.clip_at_timeline(timeline_ms)
+                    if result is not None:
+                        idx, clip = result
+                        self._current_clip_index = idx
+                        clip_start = clip_track.clip_timeline_start(idx)
+                        local_offset = timeline_ms - clip_start
+                        source_ms = clip.source_in_ms + local_offset
+                        target_source = clip.source_path or str(self._project.video_path)
+
+                        # If player source doesn't match, switch first
+                        if target_source != self._current_playback_source:
+                            self._switch_player_source(target_source, source_ms, auto_play=True)
+                            return
+                        # If position is off by more than 100ms, seek first
+                        elif abs(self._player.position() - source_ms) > 100:
+                            self._player.setPosition(source_ms)
+
                 # Video exists - play video and sync TTS
                 self._player.play()
                 self._sync_tts_playback()
@@ -496,6 +526,7 @@ class MainWindow(QMainWindow):
         """Stop both video and TTS players."""
         self._player.stop()
         self._tts_player.stop()
+        self._play_intent = False
 
     def _sync_tts_playback(self) -> None:
         """Synchronize TTS audio playback with video position.
@@ -1958,14 +1989,15 @@ class MainWindow(QMainWindow):
                     source_ms = clip.source_in_ms + local_offset
                     target_source = clip.source_path or str(self._project.video_path)
                     if target_source != self._current_playback_source:
-                        was_playing = self._player.isPlaying()
                         self._switch_player_source(target_source, source_ms,
-                                                   auto_play=was_playing)
+                                                   auto_play=self._play_intent)
                     elif self._pending_seek_ms is not None:
                         # Source is still loading — update pending position
                         self._pending_seek_ms = source_ms
                     else:
                         self._player.setPosition(source_ms)
+                        if self._play_intent:
+                            self._player.play()
                 else:
                     self._player.setPosition(position_ms)
             else:
@@ -1994,31 +2026,31 @@ class MainWindow(QMainWindow):
                 source_ms = clip.source_in_ms + local_offset
                 target_source = clip.source_path or str(self._project.video_path)
                 if target_source != self._current_playback_source:
-                    was_playing = self._player.isPlaying()
                     self._switch_player_source(target_source, source_ms,
-                                               auto_play=was_playing)
+                                               auto_play=self._play_intent)
                 elif self._pending_seek_ms is not None:
                     # Source is still loading — update pending position
                     self._pending_seek_ms = source_ms
                 else:
                     self._player.setPosition(source_ms)
+                    if self._play_intent:
+                        self._player.play()
             self._timeline.set_playhead(position_ms)
         else:
             self._player.setPosition(position_ms)
         self._sync_tts_playback()
 
     def _sync_clip_index_from_position(self) -> None:
-        """Recalculate _current_clip_index from current player position/source."""
+        """Recalculate _current_clip_index from current timeline position."""
         clip_track = self._project.video_clip_track
         if not clip_track:
             return
-        source = self._current_playback_source
-        pos = self._player.position()
-        for i, clip in enumerate(clip_track.clips):
-            clip_source = clip.source_path or (str(self._project.video_path) if self._project.video_path else None)
-            if clip_source == source and clip.source_in_ms <= pos < clip.source_out_ms:
-                self._current_clip_index = i
-                return
+        # Use timeline position (output time), not source position
+        timeline_ms = self._timeline.get_playhead()
+        result = clip_track.clip_at_timeline(timeline_ms)
+        if result is not None:
+            idx, _clip = result
+            self._current_clip_index = idx
 
     def _on_player_position_changed(self, position_ms: int) -> None:
         """Handle video player position change (source_ms from QMediaPlayer).
@@ -2036,6 +2068,9 @@ class MainWindow(QMainWindow):
 
         clip_track = self._project.video_clip_track
         if clip_track:
+            was_playing = (
+                self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            )
             clips = clip_track.clips
             idx = self._current_clip_index
 
@@ -2060,13 +2095,14 @@ class MainWindow(QMainWindow):
                     self._current_clip_index = idx + 1
                     next_source = next_clip.source_path or str(self._project.video_path)
                     if next_source != self._current_playback_source:
-                        was_playing = self._player.isPlaying()
                         self._switch_player_source(
                             next_source, next_clip.source_in_ms,
-                            auto_play=was_playing,
+                            auto_play=self._play_intent,
                         )
                     else:
                         self._player.setPosition(next_clip.source_in_ms)
+                        if self._play_intent:
+                            self._player.play()
                     return
 
             # Calculate timeline position from known clip index
@@ -2101,8 +2137,14 @@ class MainWindow(QMainWindow):
 
         self._current_playback_source = source_path
         self._pending_seek_ms = seek_ms
-        self._pending_auto_play = auto_play
+        # 누적된 auto_play 요청이 있으면 유지 (연속 스크럽 중 재생 재개 보장)
+        self._pending_auto_play = self._pending_auto_play or auto_play or self._play_intent
+        # Watchdog: clear pending seek if backend never emits Loaded/Buffered
+        self._pending_seek_timer.start()
         self._player.setSource(QUrl.fromLocalFile(source_path))
+        # 일부 백엔드는 setSource 후 play를 호출해야 로딩/재생이 진행됨
+        if self._pending_auto_play:
+            self._player.play()
 
     def _on_media_status_changed(self, status) -> None:
         """Handle media status change — seek to pending position after source switch.
@@ -2116,9 +2158,10 @@ class MainWindow(QMainWindow):
         ready_status = (_QMP.MediaStatus.LoadedMedia, _QMP.MediaStatus.BufferedMedia)
         if status in ready_status and self._pending_seek_ms is not None:
             seek_ms = self._pending_seek_ms
-            auto_play = self._pending_auto_play
+            auto_play = self._pending_auto_play or self._play_intent
             self._pending_seek_ms = None
             self._pending_auto_play = False
+            self._pending_seek_timer.stop()
             self._player.setPosition(seek_ms)
             if auto_play:
                 self._player.play()
@@ -2130,10 +2173,32 @@ class MainWindow(QMainWindow):
             if self._showing_cached_frame:
                 self._video_widget.hide_cached_frame()
                 self._showing_cached_frame = False
+        elif status == _QMP.MediaStatus.EndOfMedia and self._pending_seek_ms is None:
+            # Some backends stop at clip boundary without a final position update.
+            # Advance to next clip explicitly to keep playback continuous.
+            clip_track = self._project.video_clip_track
+            if not clip_track:
+                return
+            idx = self._current_clip_index
+            if idx + 1 >= len(clip_track.clips):
+                return
+            next_clip = clip_track.clips[idx + 1]
+            self._current_clip_index = idx + 1
+            next_source = next_clip.source_path or str(self._project.video_path)
+            if next_source != self._current_playback_source:
+                self._switch_player_source(
+                    next_source, next_clip.source_in_ms,
+                    auto_play=self._play_intent,
+                )
+            else:
+                self._player.setPosition(next_clip.source_in_ms)
+                if self._play_intent:
+                    self._player.play()
         elif status == _QMP.MediaStatus.InvalidMedia and self._pending_seek_ms is not None:
             # Source failed to load — clear pending state so playback isn't blocked
             self._pending_seek_ms = None
             self._pending_auto_play = False
+            self._pending_seek_timer.stop()
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
         """Handle TTS player position change."""
@@ -2447,6 +2512,25 @@ class MainWindow(QMainWindow):
         """Pause player after play+pause render trick (cancellable timer callback)."""
         if self._pending_seek_ms is None:
             self._player.pause()
+
+    def _on_pending_seek_timeout(self) -> None:
+        """Fallback when backend never emits Loaded/Buffered after setSource.
+
+        Observed during rapid scrubs across multiple sources; ensures playback
+        isn't left stuck waiting for _pending_seek_ms to clear.
+        """
+        if self._pending_seek_ms is None:
+            return
+        seek_ms = self._pending_seek_ms
+        auto_play = self._pending_auto_play or self._play_intent
+        self._pending_seek_ms = None
+        self._pending_auto_play = False
+        self._player.setPosition(seek_ms)
+        if auto_play:
+            self._player.play()
+        else:
+            self._player.play()
+            self._render_pause_timer.start()
 
     @Slot(str)
     def _on_worker_status(self, msg: str) -> None:

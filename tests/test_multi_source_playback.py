@@ -51,10 +51,13 @@ class _Harness:
         self._current_clip_index: int = 0
         self._pending_seek_ms: int | None = None
         self._pending_auto_play: bool = False
+        self._play_intent: bool = False
         self._frame_cache_service = None
         self._showing_cached_frame = False
         self._render_pause_timer = MagicMock()
+        self._pending_seek_timer = MagicMock()
         self._timeline = MagicMock()
+        self._timeline.get_playhead.return_value = 0  # default timeline position
         self._controls = MagicMock()
         self._video_widget = MagicMock()
 
@@ -342,3 +345,59 @@ class TestScrubThenPlay:
 
         hw._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
         hw._player.setPosition.assert_called_with(4000)
+
+
+# ── 6. Play button sync ──────────────────────────────────────────
+
+
+class TestPlayButtonSync:
+
+    def test_play_after_scrub_to_different_source(self, hw):
+        """Play after scrubbing to different source → switches source."""
+        hw._on_timeline_seek(12000)  # external clip, source_ms = 2000
+        hw._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
+        hw._player.reset_mock()
+
+        # Timeline playhead is at 12000, player is at external source
+        hw._timeline.get_playhead.return_value = 12000
+        hw._player.position.return_value = 2000
+        hw._player.playbackState.return_value = QMediaPlayer.PlaybackState.PausedState
+        hw._player.isPlaying.return_value = False
+
+        hw._toggle_play_pause()
+
+        # Should play directly (source already matches)
+        hw._player.play.assert_called_once()
+        hw._player.setSource.assert_not_called()
+
+    def test_play_when_player_source_mismatched(self, hw):
+        """Play when timeline and player source don't match → switches."""
+        # Timeline at 12000 (external clip), but player still on primary
+        hw._timeline.get_playhead.return_value = 12000
+        hw._current_playback_source = PRIMARY
+        hw._current_clip_index = 0
+        hw._player.position.return_value = 5000
+        hw._player.playbackState.return_value = QMediaPlayer.PlaybackState.PausedState
+        hw._player.isPlaying.return_value = False
+
+        hw._toggle_play_pause()
+
+        # Should switch to external source
+        assert hw._pending_seek_ms == 2000  # source_ms for clip 1
+        assert hw._pending_auto_play is True
+        hw._player.setSource.assert_called_once()
+
+    def test_play_when_position_mismatched(self, hw):
+        """Play when source matches but position is off → seeks first."""
+        # Timeline at 5000 (clip 0), player at same source but wrong position
+        hw._timeline.get_playhead.return_value = 5000
+        hw._current_playback_source = PRIMARY
+        hw._player.position.return_value = 1000  # off by >100ms
+        hw._player.playbackState.return_value = QMediaPlayer.PlaybackState.PausedState
+        hw._player.isPlaying.return_value = False
+
+        hw._toggle_play_pause()
+
+        # Should seek to correct position then play
+        hw._player.setPosition.assert_called_with(5000)
+        hw._player.play.assert_called_once()
