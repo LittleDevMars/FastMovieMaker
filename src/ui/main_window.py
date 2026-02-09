@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QThread, QUrl, Qt, Slot
+from PySide6.QtCore import QSettings, QThread, QTimer, QUrl, Qt, Slot
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -111,6 +111,12 @@ class MainWindow(QMainWindow):
         self._current_clip_index: int = 0  # track which clip in the clip track is playing
         self._pending_seek_ms: int | None = None  # seek after source switch
         self._pending_auto_play: bool = False  # auto-play after source switch
+
+        # Cancellable timer for play+pause render trick
+        self._render_pause_timer = QTimer(self)
+        self._render_pause_timer.setSingleShot(True)
+        self._render_pause_timer.setInterval(50)
+        self._render_pause_timer.timeout.connect(self._on_render_pause)
 
         # TTS audio player (separate from video player)
         self._tts_audio_output = QAudioOutput()
@@ -2090,6 +2096,9 @@ class MainWindow(QMainWindow):
                     self._video_widget.show_cached_frame(pixmap)
                     self._showing_cached_frame = True
 
+        # Cancel any pending render-pause timer from a previous source switch
+        self._render_pause_timer.stop()
+
         self._current_playback_source = source_path
         self._pending_seek_ms = seek_ms
         self._pending_auto_play = auto_play
@@ -2116,8 +2125,7 @@ class MainWindow(QMainWindow):
             else:
                 # play+pause to force video frame render in StoppedState
                 self._player.play()
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(50, self._player.pause)
+                self._render_pause_timer.start()
             # Hide cached frame now that live video is ready
             if self._showing_cached_frame:
                 self._video_widget.hide_cached_frame()
@@ -2434,6 +2442,11 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     # ------------------------------------------------ Waveform generation
+
+    def _on_render_pause(self) -> None:
+        """Pause player after play+pause render trick (cancellable timer callback)."""
+        if self._pending_seek_ms is None:
+            self._player.pause()
 
     @Slot(str)
     def _on_worker_status(self, msg: str) -> None:

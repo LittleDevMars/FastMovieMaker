@@ -53,6 +53,7 @@ class _Harness:
         self._pending_auto_play: bool = False
         self._frame_cache_service = None
         self._showing_cached_frame = False
+        self._render_pause_timer = MagicMock()
         self._timeline = MagicMock()
         self._controls = MagicMock()
         self._video_widget = MagicMock()
