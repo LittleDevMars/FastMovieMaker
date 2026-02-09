@@ -227,6 +227,10 @@ class TimelineWidget(QWidget):
         self._invalidate_static_cache()
         self.update()
 
+    def get_playhead(self) -> int:
+        """Return current playhead position in milliseconds."""
+        return self._playhead_ms
+
     def set_playhead(self, position_ms: int) -> None:
         # 플레이헤드 드래그 중에는 외부 갱신 무시 (충돌 방지)
         if self._drag_mode == _DragMode.PLAYHEAD_DRAG:

@@ -1988,6 +1988,7 @@ class MainWindow(QMainWindow):
                     local_offset = position_ms - clip_track.clip_timeline_start(idx)
                     source_ms = clip.source_in_ms + local_offset
                     target_source = clip.source_path or str(self._project.video_path)
+
                     if target_source != self._current_playback_source:
                         self._switch_player_source(target_source, source_ms,
                                                    auto_play=self._play_intent)
@@ -1998,10 +1999,14 @@ class MainWindow(QMainWindow):
                         self._player.setPosition(source_ms)
                         if self._play_intent:
                             self._player.play()
+                    # Update timeline playhead
+                    self._timeline.set_playhead(position_ms)
                 else:
                     self._player.setPosition(position_ms)
+                    self._timeline.set_playhead(position_ms)
             else:
                 self._player.setPosition(position_ms)
+                self._timeline.set_playhead(position_ms)
             self._sync_tts_playback()
         else:
             # No video - directly seek TTS player
