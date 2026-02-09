@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QThread, QUrl, Qt
+from PySide6.QtCore import QSettings, QThread, QUrl, Qt, Slot
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -458,9 +458,18 @@ class MainWindow(QMainWindow):
             # Pause both players (video state change handler will also pause TTS)
             self._player.pause()
             self._tts_player.pause()
+            # If source is loading, cancel pending auto-play
+            if self._pending_seek_ms is not None:
+                self._pending_auto_play = False
         else:
             # Play
             if self._project.has_video:
+                # If source is still loading after a switch, just flag
+                # auto_play so _on_media_status_changed will call play()
+                # instead of play+pause when LoadedMedia fires.
+                if self._pending_seek_ms is not None:
+                    self._pending_auto_play = True
+                    return
                 # Sync clip index from current position before playing
                 self._sync_clip_index_from_position()
                 # Video exists - play video and sync TTS
@@ -2080,11 +2089,18 @@ class MainWindow(QMainWindow):
         self._player.setSource(QUrl.fromLocalFile(source_path))
 
     def _on_media_status_changed(self, status) -> None:
-        """Handle media status change — seek to pending position after source switch."""
+        """Handle media status change — seek to pending position after source switch.
+
+        일부 환경(특히 여러 영상 소스를 빠르게 전환할 때)에서는 상태가
+        `BufferedMedia`로만 올라오고 `LoadedMedia`를 건너뛰는 경우가 있어
+        `_pending_seek_ms`가 해제되지 않아 재생이 멈출 수 있다. 두 상태 모두에서
+        펜딩 시크를 처리하도록 한다.
+        """
         from PySide6.QtMultimedia import QMediaPlayer as _QMP
-        if status == _QMP.MediaStatus.LoadedMedia and self._pending_seek_ms is not None:
+        ready_status = (_QMP.MediaStatus.LoadedMedia, _QMP.MediaStatus.BufferedMedia)
+        if status in ready_status and self._pending_seek_ms is not None:
             seek_ms = self._pending_seek_ms
-            auto_play = getattr(self, "_pending_auto_play", False)
+            auto_play = self._pending_auto_play
             self._pending_seek_ms = None
             self._pending_auto_play = False
             self._player.setPosition(seek_ms)
@@ -2099,6 +2115,10 @@ class MainWindow(QMainWindow):
             if self._showing_cached_frame:
                 self._video_widget.hide_cached_frame()
                 self._showing_cached_frame = False
+        elif status == _QMP.MediaStatus.InvalidMedia and self._pending_seek_ms is not None:
+            # Source failed to load — clear pending state so playback isn't blocked
+            self._pending_seek_ms = None
+            self._pending_auto_play = False
 
     def _on_tts_position_changed(self, position_ms: int) -> None:
         """Handle TTS player position change."""
@@ -2408,6 +2428,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------ Waveform generation
 
+    @Slot(str)
     def _on_worker_status(self, msg: str) -> None:
         """Show worker status message on status bar (thread-safe slot)."""
         self.statusBar().showMessage(msg, 3000)
