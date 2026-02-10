@@ -2277,20 +2277,35 @@ class MainWindow(QMainWindow):
         """Split clip at the given timeline position (Ctrl+B or context menu)."""
         clip_track = self._project.video_clip_track
         if not clip_track:
+            self.statusBar().showMessage(tr("No video clips to split"), 3000)
             return
+
+        # Debug: show current state
+        print(f"[Split] Timeline position: {timeline_ms}ms")
+        print(f"[Split] Clips: {len(clip_track.clips)}")
+        for i, c in enumerate(clip_track.clips):
+            print(f"  Clip {i}: {c.source_in_ms}-{c.source_out_ms}ms, source={c.source_path or 'main'}")
 
         result = clip_track.clip_at_timeline(timeline_ms)
         if result is None:
+            print(f"[Split] No clip found at timeline {timeline_ms}ms")
+            self.statusBar().showMessage(tr("Playhead is not on a clip"), 3000)
             return
 
         clip_idx, clip = result
+        print(f"[Split] Found clip {clip_idx}: {clip.source_in_ms}-{clip.source_out_ms}ms")
+
         # Calculate split point in source time
         offset = sum(c.duration_ms for c in clip_track.clips[:clip_idx])
         local_ms = timeline_ms - offset
         split_source = clip.source_in_ms + local_ms
 
+        print(f"[Split] Offset: {offset}ms, Local: {local_ms}ms, Split at source: {split_source}ms")
+
         # Don't split at very edges
         if split_source <= clip.source_in_ms + 50 or split_source >= clip.source_out_ms - 50:
+            print(f"[Split] Too close to edge: {split_source} vs {clip.source_in_ms}-{clip.source_out_ms}")
+            self.statusBar().showMessage(tr("Cannot split: too close to clip edge (need 50ms margin)"), 3000)
             return
 
         from src.models.video_clip import VideoClip
@@ -2298,10 +2313,12 @@ class MainWindow(QMainWindow):
         first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path)
         second = VideoClip(split_source, clip.source_out_ms, source_path=clip.source_path)
 
+        print(f"[Split] Creating: [{clip.source_in_ms}-{split_source}] + [{split_source}-{clip.source_out_ms}]")
+
         cmd = SplitClipCommand(clip_track, clip_idx, original, first, second)
         self._undo_stack.push(cmd)
         self._refresh_all_widgets()
-        self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms")
+        self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms", 3000)
 
     def _on_delete_clip(self, clip_index: int) -> None:
         """Delete a video clip with subtitle ripple."""
@@ -2309,7 +2326,7 @@ class MainWindow(QMainWindow):
         if not clip_track or clip_index < 0 or clip_index >= len(clip_track.clips):
             return
         if len(clip_track.clips) <= 1:
-            self.statusBar().showMessage(tr("Cannot delete the last clip"))
+            self.statusBar().showMessage(tr("Cannot delete the last clip"), 3000)
             return
 
         clip = clip_track.clips[clip_index]
@@ -2317,14 +2334,47 @@ class MainWindow(QMainWindow):
         clip_start_tl = sum(c.duration_ms for c in clip_track.clips[:clip_index])
         clip_end_tl = clip_start_tl + clip.duration_ms
 
+        # Stop playback before deleting
+        self._player.pause()
+
         sub_track = self._project.subtitle_track
         cmd = DeleteClipCommand(
             clip_track, clip_index, clip, sub_track, clip_start_tl, clip_end_tl,
         )
         self._undo_stack.push(cmd)
         self._timeline.select_clip(-1)
+
+        # Reset player state after deletion
+        self._current_clip_index = -1
+        self._current_playback_source = None
+
+        # Move playhead to safe position (start of first remaining clip or 0)
+        safe_pos = 0
+        if len(clip_track.clips) > 0:
+            # If deleted clip was before current position, stay at adjusted position
+            # Otherwise move to start of next clip or beginning
+            if clip_index == 0:
+                safe_pos = 0
+            elif clip_index < len(clip_track.clips):
+                safe_pos = sum(c.duration_ms for c in clip_track.clips[:clip_index])
+            else:
+                safe_pos = sum(c.duration_ms for c in clip_track.clips[:clip_index-1])
+
+        self._timeline.set_playhead(safe_pos)
+        self._controls.set_output_position(safe_pos)
+
+        # Seek to first remaining clip
+        if len(clip_track.clips) > 0:
+            first_clip = clip_track.clips[0]
+            first_source = first_clip.source_path or str(self._project.video_path)
+            if first_source != self._current_playback_source:
+                self._switch_player_source(first_source, first_clip.source_in_ms, auto_play=False)
+            else:
+                self._player.setPosition(first_clip.source_in_ms)
+            self._current_clip_index = 0
+
         self._refresh_all_widgets()
-        self.statusBar().showMessage(f"{tr('Deleted clip')} {clip_index + 1}")
+        self.statusBar().showMessage(f"{tr('Deleted clip')} {clip_index + 1}", 3000)
 
     def _on_clip_trimmed(self, clip_index: int, new_source_in: int, new_source_out: int) -> None:
         """Handle clip trim from timeline drag."""
