@@ -13,6 +13,11 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# 가상환경 활성화
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
 PYTHON_VERSION=$(python3 --version)
 echo "✓ $PYTHON_VERSION"
 

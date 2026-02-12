@@ -62,6 +62,7 @@ class WhisperWorker(QObject):
                 wav_path,
                 language=self._language,
                 on_progress=lambda cur, total: self.progress.emit(cur, total),
+                check_cancelled=lambda: self._cancelled,
             )
 
             if not self._cancelled:

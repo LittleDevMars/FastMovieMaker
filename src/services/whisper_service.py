@@ -34,6 +34,7 @@ def transcribe(
     audio_path: Path,
     language: str = "ko",
     on_progress: Callable[[int, int], None] | None = None,
+    check_cancelled: Callable[[], bool] | None = None,
 ) -> SubtitleTrack:
     """Transcribe audio file and return a SubtitleTrack.
 
@@ -42,9 +43,10 @@ def transcribe(
         audio_path: Path to audio file (WAV, MP3, etc.).
         language: Language code.
         on_progress: Callback(current_segment, total_segments) for progress.
+        check_cancelled: Callback returning True if operation should abort.
 
     Returns:
-        SubtitleTrack with transcribed segments.
+        SubtitleTrack with transcribed segments. Returns partial track if cancelled.
     """
     segments_iter, info = model.transcribe(
         str(audio_path),
@@ -52,19 +54,29 @@ def transcribe(
         vad_filter=True,
     )
 
-    # faster-whisper returns an iterator; collect segments for progress tracking
-    segments = list(segments_iter)
-    total = len(segments)
-
+    # faster-whisper returns an iterator
+    # We must iterate manually to support cancellation
     track = SubtitleTrack(language=language)
-    for i, seg in enumerate(segments):
+    
+    # Note: total segments is unknown with faster-whisper iterator until done.
+    # We can pass an incrementing counter to on_progress if total is unknown,
+    # or just use 0 as total. The original code gathered list() first which implied waiting.
+    # To keep responsiveness, we shouldn't list() it all at once if we want to cancel mid-way.
+    
+    count = 0
+    for seg in segments_iter:
+        if check_cancelled and check_cancelled():
+            break
+            
         track.add_segment(SubtitleSegment(
             start_ms=seconds_to_ms(seg.start),
             end_ms=seconds_to_ms(seg.end),
             text=seg.text.strip(),
         ))
+        count += 1
         if on_progress:
-            on_progress(i + 1, total)
+            # We don't know total length, so pass 0 or estimate
+            on_progress(count, 0)
 
     return track
 

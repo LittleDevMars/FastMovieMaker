@@ -1885,7 +1885,7 @@ class MainWindow(QMainWindow):
     def _on_template_applied(self, template) -> None:
         """Apply an overlay template to the video player."""
         self._overlay_template = template
-        self._video_widget.set_overlay(template.image_path, template.opacity)
+        self._video_widget.set_overlay(template=template)
         self.statusBar().showMessage(f"{tr('Template applied')}: {template.name}")
 
     def _on_template_cleared(self) -> None:

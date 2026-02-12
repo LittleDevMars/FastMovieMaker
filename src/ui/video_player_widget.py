@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSizeF, Signal
+from PySide6.QtCore import Qt, QRectF, QSizeF, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap, QResizeEvent, QWheelEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.models.overlay_template import OverlayTemplate
 
 
 class VideoPlayerWidget(QGraphicsView):
@@ -34,6 +35,7 @@ class VideoPlayerWidget(QGraphicsView):
         self._subtitle_track: SubtitleTrack | None = None
         self._current_subtitle_text = ""
         self._default_style = SubtitleStyle()
+        self._current_template: OverlayTemplate | None = None
         self.setMinimumSize(640, 360)
 
         # Scene setup
@@ -155,6 +157,41 @@ class VideoPlayerWidget(QGraphicsView):
         else:
             self._subtitle_item.setGraphicsEffect(None)
 
+    def _get_safe_area(self, scene_rect: QRectF) -> QRectF:
+        """Calculate the safe area for subtitles based on current template aspect ratio."""
+        if not self._current_template or self._current_template.aspect_ratio not in ("9:16", "4:5", "1:1"):
+            return scene_rect
+
+        # Calculate bounding box for the target aspect ratio, centered in scene
+        vw = scene_rect.width()
+        vh = scene_rect.height()
+        
+        target_ratio = 9/16  # Default fallback for constrained ratios
+        if self._current_template.aspect_ratio == "9:16":
+            target_ratio = 9/16
+        elif self._current_template.aspect_ratio == "4:5":
+            target_ratio = 4/5
+        elif self._current_template.aspect_ratio == "1:1":
+            target_ratio = 1/1
+
+        # Check if we are limited by height or width
+        # scene usually matches video aspect (e.g. 16:9). 
+        # A 9:16 box inside 16:9 is limited by height.
+        
+        # Try full height
+        box_h = vh
+        box_w = box_h * target_ratio
+        
+        if box_w > vw:
+            # Limited by width
+            box_w = vw
+            box_h = box_w / target_ratio
+            
+        x = (vw - box_w) / 2
+        y = (vh - box_h) / 2
+        
+        return QRectF(x, y, box_w, box_h)
+
     def _position_subtitle(self, style: SubtitleStyle | None = None) -> None:
         """Position subtitle according to style settings."""
         if style is None:
@@ -168,9 +205,12 @@ class VideoPlayerWidget(QGraphicsView):
 
         view_rect = self.viewport().rect()
         scene_rect = self.mapToScene(view_rect).boundingRect()
+        
+        # Calculate safe area (9:16 support)
+        safe_rect = self._get_safe_area(scene_rect)
 
-        # Auto word-wrap: limit text width to 90% of view width
-        max_text_width = scene_rect.width() * 0.9
+        # Auto word-wrap: limit text width to 90% of safe area width
+        max_text_width = safe_rect.width() * 0.9
         self._subtitle_item.setTextWidth(max_text_width)
 
         text_width = self._subtitle_item.boundingRect().width()
@@ -179,19 +219,19 @@ class VideoPlayerWidget(QGraphicsView):
         # Horizontal positioning
         position = style.position
         if position.endswith("center"):
-            x = scene_rect.center().x() - text_width / 2
+            x = safe_rect.center().x() - text_width / 2
         elif position.endswith("left"):
-            x = scene_rect.left() + 20
+            x = safe_rect.left() + 20
         elif position.endswith("right"):
-            x = scene_rect.right() - text_width - 20
+            x = safe_rect.right() - text_width - 20
         else:
-            x = scene_rect.center().x() - text_width / 2
+            x = safe_rect.center().x() - text_width / 2
 
         # Vertical positioning
         if position.startswith("top"):
-            y = scene_rect.top() + style.margin_bottom
+            y = safe_rect.top() + style.margin_bottom
         else:
-            y = scene_rect.bottom() - text_height - style.margin_bottom
+            y = safe_rect.bottom() - text_height - style.margin_bottom
 
         self._subtitle_item.setPos(x, y)
         self._update_edit_border()
@@ -208,11 +248,22 @@ class VideoPlayerWidget(QGraphicsView):
     def _on_native_size_changed(self, size: QSizeF) -> None:
         self._fit_video()
 
-    def set_overlay(self, image_path: str | None, opacity: float = 1.0) -> None:
+    def set_overlay(self, template: OverlayTemplate | None = None, image_path: str | None = None, opacity: float = 1.0) -> None:
         """Set or update the overlay template image on top of the video."""
-        if image_path and Path(image_path).exists():
-            self._overlay_path = image_path
-            pixmap = QPixmap(image_path)
+        # Support legacy call with just image_path
+        if template is None and image_path:
+            # Create a dummy template wrapper if only path provided
+            from src.models.overlay_template import OverlayTemplate
+            template = OverlayTemplate(
+                template_id="temp", name="temp", image_path=image_path,
+                thumbnail_path="", category="frame", aspect_ratio="16:9", opacity=opacity
+            )
+
+        self._current_template = template
+
+        if template and template.image_path and Path(template.image_path).exists():
+            self._overlay_path = template.image_path
+            pixmap = QPixmap(template.image_path)
             view_size = self.viewport().size()
             scaled = pixmap.scaled(
                 view_size.width(), view_size.height(),
@@ -220,7 +271,7 @@ class VideoPlayerWidget(QGraphicsView):
                 Qt.TransformationMode.SmoothTransformation,
             )
             self._overlay_item.setPixmap(scaled)
-            self._overlay_item.setOpacity(opacity)
+            self._overlay_item.setOpacity(template.opacity)
             self._overlay_item.setVisible(True)
             # Center the overlay
             x = (view_size.width() - scaled.width()) / 2
@@ -229,11 +280,16 @@ class VideoPlayerWidget(QGraphicsView):
         else:
             self._overlay_path = None
             self._overlay_item.setVisible(False)
+        
+        # Re-position subtitles based on new template aspect ratio
+        self._position_subtitle()
 
     def clear_overlay(self) -> None:
         """Remove the overlay template."""
         self._overlay_path = None
+        self._current_template = None
         self._overlay_item.setVisible(False)
+        self._position_subtitle()
 
     # -------------------------------------------------------- PIP Image Overlays
 

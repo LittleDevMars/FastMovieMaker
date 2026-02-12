@@ -68,7 +68,17 @@
       "Bash(open:*)",
       "Bash(PYTHONPATH=/Users/namhyunjun/MyProject/FastMovieMaker python3:*)",
       "Bash(pkill:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(chmod:*)",
+      "Bash(./test.sh:*)",
+      "Bash(./run.sh)",
+      "Bash(/tmp/test_instructions.txt << 'EOF'\n=================================================================\n🔍 디버그 실행 방법\n=================================================================\n\n터미널에서 다음 명령어를 실행하세요:\n\n    python3 run_debug.py\n\n그 다음:\n1. TTS 생성 \\(Subtitles → Generate Speech...\\)\n2. Space 키 눌러서 재생\n3. Playhead 드래그 시도\n4. 문제 발생 지점 확인\n\n모든 이벤트가 콘솔과 /tmp/fastmoviemaker_debug.log에 기록됩니다.\n\n문제가 발생하면 로그를 확인하세요:\n    cat /tmp/fastmoviemaker_debug.log\n\n=================================================================\nEOF)",
+      "Bash(kill:*)",
+      "Bash(git -C /Users/namhyunjun/MyProject/FastMovieMaker status)",
+      "Bash(git -C /Users/namhyunjun/MyProject/FastMovieMaker diff)",
+      "Bash(git -C /Users/namhyunjun/MyProject/FastMovieMaker log --oneline -5)",
+      "Bash(git -C /Users/namhyunjun/MyProject/FastMovieMaker add src/ui/main_window.py src/ui/timeline_widget.py test_after_tts.py test_playhead_during_playback.py test_real_scenario.py test_timeline_click.py)",
+      "Bash(git -C /Users/namhyunjun/MyProject/FastMovieMaker commit -m \"$\\(cat <<''EOF''\nFix TTS playhead drag: seek now works correctly without video\n\n- Fix _on_timeline_seek to directly seek TTS player when no video loaded\n  \\(was using _player.position\\(\\)=0, resetting TTS to 0ms on every seek\\)\n- Fix _seek_to_x to update playhead position immediately so it follows\n  mouse drag visually\n- Remove temporary test scripts\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

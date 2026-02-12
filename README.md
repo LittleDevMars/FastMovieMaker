@@ -14,7 +14,7 @@
 ## ✨ Key Features
 
 ### 🎯 AI-Powered Subtitle Generation
-- **OpenAI Whisper Integration** — Automatic speech recognition with CUDA acceleration
+- **Faster-Whisper Integration** — Optimized speech recognition with CTranslate2 (up to 4x faster)
 - Support for multiple Whisper models (tiny, base, small, medium, large)
 - Real-time transcription progress with cancel support
 
@@ -23,6 +23,7 @@
 - Frame-accurate editing with custom QPainter timeline widget
 - Seamless clip boundary transitions with automatic source switching
 - **43 comprehensive unit tests** ensuring rock-solid multi-source playback
+- **Smart Aspect Ratio Adaptation** — Subtitles automatically adjust layout for 9:16 (Shorts/Reels) templates
 
 ### 🎨 Professional Video Preview
 - **Frame Cache System** — Instant scrub preview with FFmpeg-extracted frames
