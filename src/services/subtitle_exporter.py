@@ -49,3 +49,70 @@ def import_srt(path: Path) -> SubtitleTrack:
         if content:
             track.add_segment(SubtitleSegment(start, end, content))
     return track
+
+
+def import_smi(path: Path) -> SubtitleTrack:
+    """Read an SMI (SAMI) file and return a SubtitleTrack.
+    
+    Handles standard SAMI format with <SYNC Start=...> tags.
+    Converts <BR> to newlines and strips HTML tags.
+    """
+    try:
+        # Try different encodings commonly used in Korean SMI files
+        content = ""
+        for encoding in ["utf-8", "cp949", "euc-kr", "utf-16"]:
+            try:
+                content = path.read_text(encoding=encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if not content:
+            raise ValueError("Could not decode SMI file")
+
+        track = SubtitleTrack()
+        
+        # Regex to find SYNC tags and content
+        # Matches: <SYNC Start=1234>Content...
+        # Case insensitive flag is important
+        sync_pattern = re.compile(r"<SYNC\s+Start\s*=\s*(\d+)>(.*?)(?=<SYNC|$)", re.IGNORECASE | re.DOTALL)
+        
+        matches = list(sync_pattern.finditer(content))
+        
+        for i, m in enumerate(matches):
+            start_ms = int(m.group(1))
+            raw_text = m.group(2).strip()
+            
+            # If there's a next sync, use that as end time (or +duration logic)
+            # For now, default to next sync's start, or +3000ms if last
+            if i < len(matches) - 1:
+                next_start = int(matches[i+1].group(1))
+                end_ms = next_start
+            else:
+                end_ms = start_ms + 3000
+                
+            # Skip blank "vacant" lines often found in SMI
+            if "&nbsp;" in raw_text and len(raw_text) < 10:
+                continue
+                
+            # Clean HTML tags
+            # 1. Replace <BR> with \n
+            text = re.sub(r"<BR\s*/?>", "\n", raw_text, flags=re.IGNORECASE)
+            # 2. Remove other tags like <P>, <FONT>, <B>, etc.
+            text = re.sub(r"<[^>]+>", "", text)
+            # 3. Unescape HTML entities
+            text = text.replace("&nbsp;", " ").replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            
+            text = text.strip()
+            
+            # Simple duration sanity check (e.g. if next sync is way too far, cap at 5s)
+            if end_ms - start_ms > 5000:
+                end_ms = start_ms + 5000
+                
+            if text:
+                track.add_segment(SubtitleSegment(start_ms, end_ms, text))
+                
+        return track
+    except Exception as e:
+        print(f"Error parsing SMI: {e}")
+        return SubtitleTrack()

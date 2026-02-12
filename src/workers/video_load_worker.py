@@ -1,0 +1,156 @@
+"""Background worker for video loading and conversion."""
+
+from __future__ import annotations
+
+import sys
+import subprocess
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Signal, QThread
+
+from src.utils.config import find_ffmpeg
+from src.services.audio_merger import AudioMerger
+
+
+class VideoLoadWorker(QObject):
+    """Handles video file preparation (conversion if needed) in a background thread.
+
+    Signals:
+        progress(str): Status message for UI display.
+        finished(Path, bool, Path): Emitted on success with (playback_path, has_audio, source_path).
+        error(str): Emitted with error message on failure.
+    """
+
+    progress = Signal(str)
+    finished = Signal(object, bool, object)  # playback_path (Path), has_audio (bool), source_path (Path)
+    error = Signal(str)
+
+    # Formats that macOS AVFoundation cannot play natively
+    _NEEDS_CONVERT = {".mkv", ".avi", ".flv", ".wmv", ".webm"}
+
+    def __init__(self, source_path: Path):
+        super().__init__()
+        self._source_path = source_path
+        self._cancelled = False
+        self._temp_path: Path | None = None
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        """Execute video preparation logic."""
+        try:
+            playback_path = self._source_path
+            
+            # 1. Check if conversion is needed
+            if sys.platform == "darwin" and self._source_path.suffix.lower() in self._NEEDS_CONVERT:
+                self.progress.emit(f"Converting {self._source_path.name} to MP4...")
+                converted = self._convert_to_mp4(self._source_path)
+                
+                if self._cancelled:
+                    if converted and converted.is_file():
+                        converted.unlink(missing_ok=True)
+                    return
+
+                if converted:
+                    playback_path = converted
+                    self._temp_path = converted
+                else:
+                    self.error.emit(f"Could not convert {self._source_path.suffix} to MP4 for playback.")
+                    return
+
+            # 2. Check for audio stream
+            self.progress.emit("Checking audio stream...")
+            has_audio = False
+            try:
+                has_audio = AudioMerger.has_audio_stream(self._source_path)
+            except Exception:
+                has_audio = False
+
+            if self._cancelled:
+                return
+
+            self.finished.emit(playback_path, has_audio, self._source_path)
+
+        except Exception as e:
+            if not self._cancelled:
+                self.error.emit(str(e))
+                # Cleanup temp file if error occurred
+                if self._temp_path is not None and self._temp_path.is_file():
+                    self._temp_path.unlink(missing_ok=True)
+
+    def _convert_to_mp4(self, source: Path) -> Path | None:
+        """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            return None
+
+        tmp = Path(tempfile.mktemp(suffix=".mp4", prefix="fmm_"))
+        
+        # Fast copy if possible, otherwise re-encode
+        cmd = [
+            ffmpeg,
+            "-i", str(source),
+            "-map", "0:v:0",   # Map first video stream
+            "-map", "0:a:0?",  # Map first audio stream if exists
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-ac", "2",        # Downmix to stereo
+            "-b:a", "192k",
+            "-strict", "experimental",
+            "-y",
+            str(tmp),
+        ]
+
+        try:
+            # We can't easily parse progress from ffmpeg directly without complex parsing,
+            # so we use a simple blocking call with timeout.
+            # For a better UX, we could read stdout line by line, but 'subprocess.run' is simpler 
+            # and still keeps the UI responsive because we are in a worker thread.
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300,
+            )
+            
+            if result.returncode == 0 and tmp.is_file():
+                return tmp
+            
+            # If copy failed, try re-encoding
+            if self._cancelled:
+                return None
+
+            self.progress.emit(f"Copy failed, re-encoding {source.name}...")
+            
+            cmd_reencode = [
+                ffmpeg,
+                "-i", str(source),
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                "-ac", "2",
+                "-b:a", "192k",
+                "-strict", "experimental",
+                "-y",
+                str(tmp),
+            ]
+            
+            result2 = subprocess.run(
+                cmd_reencode, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=600,
+            )
+            
+            if result2.returncode == 0 and tmp.is_file():
+                return tmp
+            
+            return None
+
+        except subprocess.TimeoutExpired:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+            return None
+        except Exception:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+            raise

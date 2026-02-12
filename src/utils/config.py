@@ -45,8 +45,8 @@ IMAGE_FILTER = "Image Files ({});;All Files (*)".format(
 )
 
 # Combined media filter (for media library import)
-MEDIA_FILTER = "Media Files ({});;Video Files ({});;Image Files ({});;All Files (*)".format(
-    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS),
+MEDIA_FILTER = "Media Files ({});;Video Files ({});;Image Files ({});;Subtitle Files (*.srt *.smi);;All Files (*)".format(
+    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS + [".srt", ".smi"]),
     " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS),
     " ".join(f"*{ext}" for ext in IMAGE_EXTENSIONS),
 )

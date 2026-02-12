@@ -1,8 +1,8 @@
 # FastMovieMaker
 
-> 🎬 Professional Video Subtitle Editor with AI-Powered Transcription
+> 🎬 AI 기반 자막 생성 및 편집을 지원하는 전문 비디오 에디터
 
-**FastMovieMaker** is a desktop application for creating, editing, and exporting video subtitles with advanced features like multi-source video editing, automatic transcription via Whisper, and AI-powered text-to-speech.
+**FastMovieMaker**는 멀티 소스 비디오 편집, Whisper 기반 자동 자막 생성, AI 텍스트 음성 변환(TTS) 등 고급 기능을 갖춘 데스크톱 자막 편집 프로그램입니다.
 
 [![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
@@ -11,250 +11,253 @@
 
 ---
 
-## ✨ Key Features
+## ✨ 주요 기능
 
-### 🎯 AI-Powered Subtitle Generation
-- **Faster-Whisper Integration** — Optimized speech recognition with CTranslate2 (up to 4x faster)
-- Support for multiple Whisper models (tiny, base, small, medium, large)
-- Real-time transcription progress with cancel support
+### 🎯 AI 기반 자막 생성
+- **Faster-Whisper 통합** — CTranslate2 최적화로 최대 4배 빠른 음성 인식
+- 여러 Whisper 모델 지원 (tiny, base, small, medium, large)
+- 실시간 변환 진행률 표시 및 취소 지원
 
-### 🎞️ Multi-Source Video Editing
-- **Advanced Timeline** — Combine clips from different video files (A→B→A patterns)
-- Frame-accurate editing with custom QPainter timeline widget
-- Seamless clip boundary transitions with automatic source switching
-- **43 comprehensive unit tests** ensuring rock-solid multi-source playback
-- **Smart Aspect Ratio Adaptation** — Subtitles automatically adjust layout for 9:16 (Shorts/Reels) templates
+### 🎞️ 멀티 소스 비디오 편집
+- **고급 타임라인** — 서로 다른 비디오 파일의 클립을 자유롭게 배치 (A→B→A 패턴 등)
+- **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
+- 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
+- 끊김 없는 클립 간 자동 소스 전환
+- **43개의 유닛 테스트**로 검증된 견고한 재생 시스템
+- **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 
-### 🎨 Professional Video Preview
-- **Frame Cache System** — Instant scrub preview with FFmpeg-extracted frames
-- Real-time subtitle overlay with customizable styles
-- Image overlay support (PIP) with position/scale controls
-- Dark theme UI with QSS styling
+### 🎨 전문적인 비디오 미리보기
+- **비동기 비디오 로드** — 대용량 파일도 즉시 로딩 (UI 멈춤 없음)
+- **프레임 캐시 시스템** — FFmpeg 프레임 추출을 통한 즉각적인 스크럽 미리보기
+- **광범위한 자막 지원** — SRT 뿐만 아니라 SMI 자막 파일 가져오기 지원
+- 커스터마이징 가능한 실시간 자막 오버레이
+- 이미지 오버레이(PIP) 지원 및 위치/크기 조절
+- QSS 스타일링이 적용된 다크 테마 UI
 
-### 🔊 AI Text-to-Speech
-- **Multiple TTS Engines:**
-  - Edge-TTS (Microsoft Azure voices)
-  - ElevenLabs API integration
-- Per-segment TTS generation and audio mixing
-- Independent volume controls for video and TTS audio
+### 🔊 AI 텍스트 음성 변환 (TTS)
+- **다양한 TTS 엔진:**
+  - Edge-TTS (Microsoft Azure 음성)
+  - ElevenLabs API 통합
+- 세그먼트별 TTS 생성 및 오디오 믹싱
+- 비디오 및 TTS 오디오 개별 볼륨 제어
 
-### 🌍 Internationalization
-- **Full i18n Support** — Korean (한국어) and English
-- Locale-aware UI with runtime language switching
-- Comprehensive translation coverage
+### 🌍 국제화 (I18n)
+- **완전한 다국어 지원** — 한국어 및 영어 지원
+- 런타임 언어 전환이 가능한 로케일 인식 UI
+- 포괄적인 번역 커버리지
 
-### 📦 Export & Import
-- **Flexible Export:**
-  - SRT subtitle files
-  - Batch video rendering with subtitles burned-in
-  - Custom resolution presets (1080p, 720p, 480p)
-- **Project Management:**
-  - Save/load `.fmm.json` project files
-  - Auto-save with backup system
-  - Undo/redo support with QUndoStack
+### 📦 내보내기 및 가져오기
+- **유연한 내보내기:**
+  - SRT 자막 파일
+  - 자막이 입혀진(Burned-in) 비디오 배치 렌더링
+  - 커스텀 해상도 프리셋 (1080p, 720p, 480p)
+- **프로젝트 관리:**
+  - `.fmm.json` 프로젝트 파일 저장/불러오기
+  - 백업 시스템을 포함한 자동 저장
+  - QUndoStack을 이용한 실행 취소/다시 실행
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ 아키텍처
 
-### Clean 3-Layer Design
+### 깔끔한 3계층 설계
 ```
 src/
-├── models/          # Pure Python data models (Qt-independent)
+├── models/          # 순수 Python 데이터 모델 (Qt 종속성 없음)
 │   ├── project.py
 │   ├── subtitle.py
 │   ├── video_clip.py
 │   └── style.py
-├── services/        # Business logic (FFmpeg, Whisper, TTS)
+├── services/        # 비즈니스 로직 (FFmpeg, Whisper, TTS)
 │   ├── ffmpeg_service.py
 │   ├── whisper_service.py
 │   ├── tts_service.py
 │   └── frame_cache_service.py
-├── workers/         # QThread background workers
+├── workers/         # QThread 백그라운드 워커
 │   ├── whisper_worker.py
 │   ├── tts_worker.py
 │   ├── waveform_worker.py
 │   └── frame_cache_worker.py
-└── ui/              # PySide6 UI components
+└── ui/              # PySide6 UI 컴포넌트
     ├── main_window.py
     ├── timeline_widget.py
     ├── video_player_widget.py
     └── playback_controls.py
 ```
 
-### Technical Highlights
-- **Worker-moveToThread Pattern** — Non-blocking background processing for Whisper/TTS
-- **Custom QPainter Timeline** — Frame-accurate video editing with zoom/scroll
-- **Multi-Source Playback System:**
-  - Explicit `_current_clip_index` tracking (no ambiguous source→timeline mapping)
-  - Clip boundary detection (30ms threshold) for auto-transition
-  - Frame cache integration for instant scrub preview
-- **Output Time Mode** — Unified timeline→slider synchronization across A→B→A clips
+### 기술적 특징
+- **Worker-moveToThread 패턴** — Whisper/TTS 작업을 위한 논블로킹 백그라운드 처리
+- **커스텀 QPainter 타임라인** — 줌/스크롤을 지원하는 프레임 단위 비디오 편집
+- **멀티 소스 재생 시스템:**
+  - 명시적인 `_current_clip_index` 추적 (모호한 소스→타임라인 매핑 방지)
+  - 자동 전환을 위한 클립 경계 감지 (30ms 임계값)
+  - 즉각적인 스크럽 미리보기를 위한 프레임 캐시 통합
+- **출력 시간 모드(Output Time Mode)** — A→B→A 등 복합 클립 전반에 걸친 통합 타임라인 동기화
 
 ---
 
-## 🚀 Installation
+## 🚀 설치 방법
 
-### Requirements
-- **Python 3.13+** (3.9+ supported with `from __future__ import annotations`)
-- **FFmpeg** (required for video processing)
-- **NVIDIA GPU** (optional, for CUDA-accelerated Whisper)
+### 요구 사항
+- **Python 3.13+** (3.9+ 지원)
+- **FFmpeg** (비디오 처리에 필수)
+- **NVIDIA GPU** (선택 사항, CUDA 가속 Whisper 사용 시)
 
-### Setup
+### 설정
 ```bash
-# Clone repository
+# 저장소 복제
 git clone https://github.com/yourusername/FastMovieMaker.git
 cd FastMovieMaker
 
-# Create virtual environment
+# 가상환경 생성
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# Install dependencies
+# 의존성 설치
 pip install -r requirements.txt
 
-# Install PyTorch with CUDA support (optional, for GPU acceleration)
+# PyTorch 및 CUDA 지원 설치 (선택 사항, GPU 가속용)
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# Run application
+# 애플리케이션 실행
 python main.py
 ```
 
-### FFmpeg Installation
-- **Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
+### FFmpeg 설치
+- **Windows:** [ffmpeg.org](https://ffmpeg.org/download.html)에서 다운로드 후 PATH에 추가
 - **Linux:** `sudo apt install ffmpeg`
 - **Mac:** `brew install ffmpeg`
 
 ---
 
-## 🧪 Testing
+## 🧪 테스트
 
-### Comprehensive Test Suite
+### 포괄적인 테스트 스위트
 ```bash
-# Run all tests (326+ test cases across 20 modules)
+# 전체 테스트 실행 (20개 모듈에 걸친 326개 이상의 테스트 케이스)
 pytest tests/ -v
 
-# Run multi-source playback tests (43 test cases)
+# 멀티 소스 재생 테스트 실행 (43개 테스트 케이스)
 pytest tests/test_multi_source_playback.py -v
 
-# Test categories:
-# - Scrub source switching
-# - Play/pause race conditions
-# - Media status handling
-# - Position changed events
-# - Scrub→play scenarios
-# - Play button sync
-# - Clip boundary crossing
-# - Timeline/slider sync
-# - Edge cases (short clips, rapid transitions, etc.)
+# 테스트 범주:
+# - 스크럽 시 소스 전환
+# - 재생/일시정지 레이스 컨디션
+# - 미디어 상태 처리
+# - 위치 변경 이벤트
+# - 스크럽→재생 시나리오
+# - 재생 버튼 동기화
+# - 클립 경계 교차
+# - 타임라인/슬라이더 동기화
+# - 엣지 케이스 (짧은 클립, 빠른 전환 등)
 ```
 
 ---
 
-## 🛠️ Tech Stack
+## 🛠️ 기술 스택
 
-| Category | Technology |
+| 분류 | 기술 |
 |----------|-----------|
-| **Language** | Python 3.13 |
-| **GUI Framework** | PySide6 6.10 (Qt 6.10) |
-| **Video Processing** | FFmpeg, opencv-python |
+| **언어** | Python 3.13 |
+| **GUI 프레임워크** | PySide6 6.10 (Qt 6.10) |
+| **비디오 처리** | FFmpeg, opencv-python |
 | **AI/ML** | OpenAI Whisper, PyTorch 2.6 (CUDA 12.4) |
 | **TTS** | Edge-TTS, ElevenLabs API |
-| **Testing** | pytest, pytest-qt |
-| **I18n** | Custom translation system |
+| **테스트** | pytest, pytest-qt |
+| **국제화** | 커스텀 번역 시스템 |
 
 ---
 
-## 📖 Usage
+## 📖 사용 방법
 
-### Basic Workflow
-1. **Load Video** — Drag & drop or File → Open Video
-2. **Generate Subtitles:**
-   - Option A: Subtitle → Generate from Whisper
-   - Option B: Subtitle → Generate from Script (TTS)
-3. **Edit Timeline:**
-   - Add video clips from different sources
-   - Adjust subtitle timing by dragging segments
-   - Edit text in the subtitle table
-4. **Export:**
-   - File → Export → SRT File
-   - File → Export → Batch Export (burned-in subtitles)
+### 기본 워크플로우
+1. **비디오 로드** — 드래그 앤 드롭 또는 파일 → 비디오 열기
+2. **자막 생성:**
+   - 옵션 A: 자막 → Whisper로 생성
+   - 옵션 B: 자막 → 스크립트로 생성 (TTS)
+3. **타임라인 편집:**
+   - 다른 소스의 비디오 클립 추가
+   - 세그먼트를 드래그하여 자막 타이밍 조절
+   - 자막 테이블에서 텍스트 편집
+4. **내보내기:**
+   - 파일 → 내보내기 → SRT 파일
+   - 파일 → 내보내기 → 배치 내보내기 (자막 하드코딩 영상)
 
-### 📚 Detailed Guides
-- **[TTS Usage Guide (한국어)](docs/TTS_USAGE.md)** — 텍스트 음성 변환 상세 가이드
-- **[TTS Usage Guide (English)](docs/TTS_USAGE_EN.md)** — Comprehensive TTS tutorial
+### 📚 상세 가이드
+- **[TTS 사용 가이드 (한국어)](docs/TTS_USAGE.md)**
+- **[TTS Usage Guide (English)](docs/TTS_USAGE_EN.md)**
 
-### Multi-Source Video Editing
+### 멀티 소스 비디오 편집 예시
 ```python
-# Example: A(0-10s) → B(0-5s) → A(10-20s) timeline
+# 예: A(0-10초) → B(0-5초) → A(10-20초) 타임라인 구성
 from src.models.video_clip import VideoClip, VideoClipTrack
 
 track = VideoClipTrack(clips=[
     VideoClip(0, 10000),               # A: 0-10s
-    VideoClip(0, 5000),                # B: 0-5s (external source)
+    VideoClip(0, 5000),                # B: 0-5s (외부 소스)
     VideoClip(10000, 20000),           # A: 10-20s
 ])
 track.clips[1].source_path = "path/to/video_b.mp4"
 
-# Total output duration: 25 seconds (10 + 5 + 10)
+# 총 출력 길이: 25초 (10 + 5 + 10)
 ```
 
 ---
 
-## 🎯 Roadmap
+## 🎯 로드맵
 
-- [ ] Real-time subtitle preview during Whisper transcription
-- [ ] GPU-accelerated video rendering
-- [ ] Plugin system for custom TTS providers
-- [ ] Collaborative editing (cloud project sync)
-- [ ] Subtitle translation with AI (DeepL/GPT integration)
-
----
-
-## 📝 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
+- [ ] Whisper 변환 중 실시간 자막 미리보기
+- [ ] GPU 가속 비디오 렌더링
+- [ ] 커스텀 TTS 제공자를 위한 플러그인 시스템
+- [ ] 클라우드 프로젝트 동기화 (협업 편집)
+- [ ] AI 기반 자막 번역 (DeepL/GPT 연동)
 
 ---
 
-## 🙏 Acknowledgments
+## 📝 라이선스
 
-- [OpenAI Whisper](https://github.com/openai/whisper) — Speech recognition model
+MIT 라이선스 - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+
+---
+
+## 🙏 감사의 글
+
+- [OpenAI Whisper](https://github.com/openai/whisper) — 음성 인식 모델
 - [PySide6](https://pypi.org/project/PySide6/) — Qt for Python
-- [FFmpeg](https://ffmpeg.org/) — Video processing
+- [FFmpeg](https://ffmpeg.org/) — 비디오 처리
 - [Edge-TTS](https://github.com/rany2/edge-tts) — Microsoft Azure TTS
 
 ---
 
-## 🤝 Contributing
+## 🤝 기여하기
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+기여는 언제나 환영합니다!
+1. 저장소 포크 (Fork)
+2. 기능 브랜치 생성 (`git checkout -b feature/amazing-feature`)
+3. 변경 사항 커밋 (`git commit -m 'Add amazing feature'`)
+4. 브랜치에 푸시 (`git push origin feature/amazing-feature`)
+5. Pull Request 생성
 
-### Development Setup
+### 개발 환경 설정
 ```bash
-# Install dev dependencies
+# 개발 의존성 설치
 pip install pytest pytest-qt black ruff
 
-# Run tests before committing
+# 커밋 전 테스트 실행
 pytest tests/ -v
 
-# Format code
+# 코드 포맷팅
 black src/ tests/
 ruff check src/ tests/
 ```
 
 ---
 
-## 💬 Contact
+## 💬 연락처
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/FastMovieMaker/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/FastMovieMaker/discussions)
+- **이슈:** [GitHub Issues](https://github.com/yourusername/FastMovieMaker/issues)
+- **토론:** [GitHub Discussions](https://github.com/yourusername/FastMovieMaker/discussions)
 
 ---
 

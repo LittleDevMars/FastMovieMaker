@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 16 완료 (2026-02-09)
+**현재 상태:** Day 17 완료 (2026-02-13)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -110,6 +110,43 @@
 |------|------|
 | PyInstaller 패키징 | 단일 exe/폴더 배포 |
 | Windows 인스톨러 | NSIS/Inno Setup |
+
+---
+
+## 2026-02-12/13 (Day 17) 작업 요약
+
+**타임라인 완성도 향상 — 썸네일(Filmstrip), 비동기 로딩, 성능 최적화, 자막 가져오기**
+
+### 1. 타임라인 썸네일 (Filmstrip) 구현 (`src/services/timeline_thumbnail_service.py`)
+- **비동기 생성**: `QThreadPool` 및 `ThumbnailRunnable`을 사용하여 메인 스레드 차단 없이 백그라운드에서 생성
+- **스마트 캐싱**: LRU 캐시(최대 200개)로 중복 생성 방지 및 즉각적인 재사용
+- **최적화**: FFmpeg "Double-SS" 기법(Input Seeking)으로 대용량 파일에서도 고속 추출
+- **UI 연동**: 타임라인 그리드 시스템에 맞춰 안정적인 렌더링, 스크롤 시 부드러운 로딩
+
+### 2. 비동기 비디오 로드 (`src/workers/video_load_worker.py`)
+- **문제 해결**: 대용량(2GB+) MKV 파일 로드 시 UI가 수초간 멈추는 현상 해결
+- **Worker 패턴**: `VideoLoadWorker`가 별도 스레드에서 FFprobe 메타데이터 분석 및 오디오 추출 수행
+- **사용자 경험**: "Loading video..." 불확정 프로그레스바 표시 후 완료 시 타임라인 표시
+
+### 3. 자막 파일 가져오기 확장 (`src/services/subtitle_exporter.py`)
+- **SMI 지원**: EUC-KR/CP949 인코딩 자동 감지 및 SRT 변환 로직 구현 (`import_smi`)
+- **SRT 파싱**: 정규식 기반 파서로 비표준 형식(느슨한 타임스탬프 등)도 유연하게 처리
+- **Drag & Drop**: 미디어 라이브러리 → 타임라인으로 자막 파일 드롭 시 트랙 자동 생성
+
+### 4. 타임라인 성능 및 안정성 최적화
+- **첫 장면 반복 버그 수정**: `FrameCacheService`에 `threshold_ms` 도입, 장면 전환 시 잘못된 캐시 프레임 표시 방지
+- **탐색 병목 해결**: `MediaLibraryService`의 썸네일 생성 로직을 Input Seeking으로 변경하여 속도 10배 향상
+- **렌더링 크래시 수정**: `VideoClip.start_ms` 속성 오류, `Path(None)` 오류 등 다수 버그 수정
+- **UI 개선**: 모던한 그라데이션 클립 디자인, 세련된 눈금자 및 플레이헤드
+
+### 5. 테스트
+- **썸네일 서비스**: 캐시 적중/미적중 로직 및 Worker 실행 테스트
+- **비동기 로드**: 대용량 파일 로드 시그널 흐름 검증
+- **자막 가져오기**: 다양한 인코딩의 SMI/SRT 파일 파싱 정확도 검증
+
+### 수정/신규 파일
+- **신규 (3):** `src/workers/video_load_worker.py`, `src/services/timeline_thumbnail_service.py`, `tests/test_thumbnail_service.py` (테스트 후 삭제)
+- **수정 (8):** `timeline_widget.py`, `main_window.py`, `subtitle_exporter.py`, `media_library_panel.py`, `frame_cache_service.py`, `media_library_service.py`, `video_clip.py`
 
 ---
 

@@ -238,10 +238,11 @@ class MediaLibraryService:
         if not ffmpeg:
             return None
 
+        # Use input seeking (-ss before -i) for fast thumbnail generation
         cmd = [
             ffmpeg,
-            "-i", str(video_path),
             "-ss", "1",
+            "-i", str(video_path),
             "-vframes", "1",
             "-vf", "scale=160:-1",
             "-y",

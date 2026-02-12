@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -34,7 +35,7 @@ from src.services.audio_merger import AudioMerger
 from src.services.frame_cache_service import FrameCacheService
 from src.workers.frame_cache_worker import FrameCacheWorker
 from src.services.autosave import AutoSaveManager
-from src.services.subtitle_exporter import export_srt, import_srt
+from src.services.subtitle_exporter import export_srt, import_srt, import_smi
 from src.services.translator import TranslatorService
 from src.ui.dialogs.preferences_dialog import PreferencesDialog
 from src.ui.dialogs.recovery_dialog import RecoveryDialog
@@ -68,6 +69,7 @@ from src.ui.dialogs.tts_dialog import TTSDialog
 from src.utils.config import APP_NAME, APP_VERSION, VIDEO_FILTER, find_ffmpeg
 from src.utils.i18n import tr
 from src.workers.waveform_worker import WaveformWorker
+from src.workers.video_load_worker import VideoLoadWorker
 
 
 class MainWindow(QMainWindow):
@@ -709,13 +711,14 @@ class MainWindow(QMainWindow):
         self._track_selector.track_removed.connect(self._on_track_removed)
         self._track_selector.track_renamed.connect(self._on_track_renamed)
 
-        # Media library signals
+        # Media library panel connections
         self._media_panel.video_open_requested.connect(
             lambda path: self._load_video(Path(path))
         )
         self._media_panel.image_insert_to_timeline.connect(
             self._on_media_image_insert_to_timeline
         )
+        self._media_panel.subtitle_imported.connect(self._on_import_subtitle)
 
         # Timeline drag-and-drop signals
         self._timeline.image_file_dropped.connect(self._on_image_file_dropped)
@@ -1280,14 +1283,59 @@ class MainWindow(QMainWindow):
     _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v"}
 
     def _load_video(self, path: Path) -> None:
+        """Start async video loading and conversion."""
+        self._cleanup_temp_video()
+
+        # Create worker and thread
+        self._video_thread = QThread()
+        self._video_worker = VideoLoadWorker(path)
+        self._video_worker.moveToThread(self._video_thread)
+
+        # Create progress dialog
+        progress = QProgressDialog(f"{tr('Loading')} {path.name}...", tr("Cancel"), 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        
+        # Connect signals
+        self._video_worker.progress.connect(progress.setLabelText)
+        self._video_worker.finished.connect(self._on_video_prepared)
+        self._video_worker.finished.connect(progress.accept)
+        self._video_worker.finished.connect(self._video_thread.quit)
+        self._video_worker.finished.connect(self._video_worker.deleteLater)
+        self._video_worker.finished.connect(self._video_thread.deleteLater)
+        
+        self._video_worker.error.connect(lambda e: QMessageBox.critical(self, tr("Error"), e))
+        self._video_worker.error.connect(progress.reject)
+        self._video_worker.error.connect(self._video_thread.quit)
+        self._video_worker.error.connect(self._video_worker.deleteLater)
+        self._video_worker.error.connect(self._video_thread.deleteLater)
+
+        progress.canceled.connect(self._video_worker.cancel)
+        progress.canceled.connect(self._video_thread.quit)
+        progress.canceled.connect(self._video_worker.deleteLater)
+        progress.canceled.connect(self._video_thread.deleteLater)
+
+        self._video_thread.started.connect(self._video_worker.run)
+        self._video_thread.start()
+        
+        # We don't block here; execution continues, but progress dialog is modal
+        progress.exec()
+
+    def _on_video_prepared(self, playback_path: Path, has_audio: bool, source_path: Path) -> None:
+        """Finalize video loading after worker completes."""
         # Preserve existing tracks when loading video
         existing_tracks = [t for t in self._project.subtitle_tracks if len(t) > 0]
         existing_overlays = self._project.image_overlay_track
 
         self._project.reset()
         self._undo_stack.clear()
-        self._cleanup_temp_video()
-        self._project.video_path = path
+        
+        self._project.video_path = source_path
+        
+        # If playback path is different (temp file), store it
+        if playback_path != source_path:
+            self._temp_video_path = playback_path
 
         # Restore non-empty tracks
         if existing_tracks:
@@ -1296,25 +1344,7 @@ class MainWindow(QMainWindow):
         if len(existing_overlays) > 0:
             self._project.image_overlay_track = existing_overlays
 
-        playback_path = path
-        if sys.platform == "darwin" and path.suffix.lower() in self._NEEDS_CONVERT:
-            converted = self._convert_to_mp4(path)
-            if converted:
-                playback_path = converted
-                self._temp_video_path = converted
-            else:
-                QMessageBox.critical(
-                    self, tr("Conversion Failed"),
-                    f"{tr('Could not convert')} {path.suffix} {tr('to MP4 for playback.')}\n"
-                    f"{tr('Make sure FFmpeg is installed.')}"
-                )
-                return
-
-        # Detect if video has audio
-        try:
-            self._project.video_has_audio = AudioMerger.has_audio_stream(path)
-        except Exception:
-            self._project.video_has_audio = False
+        self._project.video_has_audio = has_audio
 
         self._current_playback_source = str(playback_path)
         self._current_clip_index = 0
@@ -1326,88 +1356,19 @@ class MainWindow(QMainWindow):
 
         # Start waveform generation in background
         if self._project.video_has_audio:
-            self._start_waveform_generation(path)
+            self._start_waveform_generation(source_path)
         else:
             self._timeline.clear_waveform()
 
-        self.setWindowTitle(f"{path.name} – {APP_NAME}")
-        self.statusBar().showMessage(f"{tr('Loaded')}: {path.name}")
+        self.setWindowTitle(f"{source_path.name} – {APP_NAME}")
+        self.statusBar().showMessage(f"{tr('Loaded')}: {source_path.name}")
 
         # Start frame cache generation
         self._start_frame_cache_generation()
 
-    def _convert_to_mp4(self, source: Path) -> Path | None:
-        """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            return None
-
-        tmp = Path(tempfile.mktemp(suffix=".mp4", prefix="fmm_"))
-        cmd = [
-            ffmpeg,
-            "-i", str(source),
-            "-map", "0:v:0",  # Map first video stream
-            "-map", "0:a:0?",  # Map first audio stream if exists
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-ac", "2",  # Downmix to stereo (critical for laptop speakers!)
-            "-b:a", "192k",
-            "-strict", "experimental",
-            "-y",
-            str(tmp),
-        ]
-
-        progress = QProgressDialog(f"{tr('Converting')} {source.name} {tr('to MP4...')}", tr("Cancel"), 0, 0, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        QApplication.processEvents()
-
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=300,
-            )
-            progress.close()
-            if result.returncode == 0 and tmp.is_file():
-                self.statusBar().showMessage(f"{tr('Converted')} {source.suffix} {tr('to MP4 for playback')}")
-                return tmp
-            else:
-                # If copy codec fails, try re-encoding
-                cmd_reencode = [
-                    ffmpeg,
-                    "-i", str(source),
-                    "-map", "0:v:0",
-                    "-map", "0:a:0?",
-                    "-c:v", "libx264", "-preset", "fast",
-                    "-c:a", "aac",
-                    "-ac", "2",  # Downmix to stereo
-                    "-b:a", "192k",
-                    "-strict", "experimental",
-                    "-y",
-                    str(tmp),
-                ]
-                progress2 = QProgressDialog(f"{tr('Re-encoding')} {source.name}...", None, 0, 0, self)
-                progress2.setWindowModality(Qt.WindowModality.WindowModal)
-                progress2.setMinimumDuration(0)
-                progress2.show()
-                QApplication.processEvents()
-                result2 = subprocess.run(
-                    cmd_reencode, capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=600,
-                )
-                progress2.close()
-                if result2.returncode == 0 and tmp.is_file():
-                    return tmp
-                return None
-        except subprocess.TimeoutExpired:
-            progress.close()
-            tmp.unlink(missing_ok=True)
-            return None
-
     def _cleanup_temp_video(self) -> None:
         """Remove previously created temp video file."""
-        if self._temp_video_path and self._temp_video_path.is_file():
+        if self._temp_video_path is not None and self._temp_video_path.is_file():
             self._temp_video_path.unlink(missing_ok=True)
         self._temp_video_path = None
 
@@ -1778,28 +1739,53 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, tr("Import Error"), str(e))
 
-    def _on_import_srt_new_track(self, path=None) -> None:
-        if not path:
-            path, _ = QFileDialog.getOpenFileName(
-                self, tr("Import SRT to New Track"), "", "SRT Files (*.srt);;All Files (*)"
-            )
-            if not path:
+    def _on_import_srt_new_track(self, path: Path) -> None:
+        """Import SRT as a new track."""
+        try:
+            track = import_srt(path)
+            self._project.subtitle_tracks.append(track)
+            self._refresh_track_selector()
+            # Select the new track
+            self._track_selector.blockSignals(True)
+            self._track_selector.setCurrentIndex(len(self._project.subtitle_tracks) - 1)
+            self._track_selector.blockSignals(False)
+            self._project.active_track_index = len(self._project.subtitle_tracks) - 1
+            self._on_track_changed(self._project.active_track_index)
+            
+            QMessageBox.information(self, tr("Import Complete"), tr("Subtitle track imported successfully."))
+        except Exception as e:
+            QMessageBox.critical(self, tr("Import Error"), f"{tr('Failed to import SRT')}: {e}")
+
+    def _on_import_subtitle(self, file_path: str) -> None:
+        """Handle subtitle import request from media library."""
+        path = Path(file_path)
+        if path.suffix.lower() == ".srt":
+            self._on_import_srt_new_track(path)
+        elif path.suffix.lower() == ".smi":
+            self._on_import_smi(path)
+
+    def _on_import_smi(self, path: Path) -> None:
+        """Import SMI file as a new track."""
+        try:
+            track = import_smi(path)
+            if not track:
+                QMessageBox.warning(self, tr("Import Empty"), tr("No subtitles found in SMI file."))
                 return
 
-        try:
-            path = Path(path) if isinstance(path, str) else path
-            track = import_srt(path)
-            track_name = path.stem
-            track.name = track_name
             self._project.subtitle_tracks.append(track)
-            self._project.active_track_index = len(self._project.subtitle_tracks) - 1
-            self._undo_stack.clear()
             self._refresh_track_selector()
-            self._on_track_changed(self._project.active_track_index)
-            self._autosave.notify_edit()
-            self.statusBar().showMessage(f"{tr('Imported to new track')}: {track_name}")
+            
+            # Select the new track
+            new_idx = len(self._project.subtitle_tracks) - 1
+            self._track_selector.blockSignals(True)
+            self._track_selector.setCurrentIndex(new_idx)
+            self._track_selector.blockSignals(False)
+            self._project.active_track_index = new_idx
+            self._on_track_changed(new_idx)
+            
+            QMessageBox.information(self, tr("Import Complete"), tr("SMI subtitle track imported successfully."))
         except Exception as e:
-            QMessageBox.critical(self, tr("Import Error"), str(e))
+            QMessageBox.critical(self, tr("Import Error"), f"{tr('Failed to import SMI')}: {e}")
 
     def _on_export_srt(self) -> None:
         if not self._project.has_subtitles:
@@ -2164,8 +2150,9 @@ class MainWindow(QMainWindow):
         # Show cached frame immediately while QMediaPlayer loads
         if self._frame_cache_service:
             from PySide6.QtGui import QPixmap
+            # Use threshold to avoid showing a frame from a completely different scene
             frame_path = self._frame_cache_service.get_nearest_frame(
-                source_path, seek_ms,
+                source_path, seek_ms, threshold_ms=2000
             )
             if frame_path:
                 pixmap = QPixmap(str(frame_path))
@@ -2302,10 +2289,10 @@ class MainWindow(QMainWindow):
 
         print(f"[Split] Offset: {offset}ms, Local: {local_ms}ms, Split at source: {split_source}ms")
 
-        # Don't split at very edges
-        if split_source <= clip.source_in_ms + 50 or split_source >= clip.source_out_ms - 50:
+        # Don't split at very edges (100ms margin for safety)
+        if split_source <= clip.source_in_ms + 100 or split_source >= clip.source_out_ms - 100:
             print(f"[Split] Too close to edge: {split_source} vs {clip.source_in_ms}-{clip.source_out_ms}")
-            self.statusBar().showMessage(tr("Cannot split: too close to clip edge (need 50ms margin)"), 3000)
+            self.statusBar().showMessage(tr("Cannot split: too close to clip edge (need 100ms margin)"), 3000)
             return
 
         from src.models.video_clip import VideoClip
@@ -2317,7 +2304,14 @@ class MainWindow(QMainWindow):
 
         cmd = SplitClipCommand(clip_track, clip_idx, original, first, second)
         self._undo_stack.push(cmd)
+        
+        # Refresh UI and force sync of _current_clip_index to match the new clip structure
         self._refresh_all_widgets()
+        self._sync_clip_index_from_position()
+        
+        # Select the newly created clip (the second part, at clip_idx + 1)
+        self._timeline.select_clip(clip_idx + 1)
+        
         self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms", 3000)
 
     def _on_delete_clip(self, clip_index: int) -> None:

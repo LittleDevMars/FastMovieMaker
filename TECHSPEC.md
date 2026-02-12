@@ -59,7 +59,7 @@ MainWindow                        QThread
     | -- thread.quit() / wait() ---> |
 ```
 
-Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker`, `WaveformWorker`, `FrameCacheWorker`
+Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker`, `WaveformWorker`, `FrameCacheWorker`, `VideoLoadWorker`, `ThumbnailRunnable`
 
 ### 2.3 Undo/Redo System
 
@@ -289,6 +289,13 @@ Memory-efficient peak computation from WAV:
 - Chunk-based processing (~1 second chunks, ~128KB RAM)
 - Output: `WaveformData(peaks_pos, peaks_neg)` normalized to [-1, 1]
 
+### 5.7 Timeline Thumbnails
+- **Service:** `TimelineThumbnailService`
+- **Mechanism:** Async FFmpeg generation via `QThreadPool` + `ThumbnailRunnable`
+- **Optimization:** "Double-SS" seeking (fast seek to keyframe + precise seek)
+- **Caching:** LRU Cache (max 200 items) for instant reuse
+
+
 ### 5.6 Autosave & Recovery
 
 - Timer-based: 30s interval (configurable)
@@ -326,7 +333,7 @@ Memory-efficient peak computation from WAV:
 ```
 Track layout (top to bottom):
   [Ruler]              Time ticks with labels
-  [Video Clips]        Color-coded clip bars (cyan=primary, per-source colors)
+  [Video Clips]        Color-coded clip bars with filmstrip thumbnails
   [Subtitles]          Segment bars with text labels
   [TTS Audio]          Audio track bar
   [Waveform]           Peak visualization
@@ -505,7 +512,8 @@ FastMovieMaker/
       audio_regenerator.py        TTS audio regeneration
       waveform_service.py         Peak computation
       frame_cache_service.py      JPEG frame thumbnail cache
-      subtitle_exporter.py        SRT import/export
+      timeline_thumbnail_service.py Async filmstrip generation
+      subtitle_exporter.py        SRT/SMI import/export
       text_splitter.py            Text segmentation strategies
       translator.py               Translation API client
       project_io.py               JSON project persistence (v4)
@@ -522,6 +530,7 @@ FastMovieMaker/
       tts_worker.py               Background TTS generation
       waveform_worker.py          Background waveform computation
       frame_cache_worker.py       Background frame extraction
+      video_load_worker.py        Async video loading
     ui/
       main_window.py              MainWindow (central orchestrator)
       video_player_widget.py      QGraphicsView video + overlays

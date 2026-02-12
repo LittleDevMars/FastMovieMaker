@@ -151,6 +151,7 @@ class MediaLibraryPanel(QWidget):
     video_open_requested = Signal(str)
     image_selected = Signal(str)
     image_insert_to_timeline = Signal(str)  # file_path
+    subtitle_imported = Signal(str)  # file_path
 
     GRID_COLUMNS = 2
 
@@ -246,7 +247,11 @@ class MediaLibraryPanel(QWidget):
             return
 
         for file_path in files:
-            self._service.add_item(file_path)
+            path = Path(file_path)
+            if path.suffix.lower() in {".srt", ".smi"}:
+                self.subtitle_imported.emit(str(path))
+            else:
+                self._service.add_item(file_path)
 
         self._refresh()
 

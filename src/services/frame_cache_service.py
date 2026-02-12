@@ -61,11 +61,13 @@ class FrameCacheService:
         d = self.source_cache_dir(source_path)
         return any(d.glob("frame_*.jpg"))
 
-    def get_nearest_frame(self, source_path: str, source_ms: int) -> Path | None:
+    def get_nearest_frame(self, source_path: str, source_ms: int, threshold_ms: int = 2000) -> Path | None:
         """Find the cached JPEG closest to *source_ms*.
 
         Uses binary search on sorted filenames (ms encoded as zero-padded
-        integers).  Returns ``None`` if no frames are cached for this source.
+        integers). Returns ``None`` if:
+        1. No frames are cached for this source.
+        2. The closest frame is further away than *threshold_ms*.
         """
         d = self.source_cache_dir(source_path)
         frames = sorted(d.glob("frame_*.jpg"))
@@ -90,7 +92,65 @@ class FrameCacheService:
                 hi = mid - 1
             else:
                 return frames[mid]
+
+        if best_dist > threshold_ms:
+            return None
+
         return best
+
+    @staticmethod
+    def extract_frame_at(source_path: str, ms: int, output_path: Path) -> bool:
+        """Extract a single frame at specific timestamp using fast seek (Double-SS).
+
+        Args:
+            source_path: Video file path
+            ms: Timestamp in milliseconds
+            output_path: Destination path for the image
+
+        Returns:
+            True if successful, False otherwise
+        """
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            return False
+
+        # Double-SS technique:
+        # 1. Seek before the timestamp (input seek) -> fast to keyframe
+        # 2. Seek accurately to the target (output seek)
+        
+        # Calculate timestamps
+        target_sec = ms / 1000.0
+        # Seek 10 seconds before (or to 0) for the input seek
+        input_seek = max(0.0, target_sec - 10.0)
+        # Relative seek from that point
+        output_seek = target_sec - input_seek
+
+        creation_flags = 0
+        if sys.platform == "win32":
+            creation_flags = subprocess.CREATE_NO_WINDOW
+
+        cmd = [
+            ffmpeg,
+            "-ss", f"{input_seek:.3f}",
+            "-i", source_path,
+            "-ss", f"{output_seek:.3f}",
+            "-frames:v", "1",
+            "-q:v", "5",  # High quality
+            "-y",
+            str(output_path),
+        ]
+
+        try:
+            subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags,
+                timeout=5,
+            )
+            return output_path.exists() and output_path.stat().st_size > 0
+        except Exception:
+            return False
 
     @staticmethod
     def extract_frames(
