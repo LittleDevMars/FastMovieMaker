@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QUndoCommand
+from src.utils.i18n import tr
 
 if TYPE_CHECKING:
     from src.models.project import ProjectState
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from src.models.subtitle import SubtitleSegment, SubtitleTrack
     from src.models.video_clip import VideoClip, VideoClipTrack
     from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
+    from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
 
 class EditTextCommand(QUndoCommand):
@@ -687,13 +689,170 @@ class EditSpeedCommand(QUndoCommand):
                 seg.start_ms += delta
                 seg.end_ms += delta
         
-        # Shift overlays
-        if self._overlay_track:
-            for ov in self._overlay_track.overlays:
-                if ov.start_ms >= threshold:
-                     ov.start_ms += delta
-                     ov.end_ms += delta
-        
         # Shift Audio (TTS)
         if self._sub_track.audio_start_ms >= threshold:
              self._sub_track.audio_start_ms += delta
+
+
+class EditTransitionCommand(QUndoCommand):
+    """Command to add or modify a video transition with ripples."""
+
+    def __init__(self, project, track_index, clip_index, new_info, ripple=True):
+        super().__init__(tr("Edit Transition"))
+        self._project = project
+        self._track_index = track_index
+        self._index = clip_index
+        self._new_info = new_info
+        self._ripple = ripple
+
+        vt = project.video_tracks[track_index]
+        self._clip = vt.clips[clip_index]
+        self._old_info = self._clip.transition_out
+
+        # Calculate duration delta (overlap increases = total duration decreases)
+        old_overlap = self._old_info.duration_ms if self._old_info else 0
+        new_overlap = new_info.duration_ms if new_info else 0
+        self._delta = -(new_overlap - old_overlap)
+
+        # Ripple point: start of the NEXT clip
+        start_ms = 0
+        for i in range(self._index + 1):
+            start_ms += vt.clips[i].duration_ms
+            if vt.clips[i].transition_out and i < self._index:
+                start_ms -= vt.clips[i].transition_out.duration_ms
+        self._ripple_point = start_ms
+
+        self._sub_track = project.subtitle_track
+        self._overlay_track = project.image_overlay_track
+
+    def redo(self) -> None:
+        self._clip.transition_out = self._new_info
+        if self._ripple and self._delta != 0:
+            self._apply_shift(self._delta)
+
+    def undo(self) -> None:
+        self._clip.transition_out = self._old_info
+        if self._ripple and self._delta != 0:
+            self._apply_shift(-self._delta, threshold=self._ripple_point + self._delta)
+
+    def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
+        target = threshold if threshold is not None else self._ripple_point
+        # Subtitles
+        for seg in self._sub_track.segments:
+            if seg.start_ms >= target:
+                seg.start_ms += delta
+                seg.end_ms += delta
+        # Overlays
+        if self._overlay_track:
+            for ov in self._overlay_track.overlays:
+                if ov.start_ms >= target:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+        # Audio
+        if self._sub_track.audio_start_ms >= target:
+            self._sub_track.audio_start_ms += delta
+
+
+class EditClipVolumeCommand(QUndoCommand):
+    """Command to change the audio volume of a video clip."""
+
+    def __init__(self, clip: VideoClip, old_vol: float, new_vol: float):
+        super().__init__(tr("Edit clip volume"))
+        self._clip = clip
+        self._old_vol = old_vol
+        self._new_vol = new_vol
+
+    def redo(self) -> None:
+        self._clip.volume = self._new_vol
+
+    def undo(self) -> None:
+        self._clip.volume = self._old_vol
+
+
+# ============================================================================
+# Text Overlay Commands
+# ============================================================================
+
+class AddTextOverlayCommand(QUndoCommand):
+    """Add a new text overlay to the project."""
+
+    def __init__(self, project: ProjectState, overlay: TextOverlay):
+        super().__init__(tr("Add text overlay"))
+        self._project = project
+        self._overlay = overlay
+
+    def redo(self) -> None:
+        self._project.text_overlay_track.add_overlay(self._overlay)
+
+    def undo(self) -> None:
+        # Find and remove by identity
+        for i, ov in enumerate(self._project.text_overlay_track.overlays):
+            if ov is self._overlay:
+                self._project.text_overlay_track.overlays.pop(i)
+                break
+
+
+class DeleteTextOverlayCommand(QUndoCommand):
+    """Delete a text overlay from the project."""
+
+    def __init__(self, project: ProjectState, index: int, overlay: TextOverlay):
+        super().__init__(tr("Delete text overlay"))
+        self._project = project
+        self._index = index
+        self._overlay = overlay
+
+    def redo(self) -> None:
+        self._project.text_overlay_track.remove_overlay(self._index)
+
+    def undo(self) -> None:
+        self._project.text_overlay_track.overlays.insert(self._index, self._overlay)
+        self._project.text_overlay_track.overlays.sort(key=lambda o: o.start_ms)
+
+
+class MoveTextOverlayCommand(QUndoCommand):
+    """Move a text overlay in time (change start/end)."""
+
+    def __init__(self, overlay: TextOverlay, old_start: int, old_end: int, new_start: int, new_end: int):
+        super().__init__(tr("Move text overlay"))
+        self._overlay = overlay
+        self._old_start = old_start
+        self._old_end = old_end
+        self._new_start = new_start
+        self._new_end = new_end
+
+    def redo(self) -> None:
+        self._overlay.start_ms = self._new_start
+        self._overlay.end_ms = self._new_end
+
+    def undo(self) -> None:
+        self._overlay.start_ms = self._old_start
+        self._overlay.end_ms = self._old_end
+
+
+class UpdateTextOverlayCommand(QUndoCommand):
+    """Update text overlay content, style, or position."""
+
+    def __init__(self, overlay: TextOverlay, old_data: dict, new_data: dict):
+        super().__init__(tr("Edit text overlay"))
+        self._overlay = overlay
+        self._old_data = old_data
+        self._new_data = new_data
+
+    def redo(self) -> None:
+        self._apply_data(self._new_data)
+
+    def undo(self) -> None:
+        self._apply_data(self._old_data)
+
+    def _apply_data(self, data: dict) -> None:
+        """Apply the given data to the overlay."""
+        if "text" in data:
+            self._overlay.text = data["text"]
+        if "x_percent" in data:
+            self._overlay.x_percent = data["x_percent"]
+        if "y_percent" in data:
+            self._overlay.y_percent = data["y_percent"]
+        if "opacity" in data:
+            self._overlay.opacity = data["opacity"]
+        if "style" in data:
+            self._overlay.style = data["style"]

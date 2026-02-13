@@ -9,7 +9,9 @@ import threading
 from pathlib import Path
 
 from src.models.subtitle import SubtitleTrack
+from src.models.style import SubtitleStyle
 from src.models.video_clip import VideoClipTrack
+from src.models.text_overlay import TextOverlay
 from src.services.subtitle_exporter import export_srt
 from src.utils.config import find_ffmpeg
 
@@ -40,9 +42,10 @@ def _build_concat_filter(
 
     for i, clip in enumerate(clips):
         if source_index_map is not None:
-            idx = source_index_map.get(clip.source_path, 0)
+            idx = source_index_map.get(str(clip.source_path) if clip.source_path else None, 0)
         else:
             idx = 0
+        
         start_s = clip.source_in_ms / 1000.0
         end_s = clip.source_out_ms / 1000.0
         vl = f"cv{i}"
@@ -69,13 +72,58 @@ def _build_concat_filter(
                 a_filter += ",atempo=0.5"
                 speed /= 0.5
             a_filter += f",atempo={speed:.3f}"
+        
+        if hasattr(clip, "volume") and clip.volume != 1.0:
+            a_filter += f",volume={clip.volume:.3f}"
+            
         a_filter += f"[{al}]"
         parts.append(a_filter)
-        v_labels.append(f"[{vl}]")
-        a_labels.append(f"[{al}]")
+        v_labels.append(f"{vl}")
+        a_labels.append(f"{al}")
 
-    concat_in = "".join(v_labels[j] + a_labels[j] for j in range(len(clips)))
-    parts.append(f"{concat_in}concat=n={len(clips)}:v=1:a=1[concatv][concata]")
+    if len(clips) == 1:
+        parts.append(f"[{v_labels[0]}]copy[concatv]")
+        parts.append(f"[{a_labels[0]}]acopy[concata]")
+        return parts, "[concatv]", "[concata]"
+
+    # Chain clips with transitions or simple concat
+    curr_v = v_labels[0]
+    curr_a = a_labels[0]
+    curr_total_ms = clips[0].duration_ms
+    
+    for i in range(len(clips) - 1):
+        clip_a = clips[i]
+        clip_b = clips[i+1]
+        next_v = v_labels[i+1]
+        next_a = a_labels[i+1]
+        
+        out_v = f"vchain{i}"
+        out_a = f"achain{i}"
+        
+        trans = getattr(clip_a, "transition_out", None)
+        if trans and trans.duration_ms > 0:
+            dur_s = trans.duration_ms / 1000.0
+            # xfade: offset is when the transition STARTS
+            offset_s = (curr_total_ms - trans.duration_ms) / 1000.0
+            parts.append(f"[{curr_v}][{next_v}]xfade=transition={trans.type}:duration={dur_s:.3f}:offset={offset_s:.3f}[{out_v}]")
+            # acrossfade: d is duration
+            parts.append(f"[{curr_a}][{next_a}]acrossfade=d={dur_s:.3f}:c1=tri:c2=tri[{out_a}]")
+            curr_total_ms += clip_b.duration_ms - trans.duration_ms
+        else:
+            # Simple concat for this pair
+            # FFmpeg doesn't have a simple 2-input concat filter that works like this easily in a chain
+            # without creating a new concat. Let's use xfade with duration 0 or very small if possible.
+            # Actually, we can just use "fade" with duration=0.001 at the very end of clip A.
+            offset_s = curr_total_ms / 1000.0
+            parts.append(f"[{curr_v}][{next_v}]xfade=transition=fade:duration=0.001:offset={offset_s:.3f}[{out_v}]")
+            parts.append(f"[{curr_a}][{next_a}]acrossfade=d=0.01:c1=tri:c2=tri[{out_a}]")
+            curr_total_ms += clip_b.duration_ms
+            
+        curr_v = out_v
+        curr_a = out_a
+
+    parts.append(f"[{curr_v}]copy[concatv]")
+    parts.append(f"[{curr_a}]acopy[concata]")
     return parts, "[concatv]", "[concata]"
 
 
@@ -93,6 +141,7 @@ def export_video(
     overlay_path: Path | None = None,
     image_overlays: list | None = None,
     video_tracks: list[VideoClipTrack] | None = None,
+    text_overlays: list[TextOverlay] | None = None,
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -110,6 +159,7 @@ def export_video(
         overlay_path: Optional path to overlay PNG image.
         image_overlays: Optional list of ImageOverlay objects.
         video_tracks: Optional list of video tracks to composite.
+        text_overlays: Optional list of TextOverlay objects to render.
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -363,8 +413,61 @@ def export_video(
                     )
                     current = f"[{pip_label}]"
 
-            # Subtitles (last in chain) - USING ASS FILTER
-            fc_parts.append(f"{current}{subs_filter}[out]")
+            # Subtitles - USING ASS FILTER
+            fc_parts.append(f"{current}{subs_filter}[subbed]")
+            current = "[subbed]"
+
+            # Text overlays (after subtitles)
+            if text_overlays:
+                vid_w = scale_width if scale_width > 0 else 0
+                vid_h = scale_height if scale_height > 0 else 0
+                if vid_w <= 0 or vid_h <= 0:
+                    vid_w, vid_h = _get_video_resolution(ffmpeg, video_path)
+                    if vid_w <= 0 or vid_h <= 0:
+                        vid_w, vid_h = 1920, 1080
+
+                for i, to in enumerate(text_overlays):
+                    # Build drawtext filter
+                    text_escaped = to.text.replace("'", "'\\\\\\''")
+                    text_escaped = text_escaped.replace(":", "\\:")
+                    text_escaped = text_escaped.replace("%", "\\%")
+                    
+                    # Calculate pixel position from percentage
+                    x_px = int(vid_w * to.x_percent / 100)
+                    y_px = int(vid_h * to.y_percent / 100)
+                    
+                    # Get style properties
+                    style = to.style if to.style else SubtitleStyle()
+                    font_size = style.font_size
+                    font_color = style.font_color.lstrip('#')
+                    
+                    # Convert hex color to 0xRRGGBB format
+                    if len(font_color) == 6:
+                        font_color = f"0x{font_color}"
+                    else:
+                        font_color = "0xFFFFFF"
+                    
+                    # Build drawtext parameters
+                    start_s = to.start_ms / 1000.0
+                    end_s = to.end_ms / 1000.0
+                    
+                    drawtext_filter = (
+                        f"drawtext=text='{text_escaped}'"
+                        f":fontfile=/System/Library/Fonts/Supplemental/Arial.ttf"
+                        f":fontsize={font_size}"
+                        f":fontcolor={font_color}"
+                        f":x={x_px}"
+                        f":y={y_px}"
+                        f":alpha={to.opacity}"
+                        f":enable='between(t,{start_s:.3f},{end_s:.3f})'"
+                    )
+                    
+                    text_label = f"txt{i}"
+                    fc_parts.append(f"{current}{drawtext_filter}[{text_label}]")
+                    current = f"[{text_label}]"
+
+            # Final output
+            fc_parts.append(f"{current}copy[out]")
             filter_complex = ";".join(fc_parts)
 
             # ---- Build command ----

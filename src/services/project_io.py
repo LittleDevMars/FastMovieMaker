@@ -10,8 +10,9 @@ from src.models.project import ProjectState
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.video_clip import VideoClip, VideoClipTrack
+from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
-PROJECT_VERSION = 6
+PROJECT_VERSION = 7
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:
@@ -118,6 +119,11 @@ def save_project(project: ProjectState, path: Path) -> None:
         "image_overlays": image_overlays_data,
         "video_tracks": video_tracks_data,
         "video_clips": video_tracks_data[0] if video_tracks_data else None,
+        "text_overlays": {
+            "locked": project.text_overlay_track.locked,
+            "hidden": project.text_overlay_track.hidden,
+            "items": [ov.to_dict() for ov in project.text_overlay_track]
+        }
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -213,5 +219,15 @@ def load_project(path: Path) -> ProjectState:
         project.video_tracks = video_tracks
     else:
         project.video_tracks = [VideoClipTrack()]
+
+    # Text overlays (v7)
+    to_track = TextOverlayTrack()
+    to_data = data.get("text_overlays")
+    if isinstance(to_data, dict):
+        to_track.locked = to_data.get("locked", False)
+        to_track.hidden = to_data.get("hidden", False)
+        for ov_data in to_data.get("items", []):
+            to_track.add_overlay(TextOverlay.from_dict(ov_data))
+    project.text_overlay_track = to_track
 
     return project

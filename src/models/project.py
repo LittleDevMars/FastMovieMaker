@@ -9,6 +9,8 @@ from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleTrack
 from src.models.video_clip import VideoClipTrack
+from src.models.text_overlay import TextOverlayTrack
+from src.models.text_overlay import TextOverlayTrack
 
 
 @dataclass
@@ -23,6 +25,7 @@ class ProjectState:
     video_has_audio: bool = False  # Whether video file has audio track
     image_overlay_track: ImageOverlayTrack = field(default_factory=ImageOverlayTrack)
     video_tracks: list[VideoClipTrack] = field(default_factory=lambda: [VideoClipTrack()])
+    text_overlay_track: TextOverlayTrack = field(default_factory=TextOverlayTrack)
 
     @property
     def video_clip_track(self) -> VideoClipTrack:
@@ -85,3 +88,4 @@ class ProjectState:
         self.default_style = SubtitleStyle()
         self.image_overlay_track = ImageOverlayTrack()
         self.video_tracks = [VideoClipTrack()]
+        self.text_overlay_track = TextOverlayTrack()

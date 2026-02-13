@@ -47,6 +47,23 @@ class TestVideoClip:
         restored = VideoClip.from_dict(original.to_dict())
         assert restored.source_path == original.source_path
 
+    def test_to_dict_with_transition(self):
+        from src.models.video_clip import TransitionInfo
+        clip = VideoClip(100, 200)
+        clip.transition_out = TransitionInfo(type="wipeleft", duration_ms=1000)
+        d = clip.to_dict()
+        assert d["transition_out"] == {"type": "wipeleft", "duration_ms": 1000}
+
+    def test_from_dict_with_transition(self):
+        d = {
+            "source_in_ms": 500, "source_out_ms": 1500,
+            "transition_out": {"type": "dissolve", "duration_ms": 800}
+        }
+        clip = VideoClip.from_dict(d)
+        assert clip.transition_out is not None
+        assert clip.transition_out.type == "dissolve"
+        assert clip.transition_out.duration_ms == 800
+
 
 # ------------------------------------------------------------------ VideoClipTrack
 

@@ -10,6 +10,21 @@ _NO_SOURCE_FILTER = object()
 
 
 @dataclass
+class TransitionInfo:
+    """Properties of a transition effect between clips."""
+
+    type: str = "fade"  # xfade types: fade, wipeleft, wiperight, etc.
+    duration_ms: int = 500
+
+    def to_dict(self) -> dict:
+        return {"type": self.type, "duration_ms": self.duration_ms}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TransitionInfo:
+        return cls(type=data["type"], duration_ms=data["duration_ms"])
+
+
+@dataclass
 class VideoClip:
     """A contiguous segment of a source video.
 
@@ -22,6 +37,8 @@ class VideoClip:
     source_out_ms: int  # End position in source video
     source_path: str | None = None  # None = project primary video
     speed: float = 1.0  # 0.25 to 4.0
+    volume: float = 1.0  # 0.0 to 2.0
+    transition_out: TransitionInfo | None = None  # Effect transitioning into the NEXT clip
 
     @property
     def duration_ms(self) -> int:
@@ -38,6 +55,10 @@ class VideoClip:
             d["source_path"] = self.source_path
         if self.speed != 1.0:
             d["speed"] = self.speed
+        if self.volume != 1.0:
+            d["volume"] = self.volume
+        if self.transition_out is not None:
+            d["transition_out"] = self.transition_out.to_dict()
         return d
 
     @classmethod
@@ -47,6 +68,10 @@ class VideoClip:
             source_out_ms=data["source_out_ms"],
             source_path=data.get("source_path"),
             speed=data.get("speed", 1.0),
+            volume=data.get("volume", 1.0),
+            transition_out=TransitionInfo.from_dict(data["transition_out"])
+            if "transition_out" in data
+            else None,
         )
 
 
@@ -74,8 +99,13 @@ class VideoClipTrack:
 
     @property
     def output_duration_ms(self) -> int:
-        """Total output timeline length (sum of all clip durations)."""
-        return sum(c.duration_ms for c in self.clips)
+        """Total output timeline length (sum of durations minus transitions)."""
+        total = 0
+        for i, clip in enumerate(self.clips):
+            total += clip.duration_ms
+            if clip.transition_out and i < len(self.clips) - 1:
+                total -= clip.transition_out.duration_ms
+        return total
 
     # -------------------------------------------------------- Time mapping
 
@@ -130,29 +160,36 @@ class VideoClipTrack:
         return None
 
     def clip_at_timeline(self, timeline_ms: int) -> tuple[int, VideoClip] | None:
-        """Return (index, clip) at given timeline position, or None."""
+        """Find clip at given timeline position (ms)."""
         offset = 0
         for i, clip in enumerate(self.clips):
-            if timeline_ms < offset + clip.duration_ms:
-                return (i, clip)
-            offset += clip.duration_ms
+            end_ms = offset + clip.duration_ms
+            if offset <= timeline_ms < end_ms:
+                return i, clip
+            offset = end_ms
+            if clip.transition_out and i < len(self.clips) - 1:
+                offset -= clip.transition_out.duration_ms
         return None
 
     def clip_timeline_start(self, index: int) -> int:
-        """Return the timeline start position of the clip at index."""
-        return sum(self.clips[i].duration_ms for i in range(index))
+        """Return timeline start position (ms) for clip at index."""
+        offset = 0
+        for i in range(index):
+            clip = self.clips[i]
+            offset += clip.duration_ms
+            if clip.transition_out and i < len(self.clips) - 1:
+                offset -= clip.transition_out.duration_ms
+        return offset
 
     def clip_boundaries_ms(self) -> list[int]:
-        """Return list of timeline-ms values at clip boundaries.
-
-        Includes 0 and the total duration. Length = len(clips) + 1.
-        """
+        """Return list of start timestamps (ms) for each clip on the timeline."""
         boundaries = []
         offset = 0
-        for clip in self.clips:
+        for i, clip in enumerate(self.clips):
             boundaries.append(offset)
             offset += clip.duration_ms
-        boundaries.append(offset)
+            if clip.transition_out and i < len(self.clips) - 1:
+                offset -= clip.transition_out.duration_ms
         return boundaries
 
     def next_clip_source_in(self, source_ms: int) -> int | None:

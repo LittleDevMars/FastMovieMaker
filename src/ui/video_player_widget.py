@@ -21,6 +21,7 @@ from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.overlay_template import OverlayTemplate
+from src.models.text_overlay import TextOverlayTrack
 
 
 class VideoPlayerWidget(QGraphicsView):
@@ -73,6 +74,11 @@ class VideoPlayerWidget(QGraphicsView):
         self._pip_items: dict[int, QGraphicsPixmapItem] = {}
         self._pip_active_indices: set[int] = set()
 
+        # Text overlays (zValue=8, between PIP=7 and subtitle=10)
+        self._text_overlay_track: TextOverlayTrack | None = None
+        self._text_overlay_items: dict[int, QGraphicsTextItem] = {}
+        self._text_overlay_active_indices: set[int] = set()
+
         # PIP selection and dragging
         self._selected_pip_index: int = -1
         self._pip_drag_active = False
@@ -123,6 +129,7 @@ class VideoPlayerWidget(QGraphicsView):
     def _on_position_changed(self, position_ms: int) -> None:
         self._update_subtitle(position_ms)
         self._update_image_overlays(position_ms)
+        self._update_text_overlays(position_ms)
 
     def _update_subtitle(self, position_ms: int) -> None:
         if not self._subtitle_track or self._subtitle_track.hidden:
@@ -361,6 +368,74 @@ class VideoPlayerWidget(QGraphicsView):
         # Update selection border if selected PIP is visible
         if self._selected_pip_index >= 0:
             self._update_pip_selection_border()
+
+    # -------------------------------------------------------- Text Overlays
+
+    def set_text_overlay_track(self, track: TextOverlayTrack | None) -> None:
+        """Set the text overlay track for display."""
+        self._text_overlay_track = track
+        # Clear existing text overlay items
+        for item in self._text_overlay_items.values():
+            self._scene.removeItem(item)
+        self._text_overlay_items.clear()
+        self._text_overlay_active_indices.clear()
+        # Immediately render overlays at current position
+        if self._player:
+            self._update_text_overlays(self._player.position())
+
+    def _update_text_overlays(self, position_ms: int) -> None:
+        """Show/hide text overlays based on playhead position."""
+        if not self._text_overlay_track:
+            # Hide all
+            for item in self._text_overlay_items.values():
+                item.setVisible(False)
+            self._text_overlay_active_indices.clear()
+            return
+
+        active = self._text_overlay_track.overlays_at(position_ms)
+        active_indices = set()
+
+        for overlay in active:
+            idx = self._text_overlay_track.overlays.index(overlay)
+            active_indices.add(idx)
+
+            # Create text item if not exists
+            if idx not in self._text_overlay_items:
+                text_item = QGraphicsTextItem()
+                text_item.setZValue(8)  # Above PIP overlays (7), below subtitle (10)
+                self._scene.addItem(text_item)
+                self._text_overlay_items[idx] = text_item
+
+            text_item = self._text_overlay_items[idx]
+
+            if idx not in self._text_overlay_active_indices:
+                # Newly activated: apply text and style
+                text_item.setPlainText(overlay.text)
+
+                # Apply style from SubtitleStyle
+                style = overlay.style
+                font = QFont(style.font_name, style.font_size)
+                font.setBold(style.bold)
+                text_item.setFont(font)
+                text_item.setDefaultTextColor(QColor(style.primary_color))
+                text_item.setOpacity(overlay.opacity)
+
+                # Position based on percentage
+                view_w = self.viewport().width()
+                view_h = self.viewport().height()
+                x_px = view_w * overlay.x_percent / 100
+                y_px = view_h * overlay.y_percent / 100
+                text_item.setPos(x_px, y_px)
+                text_item.setVisible(True)
+
+        # Hide deactivated overlays
+        for idx in self._text_overlay_active_indices - active_indices:
+            if idx in self._text_overlay_items:
+                self._text_overlay_items[idx].setVisible(False)
+
+        self._text_overlay_active_indices = active_indices
+
+    # -------------------------------------------------------- Overlay Utilities
 
     def _fit_overlay(self) -> None:
         """Resize the overlay to match the current view size."""

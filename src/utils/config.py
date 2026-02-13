@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 APP_NAME = "FastMovieMaker"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 ORG_NAME = "FastMovieMaker"
 
 # FFmpeg

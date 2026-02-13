@@ -32,6 +32,7 @@ class ExportWorker(QObject):
         overlay_path: Path | None = None,
         image_overlays: list | None = None,
         video_tracks: list | None = None,
+        text_overlays: list | None = None,
         codec: str = "h264",
         preset: str = "medium",
         crf: int = 23,
@@ -46,6 +47,7 @@ class ExportWorker(QObject):
         self._overlay_path = overlay_path
         self._image_overlays = image_overlays
         self._video_tracks = video_tracks
+        self._text_overlays = text_overlays
         self._codec = codec
         self._preset = preset
         self._crf = crf
@@ -63,6 +65,7 @@ class ExportWorker(QObject):
                 overlay_path=self._overlay_path,
                 image_overlays=self._image_overlays,
                 video_tracks=self._video_tracks,
+                text_overlays=self._text_overlays,
                 codec=self._codec,
                 preset=self._preset,
                 crf=self._crf,

@@ -92,6 +92,8 @@ class TimelineWidget(QWidget):
     clip_deleted = Signal(int, int)             # (track_index, clip_index)
     clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
     clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
+    transition_requested = Signal(int, int)     # (track_index, clip_index)
+    clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
 
     # 색상 상수
     # Modern Dark Theme Colors
@@ -149,12 +151,21 @@ class TimelineWidget(QWidget):
     _CLIP_BORDER = QColor(0, 200, 200)
     _CLIP_SPLIT_LINE = QColor(255, 255, 255, 180) # Solid, visible split line
     
+    # Transition Markers (Yellow/Gold)
+    _TRANSITION_MARKER_COLOR = QColor(255, 215, 0, 180) # Gold semi-transparent
+    
     # Selected Clip Colors
     _CLIP_SELECTED_BORDER = QColor(100, 220, 255)     # Cyan
     _CLIP_SELECTED_COLOR = QColor(0, 100, 140)        # Dark Cyan Body
 
-    # Thumbnail Layout
-    _THUMBNAIL_INTERVAL_PX = 100  # Distance between thumbnails
+    # Thumbnail Layout - LOD System
+    # (min_px_per_ms, thumbnail_interval_px, min_clip_width_px)
+    _LOD_LEVELS = [
+        (0.5,   200,  50),   # LOD 0: Very zoomed out - wide spacing
+        (0.1,   100,  30),   # LOD 1: Normal - default spacing
+        (0.05,  50,   20),   # LOD 2: Zoomed in - narrow spacing
+        (0.0,   25,   10),   # LOD 3: Very zoomed in - very narrow spacing
+    ]
 
     # Multi-source clip color palette (Gradient Tops/Bots)
     # List of (Top, Bot, Border)
@@ -181,6 +192,7 @@ class TimelineWidget(QWidget):
         """)
 
         self._project = None
+        self._primary_video_path: str | None = None  # Path to primary video for thumbnails
 
         self._track: SubtitleTrack | None = None
         self._duration_ms: int = 0   # 비디오 총 길이(ms)
@@ -244,6 +256,20 @@ class TimelineWidget(QWidget):
         # 드롭 표시
         self._drop_indicator_x: float = -1
 
+    def _get_thumbnail_interval(self) -> int:
+        """Get thumbnail interval based on current zoom level (LOD)."""
+        for min_zoom, interval, _ in self._LOD_LEVELS:
+            if self._px_per_ms >= min_zoom:
+                return interval
+        return self._LOD_LEVELS[-1][1]  # Most zoomed in
+
+    def _should_draw_thumbnails(self, clip_width_px: float) -> bool:
+        """Check if clip is wide enough to draw thumbnails at current zoom."""
+        for min_zoom, _, min_width in self._LOD_LEVELS:
+            if self._px_per_ms >= min_zoom:
+                return clip_width_px >= min_width
+        return clip_width_px >= self._LOD_LEVELS[-1][2]
+
     # -------------------------------------------------------- Y Layout
     def _video_track_y(self, track_index: int) -> int:
         return _CLIP_Y + (track_index * _CLIP_H)
@@ -273,6 +299,11 @@ class TimelineWidget(QWidget):
         self._duration_ms = project.duration_ms
         self._has_video = project.has_video
         self._invalidate_static_cache()
+        self.update()
+
+    def set_primary_video_path(self, path: str | None) -> None:
+        """Set the primary video path for thumbnail generation."""
+        self._primary_video_path = path
         self.update()
 
     def set_clip_track(self, track: VideoClipTrack | None) -> None:
@@ -948,12 +979,13 @@ class TimelineWidget(QWidget):
             painter.drawRoundedRect(rect, 6, 6)
             
             # --- Filmstrip Thumbnails ---
-            if clip.source_path:
+            # Draw thumbnails for all clips (primary and external sources)
+            if self._should_draw_thumbnails(rect.width()):
                 vis_x1 = max(0, int(x1))
                 vis_x2 = min(w, int(x2))
                 
                 if vis_x2 > vis_x1:
-                    interval = self._THUMBNAIL_INTERVAL_PX
+                    interval = self._get_thumbnail_interval()
                     start_grid = (vis_x1 // interval) * interval
                     
                     painter.save()
@@ -964,14 +996,34 @@ class TimelineWidget(QWidget):
                         offset_ms = (tx - x1) / self._px_per_ms
                         source_ms = int(clip.source_in_ms + offset_ms * clip.speed)
                         
-                        thumb = self._thumbnail_service.request_thumbnail(
-                            clip.source_path, source_ms, h
-                        )
-                        if thumb:
-                            target_rect = QRectF(tx, y, interval, h)
-                            painter.drawImage(target_rect.toRect(), thumb)
+                        # Use clip's source_path if available, otherwise use primary video path
+                        video_path = clip.source_path if clip.source_path else self._primary_video_path
+                        if video_path:
+                            thumb = self._thumbnail_service.request_thumbnail(
+                                video_path, source_ms, h
+                            )
+                            if thumb:
+                                target_rect = QRectF(tx, y, interval, h)
+                                painter.drawImage(target_rect.toRect(), thumb)
                     
                     painter.restore()
+            
+            # --- Transition Markers ---
+            # If a transition is set, draw a visual indicator at the end of the clip.
+            if hasattr(clip, "transition_out") and clip.transition_out:
+                dur_px = self._px_per_ms * clip.transition_out.duration_ms
+                marker_w = min(rect.width() / 2, dur_px)
+                marker_rect = QRectF(x2 - marker_w, y, marker_w, h)
+                
+                painter.setBrush(QBrush(self._TRANSITION_MARKER_COLOR))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRect(marker_rect)
+                
+                if marker_w > 15:
+                    painter.setPen(Qt.GlobalColor.black)
+                    painter.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+                    indicator = clip.transition_out.type[0].upper() if clip.transition_out.type else "T"
+                    painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, indicator)
 
             # Label
             if clip.source_path:
@@ -1027,7 +1079,7 @@ class TimelineWidget(QWidget):
                 self._selected_clip_index = seg_idx
                 self._selected_index = -1
                 self._selected_overlay_index = -1
-                self._start_clip_drag(_DragMode.CLIP_TRIM_RIGHT, v_idx, seg_idx, x)
+                self._start_drag(_DragMode.CLIP_TRIM_RIGHT, v_idx, seg_idx, x)
                 self.clip_selected.emit(v_idx, seg_idx)
             self.update()
             return
@@ -1210,11 +1262,21 @@ class TimelineWidget(QWidget):
             delete_act = None
             if vt and len(vt.clips) > 1:
                 delete_act = menu.addAction(tr("Delete Clip"))
+            
+            if vt and seg_idx < len(vt.clips) - 1:
+                trans_act = menu.addAction(tr("Add Transition..."))
+            
+            volume_act = menu.addAction(tr("Adjust Volume..."))
+                
             action = menu.exec(event.globalPos())
             if action == split_act:
                 self.clip_split_requested.emit(self._playhead_ms)
             elif delete_act and action == delete_act:
-                self.clip_deleted.emit(seg_idx) # Optional: track index emit?
+                self.clip_deleted.emit(v_idx, seg_idx)
+            elif trans_act and action == trans_act:
+                self.transition_requested.emit(v_idx, seg_idx)
+            elif action == volume_act:
+                self.clip_volume_requested.emit(v_idx, seg_idx)
             return
 
         if hit.startswith("img_"):

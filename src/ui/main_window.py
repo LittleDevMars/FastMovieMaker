@@ -57,7 +57,9 @@ from src.ui.commands import (
     SplitClipCommand,
     SplitCommand,
     TrimClipCommand,
+    EditTransitionCommand,
 )
+from src.ui.dialogs.transition_dialog import TransitionDialog
 from src.ui.media_library_panel import MediaLibraryPanel
 from src.ui.templates_panel import TemplatesPanel
 from src.ui.playback_controls import PlaybackControls
@@ -745,6 +747,8 @@ class MainWindow(QMainWindow):
         self._timeline.clip_deleted.connect(self._on_delete_clip)
         self._timeline.clip_trimmed.connect(self._on_clip_trimmed)
         self._timeline.clip_speed_requested.connect(self._on_edit_clip_speed)
+        self._timeline.transition_requested.connect(self._on_transition_requested)
+        self._timeline.clip_volume_requested.connect(self._on_clip_volume_requested)
 
         # PIP drag on video player
         self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
@@ -788,6 +792,10 @@ class MainWindow(QMainWindow):
         io_track = self._project.image_overlay_track
         self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
         self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
+
+        # Sync text overlay track
+        text_track = self._project.text_overlay_track
+        self._video_widget.set_text_overlay_track(text_track if len(text_track) > 0 else None)
 
         # Sync video clip tracks
         v_idx = getattr(self, "_current_track_index", 0)
@@ -1405,6 +1413,9 @@ class MainWindow(QMainWindow):
         self._current_playback_source = str(playback_path)
         self._current_clip_index = 0
         self._player.setSource(QUrl.fromLocalFile(str(playback_path)))
+        
+        # Set primary video path for timeline thumbnails
+        self._timeline.set_primary_video_path(str(source_path))
         self._player.play()
 
         self._refresh_all_widgets()
@@ -1930,9 +1941,6 @@ class MainWindow(QMainWindow):
         if not self._project.has_video:
             QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
-        if not self._project.has_subtitles:
-            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to burn in."))
-            return
         if not find_ffmpeg():
             QMessageBox.critical(self, tr("FFmpeg Missing"), tr("FFmpeg is required for video export."))
             return
@@ -1945,6 +1953,8 @@ class MainWindow(QMainWindow):
         img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
         # Pass video tracks for multi-track export
         video_tracks = list(self._project.video_tracks)
+        # Pass text overlays
+        text_overlays = list(self._project.text_overlay_track.overlays) if len(self._project.text_overlay_track) > 0 else None
 
         dialog = ExportDialog(
             self._project.video_path,
@@ -1954,15 +1964,13 @@ class MainWindow(QMainWindow):
             overlay_path=overlay_path,
             image_overlays=img_overlays,
             video_tracks=video_tracks,
+            text_overlays=text_overlays,
         )
         dialog.exec()
 
     def _on_batch_export(self) -> None:
         if not self._project.has_video:
             QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
-            return
-        if not self._project.has_subtitles:
-            QMessageBox.warning(self, tr("No Subtitles"), tr("There are no subtitles to burn in."))
             return
         if not find_ffmpeg():
             QMessageBox.critical(self, tr("FFmpeg Missing"), tr("FFmpeg is required for video export."))
@@ -1973,6 +1981,8 @@ class MainWindow(QMainWindow):
             overlay_path = Path(self._overlay_template.image_path)
         io_track = self._project.image_overlay_track
         img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
+        # Pass text overlays
+        text_overlays = list(self._project.text_overlay_track.overlays) if len(self._project.text_overlay_track) > 0 else None
 
         from src.ui.dialogs.batch_export_dialog import BatchExportDialog
         dialog = BatchExportDialog(
@@ -1982,6 +1992,7 @@ class MainWindow(QMainWindow):
             video_has_audio=self._project.video_has_audio,
             overlay_path=overlay_path,
             image_overlays=img_overlays,
+            text_overlays=text_overlays,
         )
         dialog.exec()
 
@@ -2464,22 +2475,22 @@ class MainWindow(QMainWindow):
 
         # Move playhead to safe position (start of first remaining clip or 0)
         safe_pos = 0
-        if len(clip_track.clips) > 0:
+        if len(vt.clips) > 0:
             # If deleted clip was before current position, stay at adjusted position
             # Otherwise move to start of next clip or beginning
             if clip_index == 0:
                 safe_pos = 0
-            elif clip_index < len(clip_track.clips):
-                safe_pos = sum(c.duration_ms for c in clip_track.clips[:clip_index])
+            elif clip_index < len(vt.clips):
+                safe_pos = sum(c.duration_ms for c in vt.clips[:clip_index])
             else:
-                safe_pos = sum(c.duration_ms for c in clip_track.clips[:clip_index-1])
+                safe_pos = sum(c.duration_ms for c in vt.clips[:clip_index-1])
 
         self._timeline.set_playhead(safe_pos)
         self._controls.set_output_position(safe_pos)
 
         # Seek to first remaining clip
-        if len(clip_track.clips) > 0:
-            first_clip = clip_track.clips[0]
+        if len(vt.clips) > 0:
+            first_clip = vt.clips[0]
             first_source = first_clip.source_path or str(self._project.video_path)
             if first_source != self._current_playback_source:
                 self._switch_player_source(first_source, first_clip.source_in_ms, auto_play=False)
@@ -2890,3 +2901,53 @@ class MainWindow(QMainWindow):
             self._frame_cache_thread.wait(5000)
         self._frame_cache_thread = None
         self._frame_cache_worker = None
+
+    def _on_transition_requested(self, track_idx: int, clip_idx: int) -> None:
+        """Show transition dialog and apply effect."""
+        if not self._project:
+            return
+        vt = self._project.video_tracks[track_idx]
+        if clip_idx < 0 or clip_idx >= len(vt.clips):
+            return
+        clip = vt.clips[clip_idx]
+
+        from src.models.video_clip import TransitionInfo
+
+        initial_type = clip.transition_out.type if clip.transition_out else "fade"
+        initial_dur = clip.transition_out.duration_ms if clip.transition_out else 500
+
+        dialog = TransitionDialog(self, initial_type, initial_dur)
+        if dialog.exec():
+            trans_type, trans_dur = dialog.get_data()
+            new_info = TransitionInfo(type=trans_type, duration_ms=trans_dur)
+
+            # Ripple mode from toolbar button
+            ripple = self._ripple_toggle_btn.isChecked()
+
+            command = EditTransitionCommand(self._project, track_idx, clip_idx, new_info, ripple=ripple)
+            self._undo_stack.push(command)
+
+            # Update project duration (if rippled)
+            self._project.duration_ms = self._project.video_clip_track.output_duration_ms
+            self._timeline.set_duration(self._project.duration_ms)
+            self._refresh_all_widgets()
+
+    def _on_clip_volume_requested(self, track_idx: int, clip_idx: int) -> None:
+        """Show volume adjustment dialog for a video clip."""
+        if not self._project:
+            return
+        from src.ui.dialogs.clip_volume_dialog import ClipVolumeDialog
+        from src.ui.commands import EditClipVolumeCommand
+        
+        vt = self._project.video_tracks[track_idx]
+        clip = vt.clips[clip_idx]
+        
+        dialog = ClipVolumeDialog(self, clip.volume)
+        if dialog.exec():
+            new_vol = dialog.get_volume()
+            if new_vol != clip.volume:
+                cmd = EditClipVolumeCommand(clip, clip.volume, new_vol)
+                self._undo_stack.push(cmd)
+                self._on_document_edited()
+                # 썸네일이나 타임라인 레이아웃에 영향은 없으므로 refresh만 호출
+                self._refresh_all_widgets()

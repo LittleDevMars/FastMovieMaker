@@ -40,6 +40,7 @@ class ExportDialog(QDialog):
         overlay_path: Path | None = None,
         image_overlays: list | None = None,
         video_tracks: list | None = None,
+        text_overlays: list | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle(tr("Export Video"))
@@ -52,6 +53,7 @@ class ExportDialog(QDialog):
         self._overlay_path = overlay_path
         self._image_overlays = image_overlays
         self._video_tracks = video_tracks
+        self._text_overlays = text_overlays
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
         self._temp_audio_path: Path | None = None
@@ -275,6 +277,7 @@ class ExportDialog(QDialog):
             overlay_path=self._overlay_path,
             image_overlays=self._image_overlays,
             video_tracks=self._video_tracks,
+            text_overlays=self._text_overlays,
             codec=codec,
             preset=preset,
             crf=crf,
