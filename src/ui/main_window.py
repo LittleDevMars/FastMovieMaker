@@ -796,6 +796,7 @@ class MainWindow(QMainWindow):
         # Sync text overlay track
         text_track = self._project.text_overlay_track
         self._video_widget.set_text_overlay_track(text_track if len(text_track) > 0 else None)
+        self._timeline.set_text_overlay_track(text_track if len(text_track) > 0 else None)
 
         # Sync video clip tracks
         v_idx = getattr(self, "_current_track_index", 0)

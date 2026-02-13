@@ -93,6 +93,13 @@ class TimelineWidget(QWidget):
     clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
     clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
     transition_requested = Signal(int, int)     # (track_index, clip_index)
+    
+    # Text overlay signals
+    text_overlay_selected = Signal(int)  # overlay index
+    text_overlay_edit_requested = Signal(int)  # overlay index
+    text_overlay_deleted = Signal(int)  # overlay index
+    text_overlay_moved = Signal(int, int, int)  # (index, old_start_ms, new_start_ms)
+
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
 
     # 색상 상수
@@ -143,6 +150,16 @@ class TimelineWidget(QWidget):
     # Image Overlay Layout
     _IMG_ROW_H = 40
     _IMG_ROW_GAP = 4
+
+    # Text Overlay Colors (Orange)
+    _TEXT_OVERLAY_COLOR = QColor(255, 180, 80, 180)
+    _TEXT_OVERLAY_BORDER = QColor(255, 200, 120)
+    _TEXT_OVERLAY_SELECTED_COLOR = QColor(255, 140, 40)
+    _TEXT_OVERLAY_SELECTED_BORDER = QColor(255, 220, 160)
+
+    # Text Overlay Layout
+    _TEXT_ROW_H = 28
+    _TEXT_ROW_GAP = 4
 
     # Video Clips (Teal/Varied Gradient)
     # Default clip colors
@@ -219,6 +236,10 @@ class TimelineWidget(QWidget):
         # 이미지 오버레이 트랙
         self._image_overlay_track: ImageOverlayTrack | None = None
         self._selected_overlay_index: int = -1
+
+        # 텍스트 오버레이 트랙
+        self._text_overlay_track = None  # TextOverlayTrack | None
+        self._selected_text_overlay_index: int = -1
 
         # 비디오 클립 트랙
         self._clip_track: VideoClipTrack | None = None
@@ -396,6 +417,19 @@ class TimelineWidget(QWidget):
         self._invalidate_static_cache()
         self.update()
 
+    def set_text_overlay_track(self, track) -> None:
+        """Set the text overlay track for timeline display."""
+        self._text_overlay_track = track
+        self._selected_text_overlay_index = -1
+        self._invalidate_static_cache()
+        self.update()
+
+    def select_text_overlay(self, index: int) -> None:
+        """Select a text overlay by index."""
+        self._selected_text_overlay_index = index
+        self._invalidate_static_cache()
+        self.update()
+
     def select_clip(self, track_index: int, clip_index: int) -> None:
         self._selected_clip_track_index = track_index
         self._selected_clip_index = clip_index
@@ -548,6 +582,10 @@ class TimelineWidget(QWidget):
             
             if self._image_overlay_track and not self._image_overlay_track.hidden:
                 self._draw_image_overlays(pp, h)
+            
+            if self._text_overlay_track:
+                self._draw_text_overlays(pp, h)
+            
             pp.end()
 
             self._static_cache = pixmap
@@ -904,6 +942,77 @@ class TimelineWidget(QWidget):
                         ov.file_name, Qt.TextElideMode.ElideRight, int(text_rect.width())
                     ),
                 )
+
+    def _text_overlay_base_y(self) -> int:
+        """텍스트 오버레이 트랙의 시작 Y 좌표 반환."""
+        img_height = self._img_overlay_total_height()
+        return self._img_overlay_base_y() + img_height + 10
+
+    def _compute_text_overlay_rows(self) -> list[int]:
+        """텍스트 오버레이를 겹치지 않게 행 배치."""
+        if not self._text_overlay_track:
+            return []
+        
+        rows = []
+        row_ends = []  # 각 행의 마지막 종료 시간
+        
+        for overlay in self._text_overlay_track.overlays:
+            placed = False
+            for r_idx, end_ms in enumerate(row_ends):
+                if overlay.start_ms >= end_ms:
+                    rows.append(r_idx)
+                    row_ends[r_idx] = overlay.end_ms
+                    placed = True
+                    break
+            if not placed:
+                rows.append(len(row_ends))
+                row_ends.append(overlay.end_ms)
+        
+        return rows
+
+    def _draw_text_overlays(self, painter: QPainter, h: int) -> None:
+        """텍스트 오버레이 세그먼트를 타임라인에 그림."""
+        if not self._text_overlay_track or len(self._text_overlay_track) == 0:
+            return
+
+        text_base_y = self._text_overlay_base_y()
+        text_h = self._TEXT_ROW_H
+        text_gap = self._TEXT_ROW_GAP
+
+        rows = self._compute_text_overlay_rows()
+
+        for i, overlay in enumerate(self._text_overlay_track.overlays):
+            x1 = self._ms_to_x(overlay.start_ms)
+            x2 = self._ms_to_x(overlay.end_ms)
+            if x2 < 0 or x1 > self.width():
+                continue
+
+            row = rows[i]
+            y = text_base_y + row * (text_h + text_gap)
+            rect = QRectF(x1, y, max(x2 - x1, 2), text_h)
+
+            if i == self._selected_text_overlay_index:
+                painter.setPen(QPen(self._TEXT_OVERLAY_SELECTED_BORDER, 2))
+                painter.setBrush(QBrush(self._TEXT_OVERLAY_SELECTED_COLOR))
+            else:
+                painter.setPen(QPen(self._TEXT_OVERLAY_BORDER, 1))
+                painter.setBrush(QBrush(self._TEXT_OVERLAY_COLOR))
+            painter.drawRoundedRect(rect, 3, 3)
+
+            # 텍스트 표시
+            if rect.width() > 30:
+                painter.setPen(QColor("white"))
+                painter.setFont(QFont("Arial", 8))
+                text_rect = rect.adjusted(4, 2, -4, -2)
+                display_text = overlay.text[:20] + "..." if len(overlay.text) > 20 else overlay.text
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    painter.fontMetrics().elidedText(
+                        display_text, Qt.TextElideMode.ElideRight, int(text_rect.width())
+                    ),
+                )
+
 
     def _draw_playhead(self, painter: QPainter, h: int) -> None:
         """현재 재생 위치 세로선 + 상단 노브 (Pentagon)."""
@@ -1918,6 +2027,21 @@ class TimelineWidget(QWidget):
                     if abs(x - x1) <= _EDGE_PX: return i, "img_left_edge", 0
                     if abs(x - x2) <= _EDGE_PX: return i, "img_right_edge", 0
                     if x1 <= x <= x2: return i, "img_body", 0
+
+        # Text Overlays
+        if self._text_overlay_track:
+            text_base_y = self._text_overlay_base_y()
+            rows = self._compute_text_overlay_rows()
+            for i, overlay in enumerate(self._text_overlay_track.overlays):
+                row = rows[i]
+                ov_y = text_base_y + row * (self._TEXT_ROW_H + self._TEXT_ROW_GAP)
+                if not (ov_y <= y <= ov_y + self._TEXT_ROW_H): continue
+                x1 = self._ms_to_x(overlay.start_ms)
+                x2 = self._ms_to_x(overlay.end_ms)
+                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
+                if abs(x - x1) <= _EDGE_PX: return i, "text_left_edge", 0
+                if abs(x - x2) <= _EDGE_PX: return i, "text_right_edge", 0
+                if x1 <= x <= x2: return i, "text_body", 0
 
         return -1, "", -1
 

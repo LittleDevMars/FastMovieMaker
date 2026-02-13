@@ -115,7 +115,11 @@ class WhisperDialog(QDialog):
     def _on_cancel(self) -> None:
         if self._worker:
             self._worker.cancel()
-        self._cleanup_thread()
+        # Don't call _cleanup_thread here - let it be called by finished/error signals
+        # Just wait for thread to finish gracefully
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(5000)  # Wait up to 5 seconds
         self.reject()
 
     def _on_status(self, message: str) -> None:

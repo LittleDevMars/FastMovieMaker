@@ -230,13 +230,15 @@ class VideoPlayerWidget(QGraphicsView):
         # Horizontal positioning
         position = style.position
         if position.endswith("center"):
-            x = safe_rect.center().x() - text_width / 2
+            # Center the text horizontally within safe area
+            x = safe_rect.left() + (safe_rect.width() - text_width) / 2
         elif position.endswith("left"):
             x = safe_rect.left() + 20
         elif position.endswith("right"):
             x = safe_rect.right() - text_width - 20
         else:
-            x = safe_rect.center().x() - text_width / 2
+            # Default to center
+            x = safe_rect.left() + (safe_rect.width() - text_width) / 2
 
         # Vertical positioning
         if position.startswith("top"):
