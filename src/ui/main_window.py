@@ -501,14 +501,18 @@ class MainWindow(QMainWindow):
                         clip_start = clip_track.clip_timeline_start(idx)
                         local_offset = timeline_ms - clip_start
                         source_ms = clip.source_in_ms + local_offset
-                        target_source = clip.source_path or str(self._project.video_path)
+                        target_source_raw = clip.source_path or str(self._project.video_path)
+                        target_source = self._resolve_playback_path(target_source_raw)
 
                         # If player source doesn't match, switch first
                         if target_source != self._current_playback_source:
                             self._switch_player_source(target_source, source_ms, auto_play=True)
                             return
-                        # If position is off by more than 100ms, seek first
-                        elif abs(self._player.position() - source_ms) > 100:
+                        # If position is off or player is at end, seek first
+                        # Reduced threshold to 10ms to prevent "jump back" visual glitches
+                        # Also force seek if at EndOfMedia to reset state
+                        at_end = self._player.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia
+                        if at_end or abs(self._player.position() - source_ms) > 10:
                             self._player.setPosition(source_ms)
 
                 # Video exists - play video and sync TTS
@@ -1978,7 +1982,8 @@ class MainWindow(QMainWindow):
                     self._current_clip_index = idx
                     local_offset = position_ms - clip_track.clip_timeline_start(idx)
                     source_ms = clip.source_in_ms + local_offset
-                    target_source = clip.source_path or str(self._project.video_path)
+                    target_source_raw = clip.source_path or str(self._project.video_path)
+                    target_source = self._resolve_playback_path(target_source_raw)
 
                     if target_source != self._current_playback_source:
                         self._switch_player_source(target_source, source_ms,
@@ -2023,7 +2028,8 @@ class MainWindow(QMainWindow):
                 self._current_clip_index = idx
                 local_offset = position_ms - clip_track.clip_timeline_start(idx)
                 source_ms = clip.source_in_ms + local_offset
-                target_source = clip.source_path or str(self._project.video_path)
+                target_source_raw = clip.source_path or str(self._project.video_path)
+                target_source = self._resolve_playback_path(target_source_raw)
                 if target_source != self._current_playback_source:
                     self._switch_player_source(target_source, source_ms,
                                                auto_play=self._play_intent)
@@ -2144,9 +2150,42 @@ class MainWindow(QMainWindow):
             self._timeline.set_playhead(position_ms)
             self._video_widget._update_subtitle(position_ms)
 
+    def _resolve_playback_path(self, source_path: str | None) -> str:
+        """Resolve playback path, using temp converted file if available.
+
+        If source_path is None or matches project video path, returns
+        temp playback path (e.g. converted MP4) if it exists.
+        """
+        # 1. Handle main video (source_path is None or matches project path)
+        is_main_video = False
+        if source_path is None:
+            is_main_video = True
+        elif self._project.video_path:
+            # Check string equality first, then resolve if needed
+            if source_path == str(self._project.video_path):
+                is_main_video = True
+            elif Path(source_path).resolve() == self._project.video_path.resolve():
+                is_main_video = True
+
+        if is_main_video:
+            if self._temp_video_path and self._temp_video_path.is_file():
+                return str(self._temp_video_path)
+            return str(self._project.video_path) if self._project.video_path else ""
+
+        # 2. Return original path for external videos (conversion not yet supported for external items)
+        return source_path or ""
+
     def _switch_player_source(self, source_path: str, seek_ms: int,
                               auto_play: bool = False) -> None:
         """Switch QMediaPlayer to a different source video file."""
+        # Check if we need to resolve the path (though caller should have resolved it,
+        # it's safe to check/resolve again or trust caller. Better trust caller to avoid redundant checks,
+        # but let's ensure we use the resolved path).
+        # Actually, let's assume raw path is passed and we resolve it here?
+        # No, logic in _on_timeline_seek calculates offsets based on clip.
+        # Let's rely on caller to pass the correct playback path?
+        # Wait, if we pass resolved path here, it works.
+
         # Show cached frame immediately while QMediaPlayer loads
         if self._frame_cache_service:
             from PySide6.QtGui import QPixmap
@@ -2295,6 +2334,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(tr("Cannot split: too close to clip edge (need 100ms margin)"), 3000)
             return
 
+        # Pause playback during structural change to avoid player sync issues
+        was_playing = (self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
+        if was_playing:
+            self._player.pause()
+
         from src.models.video_clip import VideoClip
         original = clip
         first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path)
@@ -2311,6 +2355,10 @@ class MainWindow(QMainWindow):
         
         # Select the newly created clip (the second part, at clip_idx + 1)
         self._timeline.select_clip(clip_idx + 1)
+        
+        # Resume playback if it was playing
+        if was_playing:
+            self._player.play()
         
         self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms", 3000)
 

@@ -28,7 +28,7 @@ from PySide6.QtGui import (
 )
 
 import numpy as np
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QMenu, QWidget, QApplication
 
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.subtitle import SubtitleTrack
@@ -108,6 +108,10 @@ class TimelineWidget(QWidget):
     # Selection (Glowy Cyan/Blue)
     _SELECTED_BORDER = QColor(100, 220, 255)
     _SELECTED_GLOW = QColor(100, 220, 255, 60)
+
+    # Snap
+    _SNAP_THRESHOLD_PX = 10
+    _SNAP_GUIDE_COLOR = QColor(255, 255, 0, 200)
 
     # Playhead (Red accent)
     _PLAYHEAD_COLOR = QColor(255, 60, 80)
@@ -212,6 +216,10 @@ class TimelineWidget(QWidget):
 
         # 프레임 스냅 FPS (0 = 비활성화)
         self._snap_fps: int = 0
+        
+        # 자석 스냅 상태
+        self._snap_enabled: bool = True
+        self._snap_guide_x: float | None = None
 
         # 웨이브폼: 비디오 오디오 파형 (캐시로 그리기 부담 감소)
         self._waveform_data = None  # WaveformData or None
@@ -445,8 +453,81 @@ class TimelineWidget(QWidget):
         painter.drawPixmap(0, 0, self._static_cache)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._draw_playhead(painter, h)
+        self._draw_snap_indicator(painter, h)
         self._draw_drop_indicator(painter, h)
         painter.end()
+
+    def _draw_snap_indicator(self, painter: QPainter, h: int) -> None:
+        """자석 스냅 가이드라인 그리기."""
+        if self._snap_guide_x is None:
+            return
+        
+        x = float(self._snap_guide_x)
+        painter.setPen(QPen(self._SNAP_GUIDE_COLOR, 1, Qt.PenStyle.DashLine))
+        painter.drawLine(int(x), 0, int(x), h)
+
+    def _handle_clip_drag(self, x: float) -> None:
+        """비디오 클립 트림 처리."""
+        if not self._clip_track or self._drag_clip_index < 0:
+            return
+        if self._drag_clip_index >= len(self._clip_track.clips):
+            return
+
+        dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+        clip = self._clip_track.clips[self._drag_clip_index]
+        
+        # Clip start time on timeline (visual start)
+        # Note: In gapless sequence, start depends on prev clips.
+        # But during drag, we assume prev clips are static (we are trimming current).
+        boundaries = self._clip_track.clip_boundaries_ms()
+        if self._drag_clip_index >= len(boundaries):
+             return
+        clip_start_ms = boundaries[self._drag_clip_index]
+
+        candidates = self._get_magnetic_snap_candidates(skip_clip_index=self._drag_clip_index)
+
+        if self._drag_mode == _DragMode.CLIP_TRIM_LEFT:
+            # Changing Source In -> Changes Duration -> Changes End Time
+            # We snap the End Time
+            
+            new_in = max(0, self._drag_orig_source_in + dx_ms)
+            new_in = min(new_in, clip.source_out_ms - 100)
+            
+            new_duration = clip.source_out_ms - new_in
+            new_end = clip_start_ms + new_duration
+            
+            snapped_end = self._apply_magnetic_snap(new_end, candidates)
+            if self._snap_guide_x is None:
+                 snapped_end = self._snap_ms(new_end)
+            
+            # Recalculate new_in based on snapped end
+            final_duration = snapped_end - clip_start_ms
+            # Ensure min duration
+            if final_duration < 100:
+                final_duration = 100
+                
+            clip.source_in_ms = clip.source_out_ms - final_duration
+
+        elif self._drag_mode == _DragMode.CLIP_TRIM_RIGHT:
+            # Changing Source Out -> Changes Duration -> Changes End Time
+            
+            new_out = max(clip.source_in_ms + 100, self._drag_orig_source_out + dx_ms)
+            
+            new_duration = new_out - clip.source_in_ms
+            new_end = clip_start_ms + new_duration
+            
+            snapped_end = self._apply_magnetic_snap(new_end, candidates)
+            if self._snap_guide_x is None:
+                 snapped_end = self._snap_ms(new_end)
+                 
+            final_duration = snapped_end - clip_start_ms
+            if final_duration < 100:
+                final_duration = 100
+                
+            clip.source_out_ms = clip.source_in_ms + final_duration
+
+        self._invalidate_static_cache()
+        self.update()
 
     def _draw_ruler(self, painter: QPainter, w: int, h: int, visible_ms: float) -> None:
         """상단 눈금자: 보이는 범위에 맞춰 틱 간격 계산 후 시간 라벨 그리기."""
@@ -1207,6 +1288,87 @@ class TimelineWidget(QWidget):
 
     # -------------------------------------------------------- 드래그 헬퍼
 
+    def _get_magnetic_snap_candidates(
+        self,
+        skip_seg_index: int = -1,
+        skip_clip_index: int = -1,
+        skip_img_index: int = -1
+    ) -> list[int]:
+        """자석 스냅을 위한 후보 지점(ms) 수집 (대상 별 제외 인덱스 지정)."""
+        candidates = set()
+        candidates.add(0)
+        if self._duration_ms > 0:
+            candidates.add(self._duration_ms)
+        
+        # Playhead
+        candidates.add(self._playhead_ms)
+
+        # Video Clips - Use indices to skip
+        if self._clip_track:
+            offset = 0
+            for i, clip in enumerate(self._clip_track.clips):
+                start = offset
+                end = offset + clip.duration_ms
+                offset += clip.duration_ms
+                if i != skip_clip_index:
+                    candidates.add(start)
+                    candidates.add(end)
+
+        # Subtitle Segments
+        if self._track:
+            for i, seg in enumerate(self._track):
+                if i != skip_seg_index:
+                    candidates.add(seg.start_ms)
+                    candidates.add(seg.end_ms)
+                    if seg.audio_file:
+                        candidates.add(seg.audio_start_ms)
+                        candidates.add(seg.audio_start_ms + seg.audio_duration_ms)
+
+        # Image Overlays
+        if self._image_overlay_track:
+            for i, ov in enumerate(self._image_overlay_track):
+                if i != skip_img_index:
+                    candidates.add(ov.start_ms)
+                    candidates.add(ov.end_ms)
+
+        return sorted(list(candidates))
+
+    def _apply_magnetic_snap(self, ms: int, candidates: list[int]) -> int:
+        """가장 가까운 후보로 스냅 적용 (기준: 픽셀 거리)."""
+        # Shift 키 누르면 스냅 일시 해제
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self._snap_guide_x = None
+            return ms
+
+        if not self._snap_enabled or self._px_per_ms <= 0:
+            self._snap_guide_x = None
+            return ms
+        
+        # Find closest candidate
+        closest_ms = -1
+        min_dist_px = float('inf')
+        
+        # Binary search could be better but linear is fine for < 100 items
+        # Optimization: Only check candidates within visible range? No, candidates outside might matter if close to edge.
+        # But candidates are in ms.
+        
+        target_px = self._ms_to_x(ms)
+        threshold_px = self._SNAP_THRESHOLD_PX
+
+        for cand_ms in candidates:
+            dist_px = abs(self._ms_to_x(cand_ms) - target_px)
+            if dist_px < min_dist_px:
+                min_dist_px = dist_px
+                closest_ms = cand_ms
+
+        if min_dist_px <= threshold_px:
+            self._snap_guide_x = self._ms_to_x(closest_ms)
+            return closest_ms
+        
+        self._snap_guide_x = None
+        return ms
+
     def _get_snapped_pos(self, x: float) -> int:
         """드래그 중 스냅핑 적용된 타임라인 위치 반환."""
         ms = self._x_to_ms(x)
@@ -1224,7 +1386,17 @@ class TimelineWidget(QWidget):
             self._seek_to_x(x)
 
         elif self._drag_mode == _DragMode.PLAYHEAD_DRAG:
-            self._seek_to_x(x)
+            # 플레이헤드도 스냅 적용
+            candidates = self._get_magnetic_snap_candidates()
+            snapped_ms = self._apply_magnetic_snap(int(current_ms), candidates)
+            # 프레임 스냅도 적용할까? 자석 스냅이 우선. 자석 없으면 프레임 스냅? 
+            # _apply_magnetic_snap은 스냅 안되면 원본 리턴.
+            if self._snap_guide_x is None:
+                 snapped_ms = self._snap_ms(int(current_ms))
+            
+            self._playhead_ms = max(0, min(self._duration_ms, snapped_ms))
+            self.update()
+            self.seek_requested.emit(self._playhead_ms)
         
         elif self._drag_mode == _DragMode.PAN_VIEW:
             # 뷰 팬: (시작점 - 현재점) 만큼 visible_start 이동
@@ -1246,27 +1418,72 @@ class TimelineWidget(QWidget):
             diff_ms = current_ms - self._x_to_ms(self._drag_start_x)
             new_start = self._drag_orig_start_ms + int(diff_ms)
             
-            # 스냅
-            new_start = self._snap_ms(new_start)
+            # Snap (Target: Start or End?)
+            # Both start and end can snap. We pick the one that snaps "best" (closest).
+            candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+            
+            # 1. Try snapping start
+            snapped_start = self._apply_magnetic_snap(new_start, candidates)
+            guide_x_start = self._snap_guide_x
+            
+            # 2. Try snapping end
+            new_end_tentative = new_start + duration
+            snapped_end = self._apply_magnetic_snap(new_end_tentative, candidates)
+            guide_x_end = self._snap_guide_x
+            
+            # Which snap is closer/active?
+            # If both snap, usually start takes precedence or we check which displacement is smaller.
+            # actually _apply_magnetic_snap returns snapped value.
+            # We calculate delta.
+            
+            final_start = new_start
+            
+            snap_diff_start = abs(snapped_start - new_start)
+            snap_diff_end = abs(snapped_end - new_end_tentative)
+            
+            # Check threshold again implicitly via _apply_magnetic_snap return value check
+            # (if no snap, it returns input).
+            is_start_snap = (snapped_start != new_start)
+            is_end_snap = (snapped_end != new_end_tentative)
+            
+            if is_start_snap and is_end_snap:
+                # Both snapped. Choose closest.
+                if snap_diff_start <= snap_diff_end:
+                     final_start = snapped_start
+                     self._snap_guide_x = guide_x_start
+                else:
+                     final_start = snapped_end - duration
+                     self._snap_guide_x = guide_x_end
+            elif is_start_snap:
+                final_start = snapped_start
+                self._snap_guide_x = guide_x_start
+            elif is_end_snap:
+                final_start = snapped_end - duration
+                self._snap_guide_x = guide_x_end
+            else:
+                self._snap_guide_x = None
+                
+            # If no magnetic snap, apply frame snap
+            if not is_start_snap and not is_end_snap:
+                final_start = self._snap_ms(final_start)
             
             # 범위 제한
-            new_start = max(0, min(self._duration_ms - duration, new_start))
-            new_end = new_start + duration
+            final_start = max(0, min(self._duration_ms - duration, final_start))
+            new_end = final_start + duration
             
             # 오디오도 있다면 같이 이동
             audio_offset = 0
             if seg.audio_file:
                  audio_offset = self._drag_orig_audio_start_ms - self._drag_orig_start_ms
 
-            seg.start_ms = new_start
+            seg.start_ms = final_start
             seg.end_ms = new_end
             
             if seg.audio_file:
-                seg.audio_start_ms = new_start + audio_offset
+                seg.audio_start_ms = final_start + audio_offset
                 
-            self.segment_moved.emit(self._drag_seg_index, new_start, new_end)
+            self.segment_moved.emit(self._drag_seg_index, final_start, new_end)
             if seg.audio_file:
-                # 오디오 길이 유지, 시작점만 변경
                 self.audio_moved.emit(seg.audio_start_ms, self._drag_orig_audio_duration_ms)
                 
             self._invalidate_static_cache()
@@ -1277,11 +1494,16 @@ class TimelineWidget(QWidget):
                 return
             seg = self._track[self._drag_seg_index]
             
-            # 오른쪽 끝보다 작아야 함 (최소 100ms)
             limit_right = seg.end_ms - 100
             
             new_start = int(current_ms)
-            new_start = self._snap_ms(new_start)
+            
+            candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+            new_start = self._apply_magnetic_snap(new_start, candidates)
+            
+            if self._snap_guide_x is None:
+                new_start = self._snap_ms(new_start)
+                
             new_start = max(0, min(limit_right, new_start))
             
             seg.start_ms = new_start
@@ -1297,7 +1519,13 @@ class TimelineWidget(QWidget):
             limit_left = seg.start_ms + 100
             
             new_end = int(current_ms)
-            new_end = self._snap_ms(new_end)
+            
+            candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+            new_end = self._apply_magnetic_snap(new_end, candidates)
+
+            if self._snap_guide_x is None:
+                 new_end = self._snap_ms(new_end)
+
             new_end = max(limit_left, min(self._duration_ms, new_end))
             
             seg.end_ms = new_end
@@ -1315,8 +1543,37 @@ class TimelineWidget(QWidget):
              diff_ms = current_ms - self._x_to_ms(self._drag_start_x)
              new_audio_start = self._drag_orig_audio_start_ms + int(diff_ms)
              
-             # 스냅
-             new_audio_start = self._snap_ms(new_audio_start)
+             candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+             
+             # Audio move snaps its start / end
+             # Try snap start
+             snapped_start = self._apply_magnetic_snap(new_audio_start, candidates)
+             guide_x_start = self._snap_guide_x
+
+             # Try snap end
+             new_audio_end = new_audio_start + self._drag_orig_audio_duration_ms
+             snapped_end = self._apply_magnetic_snap(new_audio_end, candidates)
+             guide_x_end = self._snap_guide_x
+             
+             is_start_snap = (snapped_start != new_audio_start)
+             is_end_snap = (snapped_end != new_audio_end)
+             
+             if is_start_snap and is_end_snap:
+                 if abs(snapped_start - new_audio_start) <= abs(snapped_end - new_audio_end):
+                     new_audio_start = snapped_start
+                     self._snap_guide_x = guide_x_start
+                 else:
+                     new_audio_start = snapped_end - self._drag_orig_audio_duration_ms
+                     self._snap_guide_x = guide_x_end
+             elif is_start_snap:
+                 new_audio_start = snapped_start
+                 self._snap_guide_x = guide_x_start
+             elif is_end_snap:
+                 new_audio_start = snapped_end - self._drag_orig_audio_duration_ms
+                 self._snap_guide_x = guide_x_end
+             else:
+                 self._snap_guide_x = None
+                 new_audio_start = self._snap_ms(new_audio_start)
              
              new_audio_start = max(0, min(self._duration_ms - self._drag_orig_audio_duration_ms, new_audio_start))
              
@@ -1324,6 +1581,49 @@ class TimelineWidget(QWidget):
              self.audio_moved.emit(new_audio_start, self._drag_orig_audio_duration_ms)
              self._invalidate_static_cache()
              self.update()
+        
+        elif self._drag_mode == _DragMode.AUDIO_RESIZE_LEFT:
+            if not self._track or self._drag_seg_index < 0:
+                return
+            
+            candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+            
+            diff_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+            new_start = self._drag_orig_audio_start_ms + diff_ms
+            
+            new_start = self._apply_magnetic_snap(new_start, candidates)
+            if self._snap_guide_x is None:
+                new_start = self._snap_ms(new_start)
+                
+            new_start = max(0, min(new_start, self._track.audio_start_ms + self._track.audio_duration_ms - 100))
+            
+            duration_change = self._track.audio_start_ms - new_start
+            self._track.audio_start_ms = new_start
+            self._track.audio_duration_ms += duration_change
+            self._invalidate_static_cache()
+            self.update()
+
+        elif self._drag_mode == _DragMode.AUDIO_RESIZE_RIGHT:
+            if not self._track or self._drag_seg_index < 0:
+                return
+            
+            candidates = self._get_magnetic_snap_candidates(skip_seg_index=self._drag_seg_index)
+            
+            # Calc new duration directly ? No use dx
+            dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+            new_duration = self._drag_orig_audio_duration_ms + dx_ms
+            new_end = self._track.audio_start_ms + new_duration
+            
+            new_end = self._apply_magnetic_snap(new_end, candidates)
+            if self._snap_guide_x is None:
+                 new_end = self._snap_ms(new_end)
+            
+            new_duration = new_end - self._track.audio_start_ms
+            new_duration = max(100, new_duration)
+            max_duration = self._duration_ms - self._track.audio_start_ms
+            self._track.audio_duration_ms = min(new_duration, max_duration)
+            self._invalidate_static_cache()
+            self.update()
 
         elif self._drag_mode == _DragMode.IMAGE_MOVE:
             if not self._image_overlay_track or self._drag_seg_index < 0:
@@ -1333,12 +1633,86 @@ class TimelineWidget(QWidget):
             
             diff_ms = current_ms - self._x_to_ms(self._drag_start_x)
             new_start = self._drag_orig_start_ms + int(diff_ms)
-            new_start = self._snap_ms(new_start)
-            new_start = max(0, min(self._duration_ms - duration, new_start))
+            
+            candidates = self._get_magnetic_snap_candidates(skip_img_index=self._drag_seg_index)
+            
+            snapped_start = self._apply_magnetic_snap(new_start, candidates)
+            guide_x_start = self._snap_guide_x
+
+            new_end_tentative = new_start + duration
+            snapped_end = self._apply_magnetic_snap(new_end_tentative, candidates)
+            guide_x_end = self._snap_guide_x
+            
+            is_start_snap = (snapped_start != new_start)
+            is_end_snap = (snapped_end != new_end_tentative)
+            
+            final_start = new_start
+            if is_start_snap and is_end_snap:
+                if abs(snapped_start - new_start) <= abs(snapped_end - new_end_tentative):
+                    final_start = snapped_start
+                    self._snap_guide_x = guide_x_start
+                else:
+                    final_start = snapped_end - duration
+                    self._snap_guide_x = guide_x_end
+            elif is_start_snap:
+                final_start = snapped_start
+                self._snap_guide_x = guide_x_start
+            elif is_end_snap:
+                final_start = snapped_end - duration
+                self._snap_guide_x = guide_x_end
+            else:
+                self._snap_guide_x = None
+                final_start = self._snap_ms(final_start)
+            
+            final_start = max(0, min(self._duration_ms - duration, final_start))
+            
+            ov.start_ms = final_start
+            ov.end_ms = final_start + duration
+            
+            self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
+            self._invalidate_static_cache()
+            self.update()
+
+        elif self._drag_mode == _DragMode.IMAGE_RESIZE_LEFT:
+            if not self._image_overlay_track or self._drag_seg_index < 0:
+                return
+            ov = self._image_overlay_track[self._drag_seg_index]
+            
+            limit_right = ov.end_ms - 100
+            
+            new_start = int(current_ms)
+            
+            candidates = self._get_magnetic_snap_candidates(skip_img_index=self._drag_seg_index)
+            new_start = self._apply_magnetic_snap(new_start, candidates)
+            
+            if self._snap_guide_x is None:
+                new_start = self._snap_ms(new_start)
+                
+            new_start = max(0, min(limit_right, new_start))
             
             ov.start_ms = new_start
-            ov.end_ms = new_start + duration
+            self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
+            self._invalidate_static_cache()
+            self.update()
+
+        elif self._drag_mode == _DragMode.IMAGE_RESIZE_RIGHT:
+            if not self._image_overlay_track or self._drag_seg_index < 0:
+                return
+            ov = self._image_overlay_track[self._drag_seg_index]
             
+            limit_left = ov.start_ms + 100
+            
+            new_end = int(current_ms)
+            
+            candidates = self._get_magnetic_snap_candidates(skip_img_index=self._drag_seg_index)
+            new_end = self._apply_magnetic_snap(new_end, candidates)
+            
+            if self._snap_guide_x is None:
+                new_end = self._snap_ms(new_end)
+                
+            new_end = max(limit_left, min(self._duration_ms, new_end))
+            
+            ov.end_ms = new_end
             self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
             self._invalidate_static_cache()
             self.update()

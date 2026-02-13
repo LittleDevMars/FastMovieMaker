@@ -354,7 +354,6 @@ Track layout (top to bottom):
 - `QTableView` with virtual model (`_SubtitleTableModel(QAbstractTableModel)`)
 - Columns: #, Start, End, Text, Volume
 - Inline editing with undo/redo integration
-- Context menu: Add, Delete, Split, Merge, Style
 - Search bar integration (real-time filter/highlight)
 
 ### 6.5 Playback Controls
