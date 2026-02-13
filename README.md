@@ -63,6 +63,14 @@
   - 백업 시스템을 포함한 자동 저장
   - QUndoStack을 이용한 실행 취소/다시 실행
 
+### 🔧 최근 안정성 개선 (v0.9.2)
+- **멀티 트랙 리팩토링 리그레션 수정:**
+  - `TimelineWidget` 초기화 오류 해결 (`_project`, `_clip_track` 속성 누락)
+  - `AddVideoClipCommand` 시그니처 불일치 수정
+  - 썸네일 서비스 API 호출 오류 수정 (`request_thumbnail` 사용)
+  - 동적 Y 좌표 계산 메서드 추가 (웨이브폼, 이미지 오버레이)
+  - `VideoClip` 라벨 렌더링 로직 개선 (파일명 기반 표시)
+
 ---
 
 ## 🏗️ 아키텍처

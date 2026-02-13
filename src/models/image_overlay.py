@@ -55,6 +55,8 @@ class ImageOverlayTrack:
     """An ordered collection of image overlays."""
 
     overlays: list[ImageOverlay] = field(default_factory=list)
+    locked: bool = False
+    hidden: bool = False
 
     def overlays_at(self, position_ms: int) -> list[ImageOverlay]:
         """Return all overlays active at the given position."""

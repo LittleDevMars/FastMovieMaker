@@ -51,6 +51,7 @@ from src.ui.commands import (
     EditTextCommand,
     EditTimeCommand,
     EditVolumeCommand,
+    EditSpeedCommand,
     MergeCommand,
     MoveSegmentCommand,
     SplitClipCommand,
@@ -62,6 +63,7 @@ from src.ui.templates_panel import TemplatesPanel
 from src.ui.playback_controls import PlaybackControls
 from src.ui.subtitle_panel import SubtitlePanel
 from src.ui.timeline_widget import TimelineWidget
+from src.ui.track_header_panel import TrackHeaderPanel
 from src.ui.track_selector import TrackSelector
 from src.ui.video_player_widget import VideoPlayerWidget
 from src.ui.dialogs.whisper_dialog import WhisperDialog
@@ -110,6 +112,7 @@ class MainWindow(QMainWindow):
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
         self._current_playback_source: str | None = None  # track which video is loaded
+        self._current_track_index: int = 0
         self._current_clip_index: int = 0  # track which clip in the clip track is playing
         self._pending_seek_ms: int | None = None  # seek after source switch
         self._pending_auto_play: bool = False  # auto-play after source switch
@@ -207,6 +210,16 @@ class MainWindow(QMainWindow):
 
         # Timeline
         self._timeline = TimelineWidget()
+        self._track_headers = TrackHeaderPanel()
+        self._track_headers.state_changed.connect(self._on_track_state_changed)
+
+        # Timeline container to hold headers and timeline widget
+        self._timeline_container = QWidget()
+        timeline_outer_layout = QHBoxLayout(self._timeline_container)
+        timeline_outer_layout.setContentsMargins(0, 0, 0, 0)
+        timeline_outer_layout.setSpacing(0)
+        timeline_outer_layout.addWidget(self._track_headers)
+        timeline_outer_layout.addWidget(self._timeline, 1)
 
         # Timeline zoom toolbar
         self._zoom_toolbar = QWidget()
@@ -216,13 +229,35 @@ class MainWindow(QMainWindow):
         zoom_layout.setContentsMargins(6, 2, 6, 2)
         zoom_layout.setSpacing(4)
 
-        btn_style = "QPushButton { background: rgb(60,60,60); color: white; border: 1px solid rgb(80,80,80); border-radius: 3px; padding: 1px 8px; font-size: 12px; } QPushButton:hover { background: rgb(80,80,80); }"
+        btn_style = """
+            QPushButton { background: rgb(60,60,60); color: white; border: 1px solid rgb(80,80,80); border-radius: 3px; padding: 1px 8px; font-size: 12px; }
+            QPushButton:hover { background: rgb(80,80,80); }
+            QPushButton:checked { background: rgb(60, 100, 180); border: 1px solid rgb(100, 160, 240); }
+        """
+
+        self._snap_toggle_btn = QPushButton(tr("Snap"))
+        self._snap_toggle_btn.setCheckable(True)
+        self._snap_toggle_btn.setChecked(True)  # Default on
+        self._snap_toggle_btn.setFixedWidth(50)
+        self._snap_toggle_btn.setStyleSheet(btn_style)
+        self._snap_toggle_btn.setToolTip(tr("Toggle Magnetic Snap (S)"))
+        self._snap_toggle_btn.clicked.connect(self._toggle_magnetic_snap)
 
         self._zoom_fit_btn = QPushButton(tr("Fit"))
         self._zoom_fit_btn.setFixedWidth(36)
         self._zoom_fit_btn.setStyleSheet(btn_style)
         self._zoom_fit_btn.setToolTip(tr("Fit entire timeline (Ctrl+0)"))
+        self._zoom_fit_btn.setToolTip(tr("Fit entire timeline (Ctrl+0)"))
         self._zoom_fit_btn.clicked.connect(self._timeline.zoom_fit)
+
+        # Ripple Edit Toggle
+        self._ripple_toggle_btn = QPushButton("Ripple")
+        self._ripple_toggle_btn.setCheckable(True)
+        self._ripple_toggle_btn.setChecked(False)  # Default off
+        self._ripple_toggle_btn.setFixedWidth(50)
+        self._ripple_toggle_btn.setStyleSheet(btn_style)
+        self._ripple_toggle_btn.setToolTip(tr("Toggle Ripple Edit Mode (R)"))
+        self._ripple_toggle_btn.clicked.connect(self._toggle_ripple_mode)
 
         self._zoom_out_btn = QPushButton("-")
         self._zoom_out_btn.setFixedWidth(28)
@@ -256,7 +291,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._top_splitter, 1)
         main_layout.addWidget(self._controls)
         main_layout.addWidget(self._zoom_toolbar)
-        main_layout.addWidget(self._timeline)
+        main_layout.addWidget(self._timeline_container)
 
         # Status bar
         self.setStatusBar(QStatusBar())
@@ -464,6 +499,10 @@ class MainWindow(QMainWindow):
         sc_zoom_fit = QShortcut(QKeySequence("Ctrl+0"), self)
         sc_zoom_fit.activated.connect(self._timeline.zoom_fit)
 
+        # S → Toggle Magnetic Snap
+        sc_snap = QShortcut(QKeySequence(Qt.Key.Key_S), self)
+        sc_snap.activated.connect(self._toggle_magnetic_snap)
+
     def _toggle_play_pause(self) -> None:
         # Check if we're currently playing
         is_playing = (
@@ -644,12 +683,12 @@ class MainWindow(QMainWindow):
 
     def _on_delete_selected(self) -> None:
         # Check if a video clip is selected in timeline
+        sel_track = self._timeline._selected_clip_track_index
         sel_clip = self._timeline._selected_clip_index
-        if sel_clip >= 0 and self._project.video_clip_track:
-            if len(self._project.video_clip_track.clips) > 1:
-                self._on_delete_clip(sel_clip)
-                self._timeline.select_clip(-1)
-                return
+        if sel_track >= 0 and sel_clip >= 0:
+            self._on_delete_clip(sel_track, sel_clip)
+            self._timeline.select_clip(-1, -1)
+            return
 
         # Check if an image overlay is selected in timeline
         sel_img = self._timeline._selected_overlay_index
@@ -705,6 +744,7 @@ class MainWindow(QMainWindow):
         self._timeline.clip_split_requested.connect(self._on_split_clip)
         self._timeline.clip_deleted.connect(self._on_delete_clip)
         self._timeline.clip_trimmed.connect(self._on_clip_trimmed)
+        self._timeline.clip_speed_requested.connect(self._on_edit_clip_speed)
 
         # PIP drag on video player
         self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
@@ -743,17 +783,23 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
         self._subtitle_panel.set_track(track if len(track) > 0 else None)
         self._timeline.set_track(track if len(track) > 0 else None)
+
         # Sync image overlay track
         io_track = self._project.image_overlay_track
         self._timeline.set_image_overlay_track(io_track if len(io_track) > 0 else None)
         self._video_widget.set_image_overlay_track(io_track if len(io_track) > 0 else None)
-        # Sync video clip track
-        clip_track = self._project.video_clip_track
-        self._timeline.set_clip_track(clip_track)
-        if clip_track:
+
+        # Sync video clip tracks
+        v_idx = getattr(self, "_current_track_index", 0)
+        if 0 <= v_idx < len(self._project.video_tracks):
+            clip_track = self._project.video_tracks[v_idx]
+            self._timeline.set_clip_track(clip_track)
             output_dur = clip_track.output_duration_ms
-            self._timeline.set_duration(output_dur, has_video=self._project.has_video)
-            self._controls.set_output_duration(output_dur)
+            self._timeline.set_duration(self._project.duration_ms, has_video=self._project.has_video)
+            self._controls.set_output_duration(self._project.duration_ms)
+        
+        # Ensure timeline holds the project reference
+        self._timeline.set_project(self._project)
         # Notify autosave of edits
         self._autosave.notify_edit()
 
@@ -1101,15 +1147,21 @@ class MainWindow(QMainWindow):
             # Beyond end → append
             insert_index = len(clip_track.clips)
 
-        cmd = AddVideoClipCommand(clip_track, clip, insert_index)
+        sub_track = self._project.subtitle_track
+        overlay_track = self._project.image_overlay_track
+        v_idx = self._current_track_index
+        cmd = AddVideoClipCommand(
+            self._project, v_idx, clip, sub_track, overlay_track, insert_index,
+            ripple=self._timeline.is_ripple_mode()
+        )
         self._undo_stack.push(cmd)
 
         # Update duration and refresh
-        self._project.duration_ms = clip_track.output_duration_ms
-        self._timeline.set_duration(clip_track.output_duration_ms, has_video=True)
-        self._timeline.set_clip_track(clip_track)
+        self._project.duration_ms = self._project.video_tracks[v_idx].output_duration_ms
+        self._timeline.set_duration(self._project.duration_ms, has_video=True)
+        self._timeline.set_clip_track(self._project.video_tracks[v_idx])
         self._timeline.refresh()
-        self._controls.set_output_duration(clip_track.output_duration_ms)
+        self._controls.set_output_duration(self._project.duration_ms)
         self._autosave.notify_edit()
         self.statusBar().showMessage(
             f"{tr('Added video clip')}: {path.name} ({info.duration_ms // 1000}s)"
@@ -1376,6 +1428,36 @@ class MainWindow(QMainWindow):
             self._temp_video_path.unlink(missing_ok=True)
         self._temp_video_path = None
 
+    def _toggle_magnetic_snap(self) -> None:
+        """Toggle magnetic snap mode."""
+        enabled = self._snap_toggle_btn.isChecked()
+        self._timeline.set_magnetic_snap(enabled)
+        
+    def _toggle_ripple_mode(self) -> None:
+        """Toggle ripple edit mode."""
+        enabled = self._ripple_toggle_btn.isChecked()
+        self._timeline.set_ripple_mode(enabled)
+
+    def _on_track_state_changed(self) -> None:
+        """Handle Mute/Lock/Hide state changes from TrackHeaderPanel."""
+        # Update timeline appearance
+        self._timeline.update()
+        
+        # Sync player mute and visibility states
+        if self._project.video_clip_track:
+            self._audio_output.setMuted(self._project.video_clip_track.muted)
+            self._video_widget.set_video_hidden(self._project.video_clip_track.hidden)
+            
+        track = self._project.subtitle_track
+        if track:
+            self._tts_audio_output.setMuted(track.muted)
+            # Force update of subtitle overlay visibility
+            pos = self._player.position()
+            self._video_widget._update_subtitle(pos)
+            self._video_widget._update_image_overlays(pos)
+        
+        self.statusBar().showMessage(tr("Track states updated"), 2000)
+
     def _on_duration_changed(self, duration_ms: int) -> None:
         # Skip during source switching — don't overwrite project duration
         # with an external video's duration
@@ -1413,10 +1495,46 @@ class MainWindow(QMainWindow):
             return
 
         dialog = WhisperDialog(self._project.video_path, parent=self)
+        dialog.segment_ready.connect(self._on_whisper_segment_ready)
         if dialog.exec():
-            track = dialog.result_track()
-            if track and len(track) > 0:
-                self._apply_subtitle_track(track)
+            # If finished successfully, we might want to replace the track or just let the real-time updates stand.
+            # However, the dialog only returns the track on finish.
+            # Real-time updates push directly to the track.
+            # To avoid duplication if we re-apply the full track at the end:
+            # We should probably clear the track at start or rely on real-time only?
+            # Actually, `dialog.result_track()` returns the full track.
+            # If we appended real-time, `self._project.subtitle_track` is already populated.
+            # Let's ensure we don't duplicate. We can just use the final result to be safe/atomic,
+            # OR rely solely on real-time.
+            # Better approach: Real-time adds to the LIVE track. The final result is just a confirmation.
+            # But `WhisperDialog` builds its own track locally. It doesn't modify the project track.
+            # So `_on_whisper_segment_ready` should take the segment and append it to `self._project.subtitle_track`.
+            # And at the end, we might not need to do anything if real-time covered it all.
+            # BUT: If user cancels, we might want to keep partials?
+            # Let's see: `_on_whisper_segment_ready` will append.
+            # If `dialog.exec()` returns Accepted, it means it finished.
+            pass
+        
+        # After dialog closes (finished or cancelled), refresh one last time
+        self._refresh_all_widgets()
+
+    def _on_whisper_segment_ready(self, segment: SubtitleSegment) -> None:
+        """Handle real-time subtitle segment generation."""
+        # Ensure we have a track
+        if self._project.subtitle_track is None:
+            self._project.subtitle_track = SubtitleTrack()
+            self._timeline.set_subtitle_track(self._project.subtitle_track)
+        
+        # Add segment
+        self._project.subtitle_track.add_segment(segment)
+        
+        # Refresh UI
+        # We don't want to do a full expensive refresh every segment if possible,
+        # but for now `_refresh_all_widgets` is safe.
+        # Maybe just repaint timeline and update subtitle panel?
+        self._timeline.update()
+        if self._subtitle_panel:
+            self._subtitle_panel.refresh()
 
     def _on_generate_tts(self) -> None:
         """Open TTS dialog to generate speech from script."""
@@ -1825,11 +1943,8 @@ class MainWindow(QMainWindow):
             overlay_path = Path(self._overlay_template.image_path)
         io_track = self._project.image_overlay_track
         img_overlays = list(io_track.overlays) if len(io_track) > 0 else None
-        # Pass video clips for multi-clip export (skip if single full-video clip)
-        clip_track = self._project.video_clip_track
-        video_clips = None
-        if clip_track and not clip_track.is_full_video(self._project.duration_ms):
-            video_clips = clip_track
+        # Pass video tracks for multi-track export
+        video_tracks = list(self._project.video_tracks)
 
         dialog = ExportDialog(
             self._project.video_path,
@@ -1838,7 +1953,7 @@ class MainWindow(QMainWindow):
             video_has_audio=self._project.video_has_audio,
             overlay_path=overlay_path,
             image_overlays=img_overlays,
-            video_clips=video_clips,
+            video_tracks=video_tracks,
         )
         dialog.exec()
 
@@ -1921,6 +2036,8 @@ class MainWindow(QMainWindow):
             self._autosave.set_project(project)
             self._autosave.set_active_file(path)
             self._undo_stack.clear()
+            self._timeline.set_project(project)
+            self._track_headers.set_project(project)
 
             # Load video if it exists
             if project.video_path and project.video_path.is_file():
@@ -1930,36 +2047,17 @@ class MainWindow(QMainWindow):
                 self._player.play()
                 self.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
 
-            # Apply subtitles
-            self._video_widget.set_default_style(project.default_style)
-            self._refresh_track_selector()
-            if project.has_subtitles:
-                track = project.subtitle_track
-                self._video_widget.set_subtitle_track(track)
-                self._subtitle_panel.set_track(track)
-                self._timeline.set_track(track)
-
-            # Apply image overlays
-            io_track = project.image_overlay_track
-            if len(io_track) > 0:
-                self._timeline.set_image_overlay_track(io_track)
-                self._video_widget.set_image_overlay_track(io_track)
-
-            # Apply video clip track
-            if project.video_clip_track:
-                output_dur = project.video_clip_track.output_duration_ms
-                self._timeline.set_duration(output_dur, has_video=True)
-                self._timeline.set_clip_track(project.video_clip_track)
-                self._controls.enable_output_time_mode()
-                self._controls.set_output_duration(output_dur)
-            elif project.has_video and project.duration_ms > 0:
-                # Legacy project (v2/v3): initialize clip track from primary video
-                from src.models.video_clip import VideoClipTrack
-                project.video_clip_track = VideoClipTrack.from_full_video(project.duration_ms)
-                self._timeline.set_duration(project.duration_ms, has_video=True)
-                self._timeline.set_clip_track(project.video_clip_track)
-                self._controls.enable_output_time_mode()
-                self._controls.set_output_duration(project.duration_ms)
+            # Refresh UI components
+            self._refresh_all_widgets()
+            
+            # Additional setup for video playback
+            if project.video_path and project.video_path.is_file():
+                self._current_playback_source = str(project.video_path)
+                self._current_clip_index = 0
+                self._player.setSource(QUrl.fromLocalFile(str(project.video_path)))
+                # Auto-play on load if possible
+                self._player.play()
+                self.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
 
             # Refresh timeline to update display
             self._timeline.refresh()
@@ -2048,107 +2146,88 @@ class MainWindow(QMainWindow):
         self._sync_tts_playback()
 
     def _sync_clip_index_from_position(self) -> None:
-        """Recalculate _current_clip_index from current timeline position."""
-        clip_track = self._project.video_clip_track
-        if not clip_track:
-            return
-        # Use timeline position (output time), not source position
-        timeline_ms = self._timeline.get_playhead()
-        result = clip_track.clip_at_timeline(timeline_ms)
-        if result is not None:
-            idx, _clip = result
-            self._current_clip_index = idx
+        """Recalculate current track and clip index from timeline position."""
+        res = self._get_top_clip_at(self._timeline.get_playhead())
+        if res:
+            self._current_track_index, self._current_clip_index, _ = res
+
+    def _get_top_clip_at(self, timeline_ms: int) -> tuple[int, int, VideoClip] | None:
+        """Find the clip on the highest visible track at the given timeline position."""
+        if not self._project:
+            return None
+        # From top to bottom (highest track index usually rendered on top)
+        for v_idx in reversed(range(len(self._project.video_tracks))):
+            vt = self._project.video_tracks[v_idx]
+            if vt.hidden:
+                continue
+            res = vt.clip_at_timeline(timeline_ms)
+            if res:
+                return v_idx, res[0], res[1]
+        return None
 
     def _on_player_position_changed(self, position_ms: int) -> None:
-        """Handle video player position change (source_ms from QMediaPlayer).
-
-        Uses _current_clip_index to track which clip is playing,
-        avoiding ambiguous source_to_timeline mapping when same-source
-        clips have contiguous ranges.
-        """
+        """Handle video player position change (source_ms from QMediaPlayer)."""
         if not self._project.has_video:
             return
 
-        # Ignore stale position updates during source switch
         if self._pending_seek_ms is not None:
             return
 
-        clip_track = self._project.video_clip_track
-        if clip_track:
-            was_playing = (
-                self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-            )
-            clips = clip_track.clips
-            idx = self._current_clip_index
+        # Use current track/clip
+        if not self._project.video_tracks:
+            return
+            
+        t_idx = self._current_track_index
+        if t_idx >= len(self._project.video_tracks):
+            t_idx = 0
+            self._current_track_index = 0
+            
+        vt = self._project.video_tracks[t_idx]
+        clips = vt.clips
+        idx = self._current_clip_index
 
-            # Validate clip index
-            if not (0 <= idx < len(clips)):
-                idx = 0
-                self._current_clip_index = 0
+        if not (0 <= idx < len(clips)):
+            self._sync_clip_index_from_position()
+            return
 
-            current_clip = clips[idx]
+        current_clip = clips[idx]
 
-            # Sanity check: position should be within the current clip's source range
-            # (with tolerance for boundary timing). If wildly out of range,
-            # search all clips to find the correct one.
-            if position_ms > current_clip.source_out_ms + 500 or position_ms < current_clip.source_in_ms - 500:
-                # Find which clip contains this source position
-                found = False
-                for i, clip in enumerate(clips):
-                    clip_source = clip.source_path or str(self._project.video_path)
-                    if clip_source == self._current_playback_source:
-                        if clip.source_in_ms <= position_ms <= clip.source_out_ms + 100:
-                            # Found the correct clip
-                            self._current_clip_index = i
-                            clip_start = clip_track.clip_timeline_start(i)
-                            elapsed = max(0, position_ms - clip.source_in_ms)
-                            timeline_ms = min(clip_start + elapsed, clip_track.output_duration_ms)
-                            self._timeline.set_playhead(timeline_ms)
-                            self._controls.set_output_position(timeline_ms)
-                            self._video_widget._update_subtitle(timeline_ms)
-                            found = True
-                            break
-                if found:
-                    return
-                # If not found, fall back to sync from timeline playhead
-                self._sync_clip_index_from_position()
-                return
-
-            # Check if position exceeded current clip boundary → transition
-            if position_ms >= current_clip.source_out_ms - 30:
-                if idx + 1 < len(clips):
-                    next_clip = clips[idx + 1]
-                    self._current_clip_index = idx + 1
-                    next_source = next_clip.source_path or str(self._project.video_path)
-
-                    # Calculate timeline position for next clip start
-                    next_clip_start = clip_track.clip_timeline_start(idx + 1)
-                    self._timeline.set_playhead(next_clip_start)
-                    self._controls.set_output_position(next_clip_start)
-                    self._video_widget._update_subtitle(next_clip_start)
-
-                    if next_source != self._current_playback_source:
-                        self._switch_player_source(
-                            next_source, next_clip.source_in_ms,
-                            auto_play=self._play_intent,
-                        )
-                    else:
-                        self._player.setPosition(next_clip.source_in_ms)
-                        if self._play_intent:
-                            self._player.play()
-                    return
-
-            # Calculate timeline position from known clip index
-            clip_start = clip_track.clip_timeline_start(idx)
-            elapsed = max(0, position_ms - current_clip.source_in_ms)
-            timeline_ms = min(clip_start + elapsed, clip_track.output_duration_ms)
-
+        # Sync timeline playhead if position is within current clip
+        # Using tolerance for boundary timing
+        if current_clip.source_in_ms - 100 <= position_ms <= current_clip.source_out_ms + 100:
+            clip_start = vt.clip_timeline_start(idx)
+            # Duration in timeline is (source_out - source_in) / speed
+            # So local timeline offset is (source_pos - source_in) / speed
+            local_offset = (position_ms - current_clip.source_in_ms) / current_clip.speed
+            timeline_ms = int(clip_start + local_offset)
+            
             self._timeline.set_playhead(timeline_ms)
             self._controls.set_output_position(timeline_ms)
             self._video_widget._update_subtitle(timeline_ms)
-        else:
-            self._timeline.set_playhead(position_ms)
-            self._video_widget._update_subtitle(position_ms)
+            self._sync_tts_playback()
+        
+        # Check transition to next clip or another track
+        if position_ms >= current_clip.source_out_ms - 30:
+            # Re-sync to find what should be playing next according to z-order
+            self._sync_clip_index_from_position()
+            new_v_idx = self._current_track_index
+            new_c_idx = self._current_clip_index
+            
+            new_vt = self._project.video_tracks[new_v_idx]
+            new_clip = new_vt.clips[new_c_idx]
+            
+            next_start = new_vt.clip_timeline_start(new_c_idx)
+            self._timeline.set_playhead(next_start)
+            
+            target_source = new_clip.source_path or str(self._project.video_path)
+            playback_path = self._resolve_playback_path(target_source)
+            
+            if playback_path != self._current_playback_source:
+                self._switch_player_source(playback_path, new_clip.source_in_ms, auto_play=self._play_intent)
+            else:
+                self._player.setPosition(new_clip.source_in_ms)
+                if self._play_intent:
+                    self._player.play()
 
     def _resolve_playback_path(self, source_path: str | None) -> str:
         """Resolve playback path, using temp converted file if available.
@@ -2293,98 +2372,91 @@ class MainWindow(QMainWindow):
         self._pending_auto_play = False
         self.statusBar().showMessage(f"{tr('Player error')}: {error_string}")
 
+    # ------------------------------------------------------------------ Snap
+    def _toggle_magnetic_snap(self) -> None:
+        """Toggle magnetic snap state."""
+        enabled = self._timeline.toggle_magnetic_snap()
+        self._snap_toggle_btn.setChecked(enabled)
+        state = tr("Enabled") if enabled else tr("Disabled")
+        self.statusBar().showMessage(f"{tr('Magnetic Snap')}: {state}", 2000)
+
     # -------------------------------------------------------- Video clip editing
 
-    def _on_clip_selected(self, index: int) -> None:
+    def _on_clip_selected(self, track_index: int, clip_index: int) -> None:
         """Handle clip selection from timeline."""
-        self._timeline.select_clip(index)
+        self._timeline.select_clip(track_index, clip_index)
 
     def _on_split_clip(self, timeline_ms: int) -> None:
-        """Split clip at the given timeline position (Ctrl+B or context menu)."""
-        clip_track = self._project.video_clip_track
-        if not clip_track:
+        """Split clip at the given timeline position."""
+        res = self._get_top_clip_at(timeline_ms)
+        if not res:
             self.statusBar().showMessage(tr("No video clips to split"), 3000)
             return
 
-        # Debug: show current state
-        print(f"[Split] Timeline position: {timeline_ms}ms")
-        print(f"[Split] Clips: {len(clip_track.clips)}")
-        for i, c in enumerate(clip_track.clips):
-            print(f"  Clip {i}: {c.source_in_ms}-{c.source_out_ms}ms, source={c.source_path or 'main'}")
-
-        result = clip_track.clip_at_timeline(timeline_ms)
-        if result is None:
-            print(f"[Split] No clip found at timeline {timeline_ms}ms")
-            self.statusBar().showMessage(tr("Playhead is not on a clip"), 3000)
-            return
-
-        clip_idx, clip = result
-        print(f"[Split] Found clip {clip_idx}: {clip.source_in_ms}-{clip.source_out_ms}ms")
+        v_idx, clip_idx, clip = res
+        vt = self._project.video_tracks[v_idx]
 
         # Calculate split point in source time
-        offset = sum(c.duration_ms for c in clip_track.clips[:clip_idx])
+        offset = sum(c.duration_ms for c in vt.clips[:clip_idx])
         local_ms = timeline_ms - offset
-        split_source = clip.source_in_ms + local_ms
-
-        print(f"[Split] Offset: {offset}ms, Local: {local_ms}ms, Split at source: {split_source}ms")
+        split_source = clip.source_in_ms + int(local_ms * clip.speed)
 
         # Don't split at very edges (100ms margin for safety)
         if split_source <= clip.source_in_ms + 100 or split_source >= clip.source_out_ms - 100:
-            print(f"[Split] Too close to edge: {split_source} vs {clip.source_in_ms}-{clip.source_out_ms}")
-            self.statusBar().showMessage(tr("Cannot split: too close to clip edge (need 100ms margin)"), 3000)
+            self.statusBar().showMessage(tr("Cannot split: too close to clip edge"), 3000)
             return
 
-        # Pause playback during structural change to avoid player sync issues
+        # Pause playback during structural change
         was_playing = (self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
         if was_playing:
             self._player.pause()
 
         from src.models.video_clip import VideoClip
         original = clip
-        first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path)
-        second = VideoClip(split_source, clip.source_out_ms, source_path=clip.source_path)
+        first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path, speed=clip.speed)
+        second = VideoClip(split_source, clip.source_out_ms, source_path=clip.source_path, speed=clip.speed)
 
-        print(f"[Split] Creating: [{clip.source_in_ms}-{split_source}] + [{split_source}-{clip.source_out_ms}]")
-
-        cmd = SplitClipCommand(clip_track, clip_idx, original, first, second)
+        cmd = SplitClipCommand(self._project, v_idx, clip_idx, original, first, second)
         self._undo_stack.push(cmd)
         
-        # Refresh UI and force sync of _current_clip_index to match the new clip structure
         self._refresh_all_widgets()
         self._sync_clip_index_from_position()
+        self._timeline.select_clip(v_idx, clip_idx + 1)
         
-        # Select the newly created clip (the second part, at clip_idx + 1)
-        self._timeline.select_clip(clip_idx + 1)
-        
-        # Resume playback if it was playing
         if was_playing:
             self._player.play()
         
         self.statusBar().showMessage(f"{tr('Split clip')} {clip_idx + 1} at {timeline_ms}ms", 3000)
 
-    def _on_delete_clip(self, clip_index: int) -> None:
+    def _on_delete_clip(self, track_index: int, clip_index: int) -> None:
         """Delete a video clip with subtitle ripple."""
-        clip_track = self._project.video_clip_track
-        if not clip_track or clip_index < 0 or clip_index >= len(clip_track.clips):
+        if not self._project or track_index >= len(self._project.video_tracks):
             return
-        if len(clip_track.clips) <= 1:
+        vt = self._project.video_tracks[track_index]
+        if clip_index < 0 or clip_index >= len(vt.clips):
+            return
+            
+        if len(vt.clips) <= 1 and len(self._project.video_tracks) == 1:
             self.statusBar().showMessage(tr("Cannot delete the last clip"), 3000)
             return
 
-        clip = clip_track.clips[clip_index]
-        # Calculate clip's timeline range
-        clip_start_tl = sum(c.duration_ms for c in clip_track.clips[:clip_index])
+        clip = vt.clips[clip_index]
+        clip_start_tl = sum(c.duration_ms for c in vt.clips[:clip_index])
         clip_end_tl = clip_start_tl + clip.duration_ms
 
         # Stop playback before deleting
         self._player.pause()
 
         sub_track = self._project.subtitle_track
+        overlay_track = self._project.image_overlay_track
+        
         cmd = DeleteClipCommand(
-            clip_track, clip_index, clip, sub_track, clip_start_tl, clip_end_tl,
+            self._project, track_index, clip_index, clip, sub_track, overlay_track, 
+            clip_start_tl, clip_end_tl,
+            ripple=self._timeline.is_ripple_mode()
         )
         self._undo_stack.push(cmd)
-        self._timeline.select_clip(-1)
+        self._timeline.select_clip(-1, -1)
 
         # Reset player state after deletion
         self._current_clip_index = -1
@@ -2418,20 +2490,53 @@ class MainWindow(QMainWindow):
         self._refresh_all_widgets()
         self.statusBar().showMessage(f"{tr('Deleted clip')} {clip_index + 1}", 3000)
 
-    def _on_clip_trimmed(self, clip_index: int, new_source_in: int, new_source_out: int) -> None:
+    def _on_clip_trimmed(self, track_index: int, clip_index: int, new_source_in: int, new_source_out: int) -> None:
         """Handle clip trim from timeline drag."""
-        clip_track = self._project.video_clip_track
-        if not clip_track or clip_index < 0 or clip_index >= len(clip_track.clips):
+        if not self._project or track_index >= len(self._project.video_tracks):
+            return
+        vt = self._project.video_tracks[track_index]
+        if clip_index < 0 or clip_index >= len(vt.clips):
             return
 
-        clip = clip_track.clips[clip_index]
-        # clip is already reverted to original values by timeline mouseReleaseEvent
+        clip = vt.clips[clip_index]
         old_in = clip.source_in_ms
         old_out = clip.source_out_ms
 
-        cmd = TrimClipCommand(clip_track, clip_index, old_in, old_out, new_source_in, new_source_out)
+        sub_track = self._project.subtitle_track
+        overlay_track = self._project.image_overlay_track
+        cmd = TrimClipCommand(
+            self._project, track_index, clip_index, old_in, old_out, new_source_in, new_source_out,
+            sub_track, overlay_track,
+            ripple=self._timeline.is_ripple_mode()
+        )
         self._undo_stack.push(cmd)
         self._refresh_all_widgets()
+
+    def _on_edit_clip_speed(self, track_index: int, clip_index: int) -> None:
+        """클립 재생 속도 변경 다이얼로그 표시 및 명령 실행."""
+        if not self._project or track_index >= len(self._project.video_tracks):
+            return
+        vt = self._project.video_tracks[track_index]
+        if clip_index < 0 or clip_index >= len(vt.clips):
+            return
+
+        clip = vt.clips[clip_index]
+        old_speed = clip.speed
+
+        speed, ok = QInputDialog.getDouble(
+            self, tr("Clip Speed"), tr("Speed (0.25x - 4.0x):"),
+            old_speed, 0.25, 4.0, 2
+        )
+        if ok and speed != old_speed:
+            sub_track = self._project.subtitle_track
+            overlay_track = self._project.image_overlay_track
+            cmd = EditSpeedCommand(
+                self._project, track_index, clip_index, old_speed, speed,
+                sub_track, overlay_track,
+                ripple=self._timeline.is_ripple_mode()
+            )
+            self._undo_stack.push(cmd)
+            self._refresh_all_widgets()
 
     def _on_take_screenshot(self) -> None:
         """Capture a screenshot of the main window for debugging."""

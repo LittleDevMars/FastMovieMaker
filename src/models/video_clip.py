@@ -21,10 +21,13 @@ class VideoClip:
     source_in_ms: int   # Start position in source video
     source_out_ms: int  # End position in source video
     source_path: str | None = None  # None = project primary video
+    speed: float = 1.0  # 0.25 to 4.0
 
     @property
     def duration_ms(self) -> int:
-        return self.source_out_ms - self.source_in_ms
+        """Visual duration on timeline, affected by speed."""
+        raw = self.source_out_ms - self.source_in_ms
+        return int(raw / self.speed)
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -33,6 +36,8 @@ class VideoClip:
         }
         if self.source_path is not None:
             d["source_path"] = self.source_path
+        if self.speed != 1.0:
+            d["speed"] = self.speed
         return d
 
     @classmethod
@@ -41,6 +46,7 @@ class VideoClip:
             source_in_ms=data["source_in_ms"],
             source_out_ms=data["source_out_ms"],
             source_path=data.get("source_path"),
+            speed=data.get("speed", 1.0),
         )
 
 
@@ -54,6 +60,9 @@ class VideoClipTrack:
     """
 
     clips: list[VideoClip] = field(default_factory=list)
+    locked: bool = False
+    muted: bool = False
+    hidden: bool = False
 
     @classmethod
     def from_full_video(cls, duration_ms: int, source_path: str | None = None) -> VideoClipTrack:
@@ -81,7 +90,9 @@ class VideoClipTrack:
         for clip in self.clips:
             clip_dur = clip.duration_ms
             if timeline_ms < offset + clip_dur:
-                return clip.source_in_ms + (timeline_ms - offset)
+                # local_timeline_pos * speed = local_source_pos
+                local_timeline = timeline_ms - offset
+                return clip.source_in_ms + int(local_timeline * clip.speed)
             offset += clip_dur
         return None
 
@@ -104,7 +115,9 @@ class VideoClipTrack:
                 offset += clip.duration_ms
                 continue
             if clip.source_in_ms <= source_ms < clip.source_out_ms:
-                return offset + (source_ms - clip.source_in_ms)
+                # local_source_pos / speed = local_timeline_pos
+                local_source = source_ms - clip.source_in_ms
+                return offset + int(local_source / clip.speed)
             last_match_clip = clip
             last_match_offset = offset
             offset += clip.duration_ms

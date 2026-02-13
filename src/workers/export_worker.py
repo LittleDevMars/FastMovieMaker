@@ -31,7 +31,12 @@ class ExportWorker(QObject):
         audio_path: Path | None = None,
         overlay_path: Path | None = None,
         image_overlays: list | None = None,
-        video_clips=None,
+        video_tracks: list | None = None,
+        codec: str = "h264",
+        preset: str = "medium",
+        crf: int = 23,
+        scale_width: int = 0,
+        scale_height: int = 0,
     ):
         super().__init__()
         self._video_path = video_path
@@ -40,7 +45,12 @@ class ExportWorker(QObject):
         self._audio_path = audio_path
         self._overlay_path = overlay_path
         self._image_overlays = image_overlays
-        self._video_clips = video_clips
+        self._video_tracks = video_tracks
+        self._codec = codec
+        self._preset = preset
+        self._crf = crf
+        self._scale_width = scale_width
+        self._scale_height = scale_height
 
     def run(self) -> None:
         try:
@@ -52,7 +62,12 @@ class ExportWorker(QObject):
                 audio_path=self._audio_path,
                 overlay_path=self._overlay_path,
                 image_overlays=self._image_overlays,
-                video_clips=self._video_clips,
+                video_tracks=self._video_tracks,
+                codec=self._codec,
+                preset=self._preset,
+                crf=self._crf,
+                scale_width=self._scale_width,
+                scale_height=self._scale_height,
             )
             self.finished.emit(str(self._output_path))
         except Exception as e:

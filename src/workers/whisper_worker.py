@@ -23,6 +23,7 @@ class WhisperWorker(QObject):
 
     status_update = Signal(str)
     progress = Signal(int, int)
+    segment_ready = Signal(object)  # Signal(SubtitleSegment) but avoiding circular import issues in signal def
     finished = Signal(SubtitleTrack)
     error = Signal(str)
 
@@ -62,6 +63,7 @@ class WhisperWorker(QObject):
                 wav_path,
                 language=self._language,
                 on_progress=lambda cur, total: self.progress.emit(cur, total),
+                on_segment=lambda seg: self.segment_ready.emit(seg),
                 check_cancelled=lambda: self._cancelled,
             )
 

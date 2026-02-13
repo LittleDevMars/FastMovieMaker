@@ -22,7 +22,25 @@ class ProjectState:
     default_style: SubtitleStyle = field(default_factory=SubtitleStyle)
     video_has_audio: bool = False  # Whether video file has audio track
     image_overlay_track: ImageOverlayTrack = field(default_factory=ImageOverlayTrack)
-    video_clip_track: VideoClipTrack | None = None  # None = no clipping (legacy/full video)
+    video_tracks: list[VideoClipTrack] = field(default_factory=lambda: [VideoClipTrack()])
+
+    @property
+    def video_clip_track(self) -> VideoClipTrack:
+        """Return the primary video track (backward-compatible)."""
+        if not self.video_tracks:
+            self.video_tracks = [VideoClipTrack()]
+        return self.video_tracks[0]
+
+    @video_clip_track.setter
+    def video_clip_track(self, track: VideoClipTrack | None) -> None:
+        """Set the primary video track (backward-compatible)."""
+        if track is None:
+            self.video_tracks = [VideoClipTrack()]
+        else:
+            if not self.video_tracks:
+                self.video_tracks = [track]
+            else:
+                self.video_tracks[0] = track
 
     @property
     def subtitle_track(self) -> SubtitleTrack:
@@ -53,8 +71,8 @@ class ProjectState:
         paths: set[Path] = set()
         if self.video_path:
             paths.add(self.video_path)
-        if self.video_clip_track:
-            for clip in self.video_clip_track:
+        for vt in self.video_tracks:
+            for clip in vt:
                 if clip.source_path:
                     paths.add(Path(clip.source_path))
         return sorted(paths)
@@ -66,4 +84,4 @@ class ProjectState:
         self.duration_ms = 0
         self.default_style = SubtitleStyle()
         self.image_overlay_track = ImageOverlayTrack()
-        self.video_clip_track = None
+        self.video_tracks = [VideoClipTrack()]

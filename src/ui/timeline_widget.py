@@ -65,14 +65,11 @@ _PLAYHEAD_HIT_PX = 20
 _RULER_H = 14
 _CLIP_Y = 16
 _CLIP_H = 32
-_SEG_Y = 52
 _SEG_H = 40
-_AUDIO_Y = 96
 _AUDIO_H = 34
-_WAVEFORM_Y = 134
 _WAVEFORM_H = 45
-_IMG_BASE_Y_NO_VIDEO = 134
-_IMG_BASE_Y_WITH_VIDEO = 184
+
+# Helper methods for dynamic Y (to be placed in TimelineWidget)
 
 
 class TimelineWidget(QWidget):
@@ -88,10 +85,13 @@ class TimelineWidget(QWidget):
     insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
     image_file_dropped = Signal(str, int)  # (file_path, position_ms)
     video_file_dropped = Signal(str, int)  # (file_path, position_ms)
-    clip_selected = Signal(int)            # 클립 인덱스
-    clip_split_requested = Signal(int)     # 분할 위치(timeline_ms)
-    clip_deleted = Signal(int)             # 클립 인덱스
-    clip_trimmed = Signal(int, int, int)   # (index, new_source_in, new_source_out)
+    clip_selected = Signal(int, int)            # (track_index, clip_index)
+    clip_split_requested = Signal(int)          # (timeline_ms) - No track index needed usually as it splits all or current? 
+                                                # Actually better to track-specific: 
+                                                # self.clip_split_requested.emit(track_idx, timeline_ms)
+    clip_deleted = Signal(int, int)             # (track_index, clip_index)
+    clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
+    clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
 
     # 색상 상수
     # Modern Dark Theme Colors
@@ -173,13 +173,14 @@ class TimelineWidget(QWidget):
         self.setMouseTracking(True)  # 마우스 무버 without 버튼으로도 hover 처리
         self.setAcceptDrops(True)  # 미디어 라이브러리에서 드래그 앤 드롭
 
-        # 배경·테두리 명시 (가독성)
         self.setStyleSheet("""
             TimelineWidget {
                 background-color: rgb(30, 30, 30);
                 border-top: 1px solid rgb(50, 50, 50);
             }
         """)
+
+        self._project = None
 
         self._track: SubtitleTrack | None = None
         self._duration_ms: int = 0   # 비디오 총 길이(ms)
@@ -209,7 +210,9 @@ class TimelineWidget(QWidget):
 
         # 비디오 클립 트랙
         self._clip_track: VideoClipTrack | None = None
+        self._selected_clip_track_index: int = -1
         self._selected_clip_index: int = -1
+        self._drag_clip_track_index: int = -1
         self._drag_clip_index: int = -1
         self._drag_orig_source_in: int = 0
         self._drag_orig_source_out: int = 0
@@ -231,6 +234,9 @@ class TimelineWidget(QWidget):
         self._thumbnail_service = TimelineThumbnailService(self)
         self._thumbnail_service.thumbnail_ready.connect(self.update)
 
+        # 리플 편집 모드
+        self._ripple_enabled: bool = False
+
         # 정적 레이어 캐시 (눈금자+세그먼트+오디오+이미지+웨이브폼)
         self._static_cache: QPixmap | None = None
         self._static_cache_key: tuple | None = None
@@ -238,11 +244,58 @@ class TimelineWidget(QWidget):
         # 드롭 표시
         self._drop_indicator_x: float = -1
 
+    # -------------------------------------------------------- Y Layout
+    def _video_track_y(self, track_index: int) -> int:
+        return _CLIP_Y + (track_index * _CLIP_H)
+
+    def _subtitle_track_y(self) -> int:
+        num_v = len(self._project.video_tracks) if self._project else 1
+        return _CLIP_Y + (num_v * _CLIP_H) + 4
+
+    def _audio_track_y(self) -> int:
+        return self._subtitle_track_y() + _SEG_H + 4
+
+    def _img_overlay_base_y(self) -> int:
+        return self._audio_track_y() + _AUDIO_H + 4
+
+    def _waveform_y(self) -> int:
+        """Calculate Y position for waveform display."""
+        num_v = len(self._project.video_tracks) if self._project else 1
+        return _CLIP_Y + (num_v * _CLIP_H) + 4
+
     # -------------------------------------------------------- 공개 API
+
+    def set_project(self, project) -> None:
+        """Set the current project and refresh."""
+        self._project = project
+        self._track = project.subtitle_track
+        self._image_overlay_track = project.image_overlay_track
+        self._duration_ms = project.duration_ms
+        self._has_video = project.has_video
+        self._invalidate_static_cache()
+        self.update()
+
+    def set_clip_track(self, track: VideoClipTrack | None) -> None:
+        """Set the current active video clip track."""
+        self._clip_track = track
+        self._selected_clip_index = -1
+        self._invalidate_static_cache()
+        self.update()
 
     def set_snap_fps(self, fps: int) -> None:
         """Set FPS for frame snapping during drag. 0 = disabled."""
         self._snap_fps = fps
+
+    def toggle_magnetic_snap(self) -> bool:
+        """Toggle magnetic snap state."""
+        self._snap_enabled = not self._snap_enabled
+        # Clear any existing snap guide
+        self._snap_guide_x = None
+        self.update()
+        return self._snap_enabled
+
+    def is_magnetic_snap_enabled(self) -> bool:
+        return self._snap_enabled
 
     def _snap_ms(self, ms: int) -> int:
         """Snap milliseconds to nearest frame boundary if snap is enabled."""
@@ -312,14 +365,9 @@ class TimelineWidget(QWidget):
         self._invalidate_static_cache()
         self.update()
 
-    def set_clip_track(self, track: VideoClipTrack | None) -> None:
-        self._clip_track = track
-        self._selected_clip_index = -1
-        self._invalidate_static_cache()
-        self.update()
-
-    def select_clip(self, index: int) -> None:
-        self._selected_clip_index = index
+    def select_clip(self, track_index: int, clip_index: int) -> None:
+        self._selected_clip_track_index = track_index
+        self._selected_clip_index = clip_index
         self._invalidate_static_cache()
         self.update()
 
@@ -388,6 +436,15 @@ class TimelineWidget(QWidget):
         self._invalidate_static_cache()
         self.update()
 
+    def set_ripple_mode(self, enabled: bool) -> None:
+        """Set ripple edit mode."""
+        self._ripple_enabled = enabled
+        self.update()
+
+    def is_ripple_mode(self) -> bool:
+        """Return True if ripple edit mode is enabled."""
+        return self._ripple_enabled
+
     # ----------------------------------------------------------- 그리기
 
     def resizeEvent(self, event) -> None:
@@ -421,12 +478,18 @@ class TimelineWidget(QWidget):
         seg_count = len(self._track) if self._track else 0
         ovl_count = len(self._image_overlay_track) if self._image_overlay_track else 0
         clip_count = len(self._clip_track) if self._clip_track else 0
+        # Hidden track states
+        v_h = self._clip_track.hidden if self._clip_track else False
+        s_h = self._track.hidden if self._track else False
+        o_h = self._image_overlay_track.hidden if self._image_overlay_track else False
+
         cache_key = (
             w, h, self._visible_start_ms, visible_ms,
             self._selected_index, self._selected_overlay_index,
             self._selected_clip_index, clip_count,
             seg_count, ovl_count, self._has_video,
             id(self._waveform_data),
+            v_h, s_h, o_h
         )
 
         if self._static_cache_key != cache_key or self._static_cache is None:
@@ -437,12 +500,23 @@ class TimelineWidget(QWidget):
             pp.fillRect(0, 0, w, h, self._BG_COLOR)
 
             self._draw_ruler(pp, w, h, visible_ms)
-            self._draw_clips(pp, w)
-            self._draw_video_audio(pp, w, h)
-            if self._track:
+            
+            # Video Tracks
+            if self._project:
+                for idx, vt in enumerate(self._project.video_tracks):
+                    if not vt.hidden:
+                        self._draw_track_clips(pp, idx, vt)
+                
+                # Waveform (Legacy: only for track 0 if single)
+                if not self._project.video_tracks[0].hidden:
+                    self._draw_video_audio(pp, w, h)
+            
+            if self._track and not self._track.hidden:
                 self._draw_audio_track(pp, h)
                 self._draw_segments(pp, h)
-            self._draw_image_overlays(pp, h)
+            
+            if self._image_overlay_track and not self._image_overlay_track.hidden:
+                self._draw_image_overlays(pp, h)
             pp.end()
 
             self._static_cache = pixmap
@@ -487,44 +561,36 @@ class TimelineWidget(QWidget):
         candidates = self._get_magnetic_snap_candidates(skip_clip_index=self._drag_clip_index)
 
         if self._drag_mode == _DragMode.CLIP_TRIM_LEFT:
-            # Changing Source In -> Changes Duration -> Changes End Time
-            # We snap the End Time
-            
-            new_in = max(0, self._drag_orig_source_in + dx_ms)
-            new_in = min(new_in, clip.source_out_ms - 100)
-            
-            new_duration = clip.source_out_ms - new_in
-            new_end = clip_start_ms + new_duration
+            # Snap visually on timeline
+            old_visual_duration = (self._drag_orig_source_out - self._drag_orig_source_in) / clip.speed
+            new_visual_duration = max(100 / clip.speed, old_visual_duration - dx_ms)
+            new_end = clip_start_ms + new_visual_duration
             
             snapped_end = self._apply_magnetic_snap(new_end, candidates)
             if self._snap_guide_x is None:
-                 snapped_end = self._snap_ms(new_end)
+                 snapped_end = self._snap_ms(int(new_end))
             
-            # Recalculate new_in based on snapped end
-            final_duration = snapped_end - clip_start_ms
-            # Ensure min duration
-            if final_duration < 100:
-                final_duration = 100
+            final_visual_duration = snapped_end - clip_start_ms
+            if final_visual_duration < 100 / clip.speed:
+                final_visual_duration = 100 / clip.speed
                 
-            clip.source_in_ms = clip.source_out_ms - final_duration
+            # source_duration = visual_duration * speed
+            clip.source_in_ms = int(clip.source_out_ms - (final_visual_duration * clip.speed))
 
         elif self._drag_mode == _DragMode.CLIP_TRIM_RIGHT:
-            # Changing Source Out -> Changes Duration -> Changes End Time
-            
-            new_out = max(clip.source_in_ms + 100, self._drag_orig_source_out + dx_ms)
-            
-            new_duration = new_out - clip.source_in_ms
-            new_end = clip_start_ms + new_duration
+            old_visual_duration = (self._drag_orig_source_out - self._drag_orig_source_in) / clip.speed
+            new_visual_duration = max(100 / clip.speed, old_visual_duration + dx_ms)
+            new_end = clip_start_ms + new_visual_duration
             
             snapped_end = self._apply_magnetic_snap(new_end, candidates)
             if self._snap_guide_x is None:
-                 snapped_end = self._snap_ms(new_end)
+                 snapped_end = self._snap_ms(int(new_end))
                  
-            final_duration = snapped_end - clip_start_ms
-            if final_duration < 100:
-                final_duration = 100
+            final_visual_duration = snapped_end - clip_start_ms
+            if final_visual_duration < 100 / clip.speed:
+                final_visual_duration = 100 / clip.speed
                 
-            clip.source_out_ms = clip.source_in_ms + final_duration
+            clip.source_out_ms = int(clip.source_in_ms + (final_visual_duration * clip.speed))
 
         self._invalidate_static_cache()
         self.update()
@@ -582,7 +648,7 @@ class TimelineWidget(QWidget):
         if wf is None or wf.duration_ms <= 0:
             return
 
-        waveform_y = _WAVEFORM_Y
+        waveform_y = self._waveform_y()
         waveform_h = _WAVEFORM_H
 
         visible_ms = self._visible_range_ms()
@@ -663,121 +729,68 @@ class TimelineWidget(QWidget):
         p.end()
         return img
 
-    def _draw_video_audio_fallback(self, painter: QPainter, w: int) -> None:
-        """웨이브폼 데이터 없을 때 단순 바 + 'Loading waveform...' 표시."""
-        video_audio_y = _WAVEFORM_Y
-        video_audio_h = _WAVEFORM_H
-
-        x1 = self._ms_to_x(0)
-        x2 = self._ms_to_x(self._duration_ms)
-
-        if x2 < 0 or x1 > w:
-            return
-
-        rect = QRectF(x1, video_audio_y, max(x2 - x1, 2), video_audio_h)
-        painter.setPen(QPen(self._VIDEO_AUDIO_BORDER, 1))
-        painter.setBrush(QBrush(self._VIDEO_AUDIO_COLOR))
-        painter.drawRoundedRect(rect, 3, 3)
-
-        if x2 - x1 > 100:
-            painter.setPen(QColor(255, 255, 255))
-            painter.setFont(QFont("Arial", 9))
-            label_rect = QRectF(x1 + 5, video_audio_y, x2 - x1 - 10, video_audio_h)
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Loading waveform...")
-
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
         """세그먼트별 TTS 오디오 구간을 녹색 박스로 그림."""
         if not self._track:
             return
 
-        audio_y = _AUDIO_Y
-        audio_h = _AUDIO_H
-
-        # Draw individual audio segments
+        y = self._audio_track_y()
+        track_h = _AUDIO_H
+        
         for i, seg in enumerate(self._track):
-            # Only draw if this segment has audio
             if not seg.audio_file:
                 continue
-
             x1 = self._ms_to_x(seg.start_ms)
             x2 = self._ms_to_x(seg.end_ms)
-
             if x2 < 0 or x1 > self.width():
                 continue
-
-            rect = QRectF(x1, audio_y, max(x2 - x1, 2), audio_h)
-
-            # Highlight selected audio segment
-            if i == self._selected_index:
-                painter.setPen(QPen(self._AUDIO_SELECTED_BORDER, 2))
-                painter.setBrush(QBrush(self._AUDIO_SELECTED_COLOR))
-            else:
-                painter.setPen(QPen(self._AUDIO_BORDER, 1))
-                painter.setBrush(QBrush(self._AUDIO_COLOR))
-
-            painter.drawRoundedRect(rect, 3, 3)
-
-            # Draw label (segment number)
-            if rect.width() > 30:
-                painter.setPen(QColor("white"))
-                painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-                text_rect = rect.adjusted(4, 2, -4, -2)
-                painter.drawText(
-                    text_rect,
-                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
-                    f"🔊 {i+1}",
-                )
+            
+            rect = QRectF(x1, y, x2 - x1, track_h)
+            painter.setBrush(QBrush(self._AUDIO_COLOR_TOP))
+            painter.setPen(QPen(self._AUDIO_BORDER, 1))
+            painter.drawRoundedRect(rect, 4, 4)
 
     def _draw_segments(self, painter: QPainter, h: int) -> None:
         """자막 세그먼트를 파란 그라데이션 박스로 그리기."""
-        seg_y = _SEG_Y
-        seg_h = _SEG_H
+        if not self._track:
+            return
 
+        y = self._subtitle_track_y()
+        track_h = _SEG_H
+        
         for i, seg in enumerate(self._track):
             x1 = self._ms_to_x(seg.start_ms)
             x2 = self._ms_to_x(seg.end_ms)
             if x2 < 0 or x1 > self.width():
                 continue
-
-            rect = QRectF(x1, seg_y, max(x2 - x1, 2), seg_h)
-
-            if i == self._selected_index:
-                painter.setPen(QPen(self._SELECTED_BORDER, 2))
-                # Selection Glow
-                glow = QLinearGradient(0, seg_y, 0, seg_y + seg_h)
-                glow.setColorAt(0, self._SELECTED_COLOR)
-                glow.setColorAt(1, self._SELECTED_COLOR.darker(130))
-                painter.setBrush(QBrush(glow))
-            else:
-                painter.setPen(QPen(self._SEGMENT_BORDER, 1))
-                # Standard Gradient
-                grad = QLinearGradient(0, seg_y, 0, seg_y + seg_h)
-                grad.setColorAt(0, self._SEGMENT_COLOR_TOP)
-                grad.setColorAt(1, self._SEGMENT_COLOR_BOT)
-                painter.setBrush(QBrush(grad))
             
-            # Rounded Corners (6px)
-            painter.drawRoundedRect(rect, 6, 6)
-
-            if rect.width() > 30:
-                painter.setPen(QColor("white"))
-                painter.setFont(QFont("Arial", 9))
-                text_rect = rect.adjusted(6, 2, -6, -2)
-                painter.drawText(
-                    text_rect,
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    painter.fontMetrics().elidedText(
-                        seg.text, Qt.TextElideMode.ElideRight, int(text_rect.width())
-                    ),
-                )
+            rect = QRectF(x1, y, x2 - x1, track_h)
+            is_selected = (self._selected_index == i)
+            
+            top = self._SEGMENT_COLOR_TOP
+            bot = self._SEGMENT_COLOR_BOT
+            border = self._SEGMENT_BORDER
+            
+            if is_selected:
+                border = self._SELECTED_BORDER
+                painter.setBrush(QBrush(self._SELECTED_GLOW))
+                painter.drawRect(rect.adjusted(-2, -2, 2, 2))
+                
+            grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            grad.setColorAt(0, top)
+            grad.setColorAt(1, bot)
+            
+            painter.setBrush(grad)
+            painter.setPen(QPen(border, 1))
+            painter.drawRoundedRect(rect, 4, 4)
+            
+            painter.setPen(Qt.GlobalColor.white)
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(rect.adjusted(5, 0, -5, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, seg.text)
 
     # ---- 이미지 오버레이 레이아웃 상수 & 헬퍼 ----
     _IMG_ROW_H = 28
     _IMG_ROW_GAP = 2
-
-    def _img_overlay_base_y(self) -> int:
-        """이미지 오버레이 트랙의 기준 y 좌표."""
-        return _IMG_BASE_Y_NO_VIDEO if not self._has_video else _IMG_BASE_Y_WITH_VIDEO
 
     def _compute_overlay_rows(self) -> list[int]:
         """각 오버레이의 row 인덱스를 계산 (시간 겹침 → 다음 row)."""
@@ -887,22 +900,25 @@ class TimelineWidget(QWidget):
             QPoint(int(x) - 6, 5),
         ]))
 
-    def _draw_clips(self, painter: QPainter, w: int) -> None:
-        """비디오 클립들을 그라데이션 박스로 그림."""
-        if not self._clip_track or not self._clip_track.clips:
+    def _draw_track_clips(self, painter: QPainter, track_idx: int, track: VideoClipTrack) -> None:
+        """Draw clips for a specific video track."""
+        if not track.clips:
             return
 
+        w = self.width()
+        y = self._video_track_y(track_idx)
+        h = _CLIP_H
+        
         # Assign colors to unique source paths
-        source_paths = set(c.source_path for c in self._clip_track.clips)
+        source_paths = set(c.source_path for c in track.clips)
         source_color_map = {}
-        # Fix: source_path can be None, which breaks sorted() string comparison
         for i, path in enumerate(sorted(list(source_paths), key=lambda x: str(x) if x is not None else "")):
             source_color_map[path] = i
 
         # Calculate clip positions
-        clip_starts = self._clip_track.clip_boundaries_ms()
+        clip_starts = track.clip_boundaries_ms()
 
-        for i, clip in enumerate(self._clip_track.clips):
+        for i, clip in enumerate(track.clips):
             start_ms = clip_starts[i]
             x1 = self._ms_to_x(start_ms)
             x2 = self._ms_to_x(start_ms + clip.duration_ms)
@@ -910,106 +926,67 @@ class TimelineWidget(QWidget):
             if x2 < 0 or x1 > w:
                 continue
 
-            rect = QRectF(x1, _CLIP_Y, max(x2 - x1, 2), _CLIP_H)
+            rect = QRectF(x1, y, max(x2 - x1, 2), h)
             
-            if i == self._selected_clip_index:
+            is_selected = (self._selected_clip_track_index == track_idx and self._selected_clip_index == i)
+            
+            if is_selected:
                 painter.setPen(QPen(self._CLIP_SELECTED_BORDER, 2))
-                
-                # Selection Glow Effect
-                glow_gradient = QLinearGradient(0, _CLIP_Y, 0, _CLIP_Y + _CLIP_H)
+                glow_gradient = QLinearGradient(0, y, 0, y + h)
                 glow_gradient.setColorAt(0, self._CLIP_SELECTED_COLOR)
                 glow_gradient.setColorAt(1, self._CLIP_SELECTED_COLOR.darker(120))
                 painter.setBrush(QBrush(glow_gradient))
             else:
                 color_idx = source_color_map.get(clip.source_path, 0) % len(self._SOURCE_COLORS)
                 c_top, c_bot, border_color = self._SOURCE_COLORS[color_idx]
-                
-                # Gradient Background
-                gradient = QLinearGradient(0, _CLIP_Y, 0, _CLIP_Y + _CLIP_H)
+                gradient = QLinearGradient(0, y, 0, y + h)
                 gradient.setColorAt(0, c_top)
                 gradient.setColorAt(1, c_bot)
-                
-                painter.setPen(QPen(border_color, 1))
                 painter.setBrush(QBrush(gradient))
             
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rect, 6, 6)
             
             # --- Filmstrip Thumbnails ---
-            if clip.source_path:  # Only for external video files
-                # Calculate visible range for this clip
+            if clip.source_path:
                 vis_x1 = max(0, int(x1))
                 vis_x2 = min(w, int(x2))
                 
                 if vis_x2 > vis_x1:
-                    # Align to grid to prevent jitter
                     interval = self._THUMBNAIL_INTERVAL_PX
                     start_grid = (vis_x1 // interval) * interval
                     
-                    # Save painter state for clipping
                     painter.save()
                     painter.setClipRect(rect)
                     
                     for tx in range(start_grid, vis_x2, interval):
-                        # Skip if before clip start
-                        if tx + interval < x1: 
-                            continue
-                            
-                        # Calculate source timestamp
+                        if tx + interval < x1: continue
                         offset_ms = (tx - x1) / self._px_per_ms
-                        source_ms = int(clip.source_in_ms + offset_ms)
+                        source_ms = int(clip.source_in_ms + offset_ms * clip.speed)
                         
-                        # Request thumbnail
                         thumb = self._thumbnail_service.request_thumbnail(
-                            clip.source_path, source_ms, _CLIP_H
+                            clip.source_path, source_ms, h
                         )
-                        
                         if thumb:
-                            # Draw thumbnail centered or stretched? 
-                            # Stretched to interval width looks more like filmstrip
-                            # But aspect ratio might be wrong. 
-                            # Let's draw it "aspect fit" or "slice".
-                            # Filmstrip usually fills the height.
-                            target_rect = QRectF(float(tx), float(_CLIP_Y), float(interval), float(_CLIP_H))
-                            
-                            # Draw slice of image or repeat? 
-                            # Simple approach: Draw entire thumbnail at position, properly clipped
-                            # Actually, request_thumbnail returns an image of height _CLIP_H.
-                            # We should just draw it.
-                            t_w = thumb.width()
-                            t_h = thumb.height()
-                            
-                            # Center the thumbnail in the interval slot?
-                            # Or just place it.
-                            # Better: Draw at tx.
-                            painter.drawImage(tx, int(_CLIP_Y), thumb)
-                            
+                            target_rect = QRectF(tx, y, interval, h)
+                            painter.drawImage(target_rect.toRect(), thumb)
+                    
                     painter.restore()
 
-            # Rounded Corners (6px)
-            # painter.drawRoundedRect(rect, 6, 6) # This line was moved up
-
-            # Draw white split line at the start if not the first clip
-            if i > 0:
-                painter.setPen(QPen(self._CLIP_SPLIT_LINE, 2))
-                painter.drawLine(int(x1), _CLIP_Y, int(x1), _CLIP_Y + _CLIP_H)
-
-            # Draw labels only if wide enough
-            if rect.width() > 40:
-                painter.setPen(QColor("white"))
-                painter.setFont(QFont("Arial", 9))
-                
-                idx_rect = QRectF(x1 + 4, _CLIP_Y, 20, _CLIP_H)
-                painter.drawText(idx_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, str(i + 1))
-                
-                name_rect = QRectF(x1 + 24, _CLIP_Y, rect.width() - 28, _CLIP_H)
+            # Label
+            if clip.source_path:
                 from pathlib import Path
-                fname = Path(clip.source_path).name if clip.source_path else "Main Video"
-                painter.drawText(
-                    name_rect,
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    painter.fontMetrics().elidedText(fname, Qt.TextElideMode.ElideRight, int(name_rect.width()))
-                )
+                label = Path(clip.source_path).stem
+            else:
+                label = "Clip"
+            
+            if hasattr(clip, "speed") and clip.speed != 1.0:
+                 label += f" ({clip.speed:.2f}x)"
+            
+            if rect.width() > 40:
+                painter.setPen(Qt.GlobalColor.white)
+                painter.setFont(QFont("Arial", 8))
+                painter.drawText(rect.adjusted(10, 2, -10, -2), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._duration_ms <= 0 or self._px_per_ms <= 0:
@@ -1026,7 +1003,7 @@ class TimelineWidget(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             return
 
-        seg_idx, hit = self._hit_test(x, y)
+        seg_idx, hit, v_idx = self._hit_test(x, y)
 
         # 플레이헤드 드래그
         if hit == "playhead":
@@ -1034,81 +1011,96 @@ class TimelineWidget(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
             return
 
-        # 오디오 트랙 영역
-        if hit == "audio_body":
-            self._audio_selected = True
-            self._selected_index = seg_idx
-            self._selected_overlay_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_MOVE, x)
-            self.segment_selected.emit(seg_idx)
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        # 비디오 클립 영역 (Locked check)
+        if hit.startswith("clip"):
+            vt = self._project.video_tracks[v_idx] if self._project else None
+            if vt and vt.locked:
+                return
+            if hit == "clip_body":
+                self._selected_clip_track_index = v_idx
+                self._selected_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self.clip_selected.emit(v_idx, seg_idx)
+            elif hit == "clip_right_edge":
+                self._selected_clip_track_index = v_idx
+                self._selected_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self._start_clip_drag(_DragMode.CLIP_TRIM_RIGHT, v_idx, seg_idx, x)
+                self.clip_selected.emit(v_idx, seg_idx)
+            self.update()
             return
-        elif hit == "audio_left_edge":
-            self._audio_selected = True
-            self._selected_index = seg_idx
-            self._selected_overlay_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_RESIZE_LEFT, x)
-            self.segment_selected.emit(seg_idx)
-            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+        # 오디오 트랙 영역 (Locked check)
+        if hit.startswith("audio"):
+            if self._track and self._track.locked:
+                return
+            if hit == "body":
+                self._audio_selected = True
+                self._selected_index = seg_idx
+                self._selected_overlay_index = -1
+                self._start_audio_drag(_DragMode.AUDIO_MOVE, x)
+                self.segment_selected.emit(seg_idx)
+                self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            elif hit == "left_edge":
+                self._audio_selected = True
+                self._selected_index = seg_idx
+                self._selected_overlay_index = -1
+                self._start_audio_drag(_DragMode.AUDIO_RESIZE_LEFT, x)
+                self.segment_selected.emit(seg_idx)
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            elif hit == "right_edge":
+                self._audio_selected = True
+                self._selected_index = seg_idx
+                self._selected_overlay_index = -1
+                self._start_audio_drag(_DragMode.AUDIO_RESIZE_RIGHT, x)
+                self.segment_selected.emit(seg_idx)
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            self.update()
+            self.update()
             return
-        elif hit == "audio_right_edge":
-            self._audio_selected = True
-            self._selected_index = seg_idx
-            self._selected_overlay_index = -1
-            self._start_audio_drag(_DragMode.AUDIO_RESIZE_RIGHT, x)
-            self.segment_selected.emit(seg_idx)
-            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+        # 이미지 오버레이 영역 (Locked check)
+        if hit.startswith("img"):
+            if self._image_overlay_track and self._image_overlay_track.locked:
+                return
+            if hit == "img_left_edge":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_RESIZE_LEFT, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
+            elif hit == "img_right_edge":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_RESIZE_RIGHT, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
+            elif hit == "img_body":
+                self._selected_overlay_index = seg_idx
+                self._selected_index = -1
+                self._start_image_drag(_DragMode.IMAGE_MOVE, seg_idx, x)
+                self.image_overlay_selected.emit(seg_idx)
             return
-        
-        # 비디오 클립 영역
-        elif hit == "clip_body":
-            self._selected_clip_index = seg_idx
-            self._selected_index = -1
-            self._selected_overlay_index = -1
-            self.clip_selected.emit(seg_idx)
-        elif hit == "clip_left_edge":
-            self._selected_clip_index = seg_idx
-            self._selected_index = -1
-            self._selected_overlay_index = -1
-            self._start_clip_drag(_DragMode.CLIP_TRIM_LEFT, seg_idx, x)
-            self.clip_selected.emit(seg_idx)
-        elif hit == "clip_right_edge":
-            self._selected_clip_index = seg_idx
-            self._selected_index = -1
-            self._selected_overlay_index = -1
-            self._start_clip_drag(_DragMode.CLIP_TRIM_RIGHT, seg_idx, x)
-            self.clip_selected.emit(seg_idx)
-        # 이미지 오버레이 영역
-        elif hit == "img_left_edge":
-            self._selected_overlay_index = seg_idx
-            self._selected_index = -1
-            self._start_image_drag(_DragMode.IMAGE_RESIZE_LEFT, seg_idx, x)
-            self.image_overlay_selected.emit(seg_idx)
-        elif hit == "img_right_edge":
-            self._selected_overlay_index = seg_idx
-            self._selected_index = -1
-            self._start_image_drag(_DragMode.IMAGE_RESIZE_RIGHT, seg_idx, x)
-            self.image_overlay_selected.emit(seg_idx)
-        elif hit == "img_body":
-            self._selected_overlay_index = seg_idx
-            self._selected_index = -1
-            self._start_image_drag(_DragMode.IMAGE_MOVE, seg_idx, x)
-            self.image_overlay_selected.emit(seg_idx)
-        # 자막/오디오 세그먼트: 같은 hit 영역(연동 이동)
-        elif hit == "left_edge":
-            self._audio_selected = False
-            self._selected_overlay_index = -1
-            self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
-        elif hit == "right_edge":
-            self._audio_selected = False
-            self._selected_overlay_index = -1
-            self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
-        elif hit == "body":
-            self._audio_selected = False
-            self._selected_overlay_index = -1
-            self._selected_index = seg_idx
-            self.segment_selected.emit(seg_idx)
-            self._start_drag(_DragMode.MOVE, seg_idx, x)
+
+        # 자막 세그먼트 (Locked check)
+        elif hit in ("left_edge", "right_edge", "body"):
+            if self._track and self._track.locked:
+                return
+            if hit == "left_edge":
+                self._audio_selected = False
+                self._selected_overlay_index = -1
+                self._start_drag(_DragMode.RESIZE_LEFT, seg_idx, x)
+            elif hit == "right_edge":
+                self._audio_selected = False
+                self._selected_overlay_index = -1
+                self._start_drag(_DragMode.RESIZE_RIGHT, seg_idx, x)
+            elif hit == "body":
+                self._audio_selected = False
+                self._selected_overlay_index = -1
+                self._selected_index = seg_idx
+                self.segment_selected.emit(seg_idx)
+                self._start_drag(_DragMode.MOVE, seg_idx, x)
+            return
         else:
             self._audio_selected = False
             self._selected_index = -1
@@ -1155,7 +1147,7 @@ class TimelineWidget(QWidget):
 
         # 호버 시 커서 변경 (플레이헤드·가장자리·본문)
         if self._drag_mode == _DragMode.NONE:
-            seg_idx, hit = self._hit_test(x, y)
+            seg_idx, hit, v_idx = self._hit_test(x, y)
             if hit == "playhead":
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
                 return
@@ -1184,16 +1176,20 @@ class TimelineWidget(QWidget):
                 if ov.start_ms != self._drag_orig_start_ms or ov.end_ms != self._drag_orig_end_ms:
                     self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
         elif self._drag_mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
-            if self._clip_track and 0 <= self._drag_clip_index < len(self._clip_track.clips):
-                clip = self._clip_track.clips[self._drag_clip_index]
-                new_in = clip.source_in_ms
-                new_out = clip.source_out_ms
-                if new_in != self._drag_orig_source_in or new_out != self._drag_orig_source_out:
-                    # Revert to original so undo command's redo() applies the change
-                    clip.source_in_ms = self._drag_orig_source_in
-                    clip.source_out_ms = self._drag_orig_source_out
-                    self.clip_trimmed.emit(self._drag_clip_index, new_in, new_out)
+            if self._project and 0 <= self._drag_clip_track_index < len(self._project.video_tracks):
+                vt = self._project.video_tracks[self._drag_clip_track_index]
+                if 0 <= self._drag_clip_index < len(vt.clips):
+                    clip = vt.clips[self._drag_clip_index]
+                    new_in = clip.source_in_ms
+                    new_out = clip.source_out_ms
+                    if new_in != self._drag_orig_source_in or new_out != self._drag_orig_source_out:
+                        # Revert to original so undo command's redo() applies the change
+                        clip.source_in_ms = self._drag_orig_source_in
+                        clip.source_out_ms = self._drag_orig_source_out
+                        # We might need to update this signal to include track_index
+                        self.clip_trimmed.emit(self._drag_clip_index, new_in, new_out)
             self._drag_clip_index = -1
+            self._drag_clip_track_index = -1
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index = -1
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -1207,26 +1203,21 @@ class TimelineWidget(QWidget):
         menu = QMenu(self)
 
         # 비디오 클립 트랙 영역 우클릭
-        if self._clip_track and _CLIP_Y <= y <= _CLIP_Y + _CLIP_H:
-            seg_idx, hit = self._hit_test(x, y)
-            if hit.startswith("clip_"):
-                split_act = menu.addAction(tr("Split at Playhead (Ctrl+B)"))
-                delete_act = None
-                if len(self._clip_track.clips) > 1:
-                    delete_act = menu.addAction(tr("Delete Clip"))
-                action = menu.exec(event.globalPos())
-                if action == split_act:
-                    self.clip_split_requested.emit(self._playhead_ms)
-                elif delete_act and action == delete_act:
-                    self.clip_deleted.emit(seg_idx)
-                return
+        seg_idx, hit, v_idx = self._hit_test(x, y)
+        if hit.startswith("clip_"):
+            vt = self._project.video_tracks[v_idx] if self._project else None
+            split_act = menu.addAction(tr("Split at Playhead (Ctrl+B)"))
+            delete_act = None
+            if vt and len(vt.clips) > 1:
+                delete_act = menu.addAction(tr("Delete Clip"))
+            action = menu.exec(event.globalPos())
+            if action == split_act:
+                self.clip_split_requested.emit(self._playhead_ms)
+            elif delete_act and action == delete_act:
+                self.clip_deleted.emit(seg_idx) # Optional: track index emit?
+            return
 
-        img_base_y = self._img_overlay_base_y()
-        rows = self._compute_overlay_rows()
-        total_h = self._img_overlay_total_h(rows)
-        if img_base_y <= y <= img_base_y + total_h:
-            seg_idx, hit = self._hit_test(x, y)
-            if hit.startswith("img_"):
+        if hit.startswith("img_"):
                 # Size presets submenu
                 size_menu = menu.addMenu(tr("Resize"))
                 fit_act = size_menu.addAction(tr("Fit to Screen (Keep Ratio)"))
@@ -1712,39 +1703,55 @@ class TimelineWidget(QWidget):
                 
             new_end = max(limit_left, min(self._duration_ms, new_end))
             
-            ov.end_ms = new_end
-            self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
-            self._invalidate_static_cache()
-            self.update()
-
-    def _start_clip_drag(self, mode: _DragMode, clip_idx: int, x: float) -> None:
-        """비디오 클립 트림 드래그 시작."""
-        self._drag_mode = mode
-        self._drag_clip_index = clip_idx
-        self._drag_start_x = x
-        if self._clip_track and 0 <= clip_idx < len(self._clip_track.clips):
-            clip = self._clip_track.clips[clip_idx]
-            self._drag_orig_source_in = clip.source_in_ms
-            self._drag_orig_source_out = clip.source_out_ms
-        self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-
     def _handle_clip_drag(self, x: float) -> None:
         """비디오 클립 트림 처리."""
-        if not self._clip_track or self._drag_clip_index < 0:
+        if not self._project or self._drag_clip_track_index < 0:
             return
-        if self._drag_clip_index >= len(self._clip_track.clips):
+        vt = self._project.video_tracks[self._drag_clip_track_index]
+        if self._drag_clip_index < 0 or self._drag_clip_index >= len(vt.clips):
             return
 
         dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
-        clip = self._clip_track.clips[self._drag_clip_index]
+        clip = vt.clips[self._drag_clip_index]
+        
+        # Clip start time on timeline (visual start)
+        boundaries = vt.clip_boundaries_ms()
+        if self._drag_clip_index >= len(boundaries):
+             return
+        clip_start_ms = boundaries[self._drag_clip_index]
+
+        candidates = self._get_magnetic_snap_candidates(skip_clip_index=self._drag_clip_index)
 
         if self._drag_mode == _DragMode.CLIP_TRIM_LEFT:
-            new_in = max(0, self._drag_orig_source_in + dx_ms)
-            new_in = min(new_in, clip.source_out_ms - 100)  # min 100ms
-            clip.source_in_ms = new_in
+            # Snap visually on timeline
+            old_visual_duration = (self._drag_orig_source_out - self._drag_orig_source_in) / clip.speed
+            new_visual_duration = max(100 / clip.speed, old_visual_duration - dx_ms)
+            new_end = clip_start_ms + new_visual_duration
+            
+            snapped_end = self._apply_magnetic_snap(new_end, candidates)
+            if self._snap_guide_x is None:
+                 snapped_end = self._snap_ms(int(new_end))
+            
+            final_visual_duration = snapped_end - clip_start_ms
+            if final_visual_duration < 100 / clip.speed:
+                final_visual_duration = 100 / clip.speed
+                
+            clip.source_in_ms = int(clip.source_out_ms - (final_visual_duration * clip.speed))
+
         elif self._drag_mode == _DragMode.CLIP_TRIM_RIGHT:
-            new_out = max(clip.source_in_ms + 100, self._drag_orig_source_out + dx_ms)
-            clip.source_out_ms = new_out
+            old_visual_duration = (self._drag_orig_source_out - self._drag_orig_source_in) / clip.speed
+            new_visual_duration = max(100 / clip.speed, old_visual_duration + dx_ms)
+            new_end = clip_start_ms + new_visual_duration
+            
+            snapped_end = self._apply_magnetic_snap(new_end, candidates)
+            if self._snap_guide_x is None:
+                 snapped_end = self._snap_ms(int(new_end))
+                 
+            final_visual_duration = snapped_end - clip_start_ms
+            if final_visual_duration < 100 / clip.speed:
+                final_visual_duration = 100 / clip.speed
+                
+            clip.source_out_ms = int(clip.source_in_ms + (final_visual_duration * clip.speed))
 
         self._invalidate_static_cache()
         self.update()
@@ -1783,31 +1790,58 @@ class TimelineWidget(QWidget):
         self._invalidate_static_cache()
         self.update()
 
-    def _hit_test(self, x: float, y: float) -> tuple[int, str]:
-        """(x,y)에 해당하는 (세그먼트 인덱스, 히트 영역) 반환. 없으면 (-1, '')."""
-        # 플레이헤드 우선 (클릭 편하게 넓은 히트 영역)
+    def _hit_test(self, x: float, y: float) -> tuple[int, str, int]:
+        """(x,y)에 해당하는 (인덱스, 히트 영역, 트랙 인덱스) 반환. 없으면 (-1, '', -1)."""
         playhead_x = self._ms_to_x(self._playhead_ms)
         if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
-            return -3, "playhead"
+            return -3, "playhead", -1
 
-        # 비디오 클립 트랙
-        if self._clip_track and _CLIP_Y <= y <= _CLIP_Y + _CLIP_H:
-            offset = 0
-            for i, clip in enumerate(self._clip_track.clips):
-                x1 = self._ms_to_x(offset)
-                x2 = self._ms_to_x(offset + clip.duration_ms)
-                offset += clip.duration_ms
-                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                    continue
-                if abs(x - x1) <= _EDGE_PX and i > 0:
-                    return i, "clip_left_edge"
-                if abs(x - x2) <= _EDGE_PX and i < len(self._clip_track.clips) - 1:
-                    return i, "clip_right_edge"
-                if x1 <= x <= x2:
-                    return i, "clip_body"
+        # Video tracks
+        if self._project:
+            for v_idx, vt in enumerate(self._project.video_tracks):
+                track_y = self._video_track_y(v_idx)
+                if track_y <= y < track_y + _CLIP_H:
+                    offset = 0
+                    for i, clip in enumerate(vt.clips):
+                        x1 = self._ms_to_x(offset)
+                        x2 = self._ms_to_x(offset + clip.duration_ms)
+                        offset += clip.duration_ms
+                        if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                            continue
+                        if abs(x - x1) <= _EDGE_PX and i > 0:
+                            return i, "clip_left_edge", v_idx
+                        if abs(x - x2) <= _EDGE_PX and i < len(vt.clips) - 1:
+                            return i, "clip_right_edge", v_idx
+                        if x1 <= x <= x2:
+                            return i, "clip_body", v_idx
 
-        # 이미지 오버레이 세그먼트 (row 별 y 좌표 계산)
-        if self._image_overlay_track and len(self._image_overlay_track) > 0:
+        # Subtitle tracks
+        seg_y = self._subtitle_track_y()
+        if seg_y <= y < seg_y + _SEG_H:
+             if self._track:
+                 for i, seg in enumerate(self._track):
+                     x1 = self._ms_to_x(seg.start_ms)
+                     x2 = self._ms_to_x(seg.end_ms)
+                     if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
+                     if abs(x - x1) <= _EDGE_PX: return i, "left_edge", 0
+                     if abs(x - x2) <= _EDGE_PX: return i, "right_edge", 0
+                     if x1 <= x <= x2: return i, "body", 0
+
+        # Audio tracks
+        audio_y = self._audio_track_y()
+        if audio_y <= y < audio_y + _AUDIO_H:
+             if self._track:
+                 for i, seg in enumerate(self._track):
+                     if not seg.audio_file: continue
+                     x1 = self._ms_to_x(seg.start_ms)
+                     x2 = self._ms_to_x(seg.end_ms)
+                     if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
+                     if abs(x - x1) <= _EDGE_PX: return i, "left_edge", 0
+                     if abs(x - x2) <= _EDGE_PX: return i, "right_edge", 0
+                     if x1 <= x <= x2: return i, "body", 0
+
+        # Overlays
+        if self._image_overlay_track:
             img_base_y = self._img_overlay_base_y()
             rows = self._compute_overlay_rows()
             total_h = self._img_overlay_total_h(rows)
@@ -1815,56 +1849,15 @@ class TimelineWidget(QWidget):
                 for i, ov in enumerate(self._image_overlay_track):
                     row = rows[i]
                     ov_y = img_base_y + row * (self._IMG_ROW_H + self._IMG_ROW_GAP)
-                    if not (ov_y <= y <= ov_y + self._IMG_ROW_H):
-                        continue
+                    if not (ov_y <= y <= ov_y + self._IMG_ROW_H): continue
                     x1 = self._ms_to_x(ov.start_ms)
                     x2 = self._ms_to_x(ov.end_ms)
-                    if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                        continue
-                    if abs(x - x1) <= _EDGE_PX:
-                        return i, "img_left_edge"
-                    if abs(x - x2) <= _EDGE_PX:
-                        return i, "img_right_edge"
-                    if x1 <= x <= x2:
-                        return i, "img_body"
+                    if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
+                    if abs(x - x1) <= _EDGE_PX: return i, "img_left_edge", 0
+                    if abs(x - x2) <= _EDGE_PX: return i, "img_right_edge", 0
+                    if x1 <= x <= x2: return i, "img_body", 0
 
-        if not self._track:
-            return -1, ""
-
-        # 오디오 세그먼트 (자막과 동일 인덱스로 연동)
-        audio_y = _AUDIO_Y
-        audio_h = _AUDIO_H
-        if audio_y <= y <= audio_y + audio_h:
-            for i, seg in enumerate(self._track):
-                if not seg.audio_file:
-                    continue
-                x1 = self._ms_to_x(seg.start_ms)
-                x2 = self._ms_to_x(seg.end_ms)
-                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                    continue
-                if abs(x - x1) <= _EDGE_PX:
-                    return i, "left_edge"
-                if abs(x - x2) <= _EDGE_PX:
-                    return i, "right_edge"
-                if x1 <= x <= x2:
-                    return i, "body"
-
-        # 자막 세그먼트
-        seg_y = _SEG_Y
-        seg_h = _SEG_H
-        if seg_y <= y <= seg_y + seg_h:
-            for i, seg in enumerate(self._track):
-                x1 = self._ms_to_x(seg.start_ms)
-                x2 = self._ms_to_x(seg.end_ms)
-                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                    continue
-                if abs(x - x1) <= _EDGE_PX:
-                    return i, "left_edge"
-                if abs(x - x2) <= _EDGE_PX:
-                    return i, "right_edge"
-                if x1 <= x <= x2:
-                    return i, "body"
-        return -1, ""
+        return -1, "", -1
 
     # ----------------------------------------------------------- 유틸
 

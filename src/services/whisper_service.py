@@ -34,6 +34,7 @@ def transcribe(
     audio_path: Path,
     language: str = "ko",
     on_progress: Callable[[int, int], None] | None = None,
+    on_segment: Callable[[SubtitleSegment], None] | None = None,
     check_cancelled: Callable[[], bool] | None = None,
 ) -> SubtitleTrack:
     """Transcribe audio file and return a SubtitleTrack.
@@ -43,6 +44,7 @@ def transcribe(
         audio_path: Path to audio file (WAV, MP3, etc.).
         language: Language code.
         on_progress: Callback(current_segment, total_segments) for progress.
+        on_segment: Callback(segment) called immediately when a segment is transcribed.
         check_cancelled: Callback returning True if operation should abort.
 
     Returns:
@@ -68,11 +70,16 @@ def transcribe(
         if check_cancelled and check_cancelled():
             break
             
-        track.add_segment(SubtitleSegment(
+        new_segment = SubtitleSegment(
             start_ms=seconds_to_ms(seg.start),
             end_ms=seconds_to_ms(seg.end),
             text=seg.text.strip(),
-        ))
+        )
+        track.add_segment(new_segment)
+        
+        if on_segment:
+            on_segment(new_segment)
+
         count += 1
         if on_progress:
             # We don't know total length, so pass 0 or estimate

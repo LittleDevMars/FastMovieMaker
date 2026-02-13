@@ -1,6 +1,6 @@
 # FastMovieMaker Technical Specification
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Platform:** Windows (primary), macOS/Linux (partial)
 **Python:** 3.13
 **Framework:** PySide6 (Qt 6)

@@ -51,6 +51,10 @@ class VideoPlayerWidget(QGraphicsView):
         self._player.setVideoOutput(self._video_item)
         self._video_item.nativeSizeChanged.connect(self._on_native_size_changed)
 
+        self._video_locked = False
+        self._video_hidden = False
+
+
         # Cached frame preview layer (Z=1: above video, below overlays)
         self._frame_preview_item = QGraphicsPixmapItem()
         self._frame_preview_item.setZValue(1)
@@ -121,7 +125,7 @@ class VideoPlayerWidget(QGraphicsView):
         self._update_image_overlays(position_ms)
 
     def _update_subtitle(self, position_ms: int) -> None:
-        if not self._subtitle_track:
+        if not self._subtitle_track or self._subtitle_track.hidden:
             self._subtitle_item.setVisible(False)
             self._current_subtitle_text = ""
             return
@@ -312,7 +316,7 @@ class VideoPlayerWidget(QGraphicsView):
 
     def _update_image_overlays(self, position_ms: int) -> None:
         """Show/hide PIP image overlays based on playhead position."""
-        if not self._image_overlay_track:
+        if not self._image_overlay_track or self._image_overlay_track.hidden:
             # Hide all
             for item in self._pip_items.values():
                 item.setVisible(False)
@@ -585,3 +589,11 @@ class VideoPlayerWidget(QGraphicsView):
         self._pip_selection_border.setRect(rect.adjusted(-3, -3, 3, 3))
         self._pip_selection_border.setPos(pip.pos())
         self._pip_selection_border.setVisible(True)
+
+    def set_video_hidden(self, hidden: bool) -> None:
+        """Set visibility of the main video track."""
+        self._video_hidden = hidden
+        self._video_item.setVisible(not hidden)
+        if hidden:
+            self.hide_cached_frame()
+

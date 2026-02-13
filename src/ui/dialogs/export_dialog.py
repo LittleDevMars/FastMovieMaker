@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QGroupBox,
@@ -38,7 +39,7 @@ class ExportDialog(QDialog):
         video_has_audio: bool = False,
         overlay_path: Path | None = None,
         image_overlays: list | None = None,
-        video_clips=None,
+        video_tracks: list | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle(tr("Export Video"))
@@ -50,7 +51,7 @@ class ExportDialog(QDialog):
         self._video_has_audio = video_has_audio
         self._overlay_path = overlay_path
         self._image_overlays = image_overlays
-        self._video_clips = video_clips
+        self._video_tracks = video_tracks
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
         self._temp_audio_path: Path | None = None
@@ -118,6 +119,63 @@ class ExportDialog(QDialog):
 
         layout.addWidget(self._options_group)
 
+        # --- Video options group ---
+        self._video_group = QGroupBox(tr("Video Options"))
+        video_layout = QVBoxLayout(self._video_group)
+
+        # Codec & Preset row
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel(tr("Codec:")))
+        self._codec_combo = QComboBox()
+        self._codec_combo.addItems(["H.264", "HEVC"])
+        row1.addWidget(self._codec_combo)
+
+        row1.addWidget(QLabel(tr("Preset:")))
+        self._preset_combo = QComboBox()
+        # Map user-friendly names to ffmpeg presets
+        # (Display Name, ffmpeg value)
+        self._presets = [
+            (tr("Fast (Lower Quality)"), "fast"),
+            (tr("Balanced"), "medium"),
+            (tr("High Quality (Slow)"), "slow"),
+        ]
+        for name, _ in self._presets:
+            self._preset_combo.addItem(name)
+        self._preset_combo.setCurrentIndex(1)  # Default to Balanced
+        row1.addWidget(self._preset_combo)
+        video_layout.addLayout(row1)
+
+        # Resolution & CRF row
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(tr("Resolution:")))
+        self._res_combo = QComboBox()
+        self._res_combo.addItem(tr("Original"), (0, 0))
+        self._res_combo.addItem("1080p (1920x1080)", (1920, 1080))
+        self._res_combo.addItem("720p (1280x720)", (1280, 720))
+        row2.addWidget(self._res_combo)
+
+        row2.addWidget(QLabel(tr("Quality (CRF):")))
+        self._crf_slider = QSlider(Qt.Orientation.Horizontal)
+        self._crf_slider.setRange(0, 51)
+        self._crf_slider.setValue(23)
+        self._crf_slider.setInvertedAppearance(True)  # Lower is better
+        row2.addWidget(self._crf_slider)
+
+        self._crf_label = QLabel("23")
+        self._crf_label.setMinimumWidth(30)
+        row2.addWidget(self._crf_label)
+        self._crf_slider.valueChanged.connect(lambda v: self._crf_label.setText(str(v)))
+
+        video_layout.addLayout(row2)
+
+        # Helper text for CRF
+        crf_hint = QLabel(tr("Lower CRF = Better Quality (Larger File)"))
+        crf_hint.setStyleSheet("color: gray; font-size: 11px;")
+        crf_hint.setAlignment(Qt.AlignmentFlag.AlignRight)
+        video_layout.addWidget(crf_hint)
+
+        layout.addWidget(self._video_group)
+
         # --- Progress section (hidden initially) ---
         self._progress_section = QGroupBox(tr("Export Progress"))
         progress_layout = QVBoxLayout(self._progress_section)
@@ -148,6 +206,9 @@ class ExportDialog(QDialog):
     def _show_options(self) -> None:
         """Show the options UI phase."""
         self._options_group.setVisible(True)
+        self._video_group.setVisible(True)
+        self._options_group.setEnabled(True)
+        self._video_group.setEnabled(True)
         self._progress_section.setVisible(False)
         self._export_btn.setVisible(True)
 
@@ -172,6 +233,7 @@ class ExportDialog(QDialog):
 
         # Transition to progress phase
         self._options_group.setEnabled(False)
+        self._video_group.setEnabled(False)
         self._export_btn.setVisible(False)
         self._progress_section.setVisible(True)
 
@@ -198,6 +260,12 @@ class ExportDialog(QDialog):
 
         self._status_label.setText(tr("Exporting video with subtitles..."))
 
+        # Gather video options
+        codec = self._codec_combo.currentText().lower().replace(".", "")
+        preset = self._presets[self._preset_combo.currentIndex()][1]
+        crf = self._crf_slider.value()
+        w, h = self._res_combo.currentData()
+
         self._thread = QThread()
         self._worker = ExportWorker(
             self._video_path,
@@ -206,7 +274,12 @@ class ExportDialog(QDialog):
             audio_path=audio_path,
             overlay_path=self._overlay_path,
             image_overlays=self._image_overlays,
-            video_clips=self._video_clips,
+            video_tracks=self._video_tracks,
+            codec=codec,
+            preset=preset,
+            crf=crf,
+            scale_width=w,
+            scale_height=h,
         )
         self._worker.moveToThread(self._thread)
 

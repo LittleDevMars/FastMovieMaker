@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -23,6 +23,11 @@ from src.workers.whisper_worker import WhisperWorker
 
 class WhisperDialog(QDialog):
     """Dialog for configuring and running Whisper transcription."""
+
+    progress = Signal(int, int)
+    finished = Signal(SubtitleTrack)
+    error = Signal(str)
+    segment_ready = Signal(object)  # Forwarded from worker
 
     def __init__(self, video_path: Path, parent=None):
         super().__init__(parent)
@@ -99,6 +104,7 @@ class WhisperDialog(QDialog):
         self._thread.started.connect(self._worker.run)
         self._worker.status_update.connect(self._on_status)
         self._worker.progress.connect(self._on_progress)
+        self._worker.segment_ready.connect(self.segment_ready.emit)  # Forward signal
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._cleanup_thread)
