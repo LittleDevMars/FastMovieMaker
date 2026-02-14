@@ -54,6 +54,9 @@ class _DragMode(Enum):
     IMAGE_RESIZE_RIGHT = auto()
     CLIP_TRIM_LEFT = auto()
     CLIP_TRIM_RIGHT = auto()
+    TEXT_MOVE = auto()
+    TEXT_RESIZE_LEFT = auto()
+    TEXT_RESIZE_RIGHT = auto()
 
 
 # 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
@@ -82,7 +85,10 @@ class TimelineWidget(QWidget):
     image_overlay_selected = Signal(int)  # 오버레이 인덱스
     image_overlay_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
     image_overlay_resize = Signal(int, str)  # (index, mode: "fit_width"/"full"/"16:9"/"9:16")
+    text_overlay_selected = Signal(int)  # 텍스트 오버레이 인덱스
+    text_overlay_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
     insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
+    insert_text_requested = Signal(int)  # 텍스트 오버레이 삽입 위치(ms)
     image_file_dropped = Signal(str, int)  # (file_path, position_ms)
     video_file_dropped = Signal(str, int)  # (file_path, position_ms)
     clip_selected = Signal(int, int)            # (track_index, clip_index)
@@ -97,7 +103,7 @@ class TimelineWidget(QWidget):
     # Text overlay signals
     text_overlay_selected = Signal(int)  # overlay index
     text_overlay_edit_requested = Signal(int)  # overlay index
-    text_overlay_deleted = Signal(int)  # overlay index
+    text_overlay_delete_requested = Signal(int)  # overlay index
     text_overlay_moved = Signal(int, int, int)  # (index, old_start_ms, new_start_ms)
 
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
@@ -240,6 +246,9 @@ class TimelineWidget(QWidget):
         # 텍스트 오버레이 트랙
         self._text_overlay_track = None  # TextOverlayTrack | None
         self._selected_text_overlay_index: int = -1
+        self._drag_text_index: int = -1
+        self._drag_text_orig_start_ms: int = 0
+        self._drag_text_orig_end_ms: int = 0
 
         # 비디오 클립 트랙
         self._clip_track: VideoClipTrack | None = None
@@ -429,6 +438,57 @@ class TimelineWidget(QWidget):
         self._selected_text_overlay_index = index
         self._invalidate_static_cache()
         self.update()
+
+    def _start_text_drag(self, mode: _DragMode, index: int, x: float) -> None:
+        """Initialize text overlay drag operation."""
+        if not self._text_overlay_track or index < 0 or index >= len(self._text_overlay_track.overlays):
+            return
+        
+        overlay = self._text_overlay_track.overlays[index]
+        self._drag_mode = mode
+        self._drag_text_index = index
+        self._drag_start_x = x
+        self._drag_text_orig_start_ms = overlay.start_ms
+        self._drag_text_orig_end_ms = overlay.end_ms
+        
+        if mode == _DragMode.TEXT_MOVE:
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+    def _handle_text_drag(self, x: float) -> None:
+        """Handle text overlay drag operations."""
+        if not self._text_overlay_track or self._drag_text_index < 0:
+            return
+        if self._drag_text_index >= len(self._text_overlay_track.overlays):
+            return
+        
+        overlay = self._text_overlay_track.overlays[self._drag_text_index]
+        dx_ms = int((x - self._drag_start_x) / self._px_per_ms) if self._px_per_ms > 0 else 0
+        
+        if self._drag_mode == _DragMode.TEXT_MOVE:
+            # Move entire overlay
+            new_start = max(0, self._drag_text_orig_start_ms + dx_ms)
+            duration = self._drag_text_orig_end_ms - self._drag_text_orig_start_ms
+            overlay.start_ms = int(new_start)
+            overlay.end_ms = int(new_start + duration)
+        elif self._drag_mode == _DragMode.TEXT_RESIZE_LEFT:
+            # Resize left edge
+            new_start = max(0, self._drag_text_orig_start_ms + dx_ms)
+            if new_start < self._drag_text_orig_end_ms - 100:  # Min 100ms duration
+                overlay.start_ms = int(new_start)
+        elif self._drag_mode == _DragMode.TEXT_RESIZE_RIGHT:
+            # Resize right edge
+            new_end = max(self._drag_text_orig_start_ms + 100, self._drag_text_orig_end_ms + dx_ms)
+            overlay.end_ms = int(new_end)
+        
+        self._invalidate_static_cache()
+        self.update()
+
+    def _handle_image_drag(self, x: float) -> None:
+        """Handle image overlay drag operations."""
+        # Placeholder - implement similar to text drag if needed
+        pass
 
     def select_clip(self, track_index: int, clip_index: int) -> None:
         self._selected_clip_track_index = track_index
@@ -798,6 +858,26 @@ class TimelineWidget(QWidget):
         p.end()
         return img
 
+    def _draw_video_audio_fallback(self, painter: QPainter, w: int) -> None:
+        """Draw fallback UI when waveform data is not available."""
+        waveform_y = self._waveform_y()
+        waveform_h = _WAVEFORM_H
+        
+        # Draw placeholder background
+        painter.fillRect(0, waveform_y, w, waveform_h, QColor(40, 40, 40, 100))
+        
+        # Draw center line
+        center_y = waveform_y + waveform_h // 2
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawLine(0, center_y, w, center_y)
+        
+        # Draw label
+        label_x = max(5, int(self._ms_to_x(0)) + 5)
+        if 0 < label_x < w - 120:
+            painter.setPen(QColor(150, 150, 150, 150))
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(label_x, waveform_y + 10, "Video Audio (loading...)")
+
     def _draw_audio_track(self, painter: QPainter, h: int) -> None:
         """세그먼트별 TTS 오디오 구간을 녹색 박스로 그림."""
         if not self._track:
@@ -945,7 +1025,8 @@ class TimelineWidget(QWidget):
 
     def _text_overlay_base_y(self) -> int:
         """텍스트 오버레이 트랙의 시작 Y 좌표 반환."""
-        img_height = self._img_overlay_total_height()
+        rows = self._compute_overlay_rows()
+        img_height = self._img_overlay_total_h(rows)
         return self._img_overlay_base_y() + img_height + 10
 
     def _compute_text_overlay_rows(self) -> list[int]:
@@ -1243,6 +1324,29 @@ class TimelineWidget(QWidget):
                 self.image_overlay_selected.emit(seg_idx)
             return
 
+        # 텍스트 오버레이 영역
+        if hit.startswith("text"):
+            if self._text_overlay_track:  # No locked check for now, can add later
+                if hit == "text_left_edge":
+                    self._selected_text_overlay_index = seg_idx
+                    self._selected_index = -1
+                    self._selected_overlay_index = -1
+                    self._start_text_drag(_DragMode.TEXT_RESIZE_LEFT, seg_idx, x)
+                    self.text_overlay_selected.emit(seg_idx)
+                elif hit == "text_right_edge":
+                    self._selected_text_overlay_index = seg_idx
+                    self._selected_index = -1
+                    self._selected_overlay_index = -1
+                    self._start_text_drag(_DragMode.TEXT_RESIZE_RIGHT, seg_idx, x)
+                    self.text_overlay_selected.emit(seg_idx)
+                elif hit == "text_body":
+                    self._selected_text_overlay_index = seg_idx
+                    self._selected_index = -1
+                    self._selected_overlay_index = -1
+                    self._start_text_drag(_DragMode.TEXT_MOVE, seg_idx, x)
+                    self.text_overlay_selected.emit(seg_idx)
+            return
+
         # 자막 세그먼트 (Locked check)
         elif hit in ("left_edge", "right_edge", "body"):
             if self._track and self._track.locked:
@@ -1270,6 +1374,22 @@ class TimelineWidget(QWidget):
             self._seek_to_x(x)
 
         self.update()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """더블 클릭 시 텍스트 오버레이 편집 다이얼로그 요청."""
+        if self._duration_ms <= 0 or self._px_per_ms <= 0:
+            return
+
+        x = event.position().x()
+        y = event.position().y()
+
+        seg_idx, hit, v_idx = self._hit_test(x, y)
+
+        if hit.startswith("text_"):
+            self.text_overlay_edit_requested.emit(seg_idx)
+            return
+
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         x = event.position().x()
@@ -1300,6 +1420,10 @@ class TimelineWidget(QWidget):
 
         if self._drag_mode in (_DragMode.IMAGE_MOVE, _DragMode.IMAGE_RESIZE_LEFT, _DragMode.IMAGE_RESIZE_RIGHT):
             self._handle_image_drag(x)
+            return
+
+        if self._drag_mode in (_DragMode.TEXT_MOVE, _DragMode.TEXT_RESIZE_LEFT, _DragMode.TEXT_RESIZE_RIGHT):
+            self._handle_text_drag(x)
             return
 
         if self._drag_mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
@@ -1336,6 +1460,12 @@ class TimelineWidget(QWidget):
                 ov = self._image_overlay_track[self._drag_seg_index]
                 if ov.start_ms != self._drag_orig_start_ms or ov.end_ms != self._drag_orig_end_ms:
                     self.image_overlay_moved.emit(self._drag_seg_index, ov.start_ms, ov.end_ms)
+        elif self._drag_mode in (_DragMode.TEXT_MOVE, _DragMode.TEXT_RESIZE_LEFT, _DragMode.TEXT_RESIZE_RIGHT):
+            if self._text_overlay_track and 0 <= self._drag_text_index < len(self._text_overlay_track.overlays):
+                ov = self._text_overlay_track.overlays[self._drag_text_index]
+                if ov.start_ms != self._drag_text_orig_start_ms or ov.end_ms != self._drag_text_orig_end_ms:
+                    self.text_overlay_moved.emit(self._drag_text_index, ov.start_ms, ov.end_ms)
+            self._drag_text_index = -1
         elif self._drag_mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
             if self._project and 0 <= self._drag_clip_track_index < len(self._project.video_tracks):
                 vt = self._project.video_tracks[self._drag_clip_track_index]
@@ -1372,6 +1502,7 @@ class TimelineWidget(QWidget):
             if vt and len(vt.clips) > 1:
                 delete_act = menu.addAction(tr("Delete Clip"))
             
+            trans_act = None
             if vt and seg_idx < len(vt.clips) - 1:
                 trans_act = menu.addAction(tr("Add Transition..."))
             
@@ -1419,11 +1550,25 @@ class TimelineWidget(QWidget):
                     self.image_overlay_resize.emit(seg_idx, "9:16")
                 return
 
-        insert_action = menu.addAction(tr("Insert Image Overlay"))
+        if hit.startswith("text_"):
+            edit_act = menu.addAction(tr("Edit Text Content/Style..."))
+            delete_act = menu.addAction(tr("Delete Text Overlay"))
+            action = menu.exec(event.globalPos())
+            if action == edit_act:
+                self.text_overlay_edit_requested.emit(seg_idx)
+            elif action == delete_act:
+                self.text_overlay_delete_requested.emit(seg_idx)
+            return
+
+        insert_image_action = menu.addAction(tr("Insert Image Overlay"))
+        insert_text_action = menu.addAction(tr("Insert Text Overlay"))
         action = menu.exec(event.globalPos())
-        if action == insert_action:
+        if action == insert_image_action:
             ms = int(max(0, min(int(self._duration_ms), int(self._x_to_ms(x)))))
             self.insert_image_requested.emit(ms)
+        elif action == insert_text_action:
+            ms = int(max(0, min(int(self._duration_ms), int(self._x_to_ms(x)))))
+            self.insert_text_requested.emit(ms)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """휠: 줌, Ctrl+휠: 스크롤."""

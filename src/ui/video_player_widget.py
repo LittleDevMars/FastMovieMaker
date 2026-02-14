@@ -29,6 +29,8 @@ class VideoPlayerWidget(QGraphicsView):
 
     # Emitted when user drags/scales a PIP overlay: (index, x%, y%, scale%)
     pip_position_changed = Signal(int, float, float, float)
+    # Emitted when user drags a text overlay: (index, x%, y%)
+    text_overlay_position_changed = Signal(int, float, float)
 
     def __init__(self, player: QMediaPlayer, parent=None):
         super().__init__(parent)
@@ -83,7 +85,13 @@ class VideoPlayerWidget(QGraphicsView):
         self._selected_pip_index: int = -1
         self._pip_drag_active = False
         self._pip_drag_start_pos = None
-        self._pip_selection_border: QGraphicsRectItem | None = None
+
+        # Text selection and dragging
+        self._selected_text_index: int = -1
+        self._text_drag_active = False
+        self._text_drag_start_pos = None
+
+        self._selection_border: QGraphicsRectItem | None = None
 
         # Subtitle overlay
         self._subtitle_item = QGraphicsTextItem()
@@ -315,8 +323,8 @@ class VideoPlayerWidget(QGraphicsView):
         self._pip_items.clear()
         self._pip_active_indices.clear()
         self._selected_pip_index = -1
-        if self._pip_selection_border:
-            self._pip_selection_border.setVisible(False)
+        if self._selection_border:
+            self._selection_border.setVisible(False)
         # Immediately render overlays at current position
         try:
             self._update_image_overlays(self._player.position())
@@ -369,7 +377,7 @@ class VideoPlayerWidget(QGraphicsView):
 
         # Update selection border if selected PIP is visible
         if self._selected_pip_index >= 0:
-            self._update_pip_selection_border()
+            self._update_selection_border()
 
     # -------------------------------------------------------- Text Overlays
 
@@ -383,7 +391,11 @@ class VideoPlayerWidget(QGraphicsView):
         self._text_overlay_active_indices.clear()
         # Immediately render overlays at current position
         if self._player:
-            self._update_text_overlays(self._player.position())
+            try:
+                self._update_text_overlays(self._player.position())
+            except RuntimeError:
+                # Player may have been deleted
+                pass
 
     def _update_text_overlays(self, position_ms: int) -> None:
         """Show/hide text overlays based on playhead position."""
@@ -405,29 +417,50 @@ class VideoPlayerWidget(QGraphicsView):
             if idx not in self._text_overlay_items:
                 text_item = QGraphicsTextItem()
                 text_item.setZValue(8)  # Above PIP overlays (7), below subtitle (10)
+                # Enable selection and movement
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
                 self._scene.addItem(text_item)
                 self._text_overlay_items[idx] = text_item
 
             text_item = self._text_overlay_items[idx]
 
+            # Apply latest content and style
+            text_item.setPlainText(overlay.text)
+            style = overlay.style if overlay.style else self._default_style
+            font = QFont(style.font_family, style.font_size)
+            font.setBold(style.font_bold)
+            font.setItalic(style.font_italic)
+            text_item.setFont(font)
+            text_item.setDefaultTextColor(QColor(style.font_color))
+            text_item.setOpacity(overlay.opacity)
+
             if idx not in self._text_overlay_active_indices:
-                # Newly activated: apply text and style
-                text_item.setPlainText(overlay.text)
-
-                # Apply style from SubtitleStyle
-                style = overlay.style
-                font = QFont(style.font_name, style.font_size)
-                font.setBold(style.bold)
-                text_item.setFont(font)
-                text_item.setDefaultTextColor(QColor(style.primary_color))
-                text_item.setOpacity(overlay.opacity)
-
-                # Position based on percentage
+                # Newly activated: apply position based on percentage and alignment
                 view_w = self.viewport().width()
                 view_h = self.viewport().height()
                 x_px = view_w * overlay.x_percent / 100
                 y_px = view_h * overlay.y_percent / 100
-                text_item.setPos(x_px, y_px)
+                
+                # Adjust for alignment
+                rect = text_item.boundingRect()
+                w = rect.width()
+                h = rect.height()
+                
+                off_x = 0
+                if overlay.alignment == "center":
+                    off_x = -w / 2
+                elif overlay.alignment == "right":
+                    off_x = -w
+                    
+                off_y = 0
+                if overlay.v_alignment == "middle":
+                    off_y = -h / 2
+                elif overlay.v_alignment == "bottom":
+                    off_y = -h
+                    
+                text_item.setPos(x_px + off_x, y_px + off_y)
                 text_item.setVisible(True)
 
         # Hide deactivated overlays
@@ -550,7 +583,14 @@ class VideoPlayerWidget(QGraphicsView):
     def select_pip(self, index: int) -> None:
         """Select a PIP overlay by index (or -1 to deselect)."""
         self._selected_pip_index = index
-        self._update_pip_selection_border()
+        self._selected_text_index = -1
+        self._update_selection_border()
+
+    def select_text(self, index: int) -> None:
+        """Select a text overlay by index (or -1 to deselect)."""
+        self._selected_text_index = index
+        self._selected_pip_index = -1
+        self._update_selection_border()
 
     def _pip_item_at_pos(self, view_pos) -> int:
         """Return the PIP item index at view position, or -1."""
@@ -564,42 +604,82 @@ class VideoPlayerWidget(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            # 1. Check PIP items
             idx = self._pip_item_at_pos(event.pos())
             if idx >= 0:
                 self._selected_pip_index = idx
+                self._selected_text_index = -1
                 self._pip_drag_active = True
                 self._pip_drag_start_pos = self.mapToScene(event.pos())
-                self._update_pip_selection_border()
+                self._update_selection_border()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 event.accept()
                 return
-            elif self._selected_pip_index >= 0 and not self._edit_mode:
-                # Click elsewhere → deselect PIP
+
+            # 2. Check Text items
+            idx = self._text_item_at_pos(event.pos())
+            if idx >= 0:
+                self._selected_text_index = idx
                 self._selected_pip_index = -1
-                self._update_pip_selection_border()
+                self._text_drag_active = True
+                self._text_drag_start_pos = self.mapToScene(event.pos())
+                self._update_selection_border()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+
+            # Click elsewhere → deselect all
+            if (self._selected_pip_index >= 0 or self._selected_text_index >= 0) and not self._edit_mode:
+                self._selected_pip_index = -1
+                self._selected_text_index = -1
+                self._update_selection_border()
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        scene_pos = self.mapToScene(event.pos())
+
+        # Move PIP
         if self._pip_drag_active and self._selected_pip_index >= 0:
             pip = self._pip_items.get(self._selected_pip_index)
             if pip and self._pip_drag_start_pos is not None:
-                scene_pos = self.mapToScene(event.pos())
                 delta = scene_pos - self._pip_drag_start_pos
                 pip.setPos(pip.pos() + delta)
                 self._pip_drag_start_pos = scene_pos
-                self._update_pip_selection_border()
+                self._update_selection_border()
             event.accept()
             return
+
+        # Move Text
+        if self._text_drag_active and self._selected_text_index >= 0:
+            text_item = self._text_overlay_items.get(self._selected_text_index)
+            if text_item and self._text_drag_start_pos is not None:
+                delta = scene_pos - self._text_drag_start_pos
+                text_item.setPos(text_item.pos() + delta)
+                self._text_drag_start_pos = scene_pos
+                self._update_selection_border()
+            event.accept()
+            return
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._pip_drag_active:
-            self._pip_drag_active = False
-            self._pip_drag_start_pos = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self._emit_pip_position()
-            event.accept()
-            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._pip_drag_active:
+                self._pip_drag_active = False
+                self._pip_drag_start_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                self._emit_pip_position()
+                event.accept()
+                return
+            elif self._text_drag_active:
+                self._text_drag_active = False
+                self._text_drag_start_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                self._emit_text_position()
+                event.accept()
+                return
+
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -620,7 +700,7 @@ class VideoPlayerWidget(QGraphicsView):
                         target_w = max(1, int(view_w * new_scale / 100))
                         scaled = pixmap.scaledToWidth(target_w, Qt.TransformationMode.SmoothTransformation)
                         pip.setPixmap(scaled)
-                    self._update_pip_selection_border()
+                    self._update_selection_border()
                     self._emit_pip_position()
                 event.accept()
                 return
@@ -642,30 +722,90 @@ class VideoPlayerWidget(QGraphicsView):
         scale_pct = track[idx].scale_percent
         self.pip_position_changed.emit(idx, x_pct, y_pct, scale_pct)
 
-    def _update_pip_selection_border(self) -> None:
-        """Show/hide/reposition the PIP selection border."""
-        if self._selected_pip_index < 0:
-            if self._pip_selection_border:
-                self._pip_selection_border.setVisible(False)
+    def _emit_text_position(self) -> None:
+        """Convert current text pixel position to percentages and emit signal."""
+        idx = self._selected_text_index
+        item = self._text_overlay_items.get(idx)
+        track = self._text_overlay_track
+        if item is None or track is None or idx < 0 or idx >= len(track.overlays):
+            return
+            
+        ov = track.overlays[idx]
+        view_w = self.viewport().width()
+        view_h = self.viewport().height()
+        if view_w <= 0 or view_h <= 0:
+            return
+            
+        # Get anchor point from top-left position + alignment offset
+        rect = item.boundingRect()
+        w = rect.width()
+        h = rect.height()
+        
+        pos_x = item.pos().x()
+        pos_y = item.pos().y()
+        
+        anchor_x = pos_x
+        if ov.alignment == "center":
+            anchor_x = pos_x + w / 2
+        elif ov.alignment == "right":
+            anchor_x = pos_x + w
+            
+        anchor_y = pos_y
+        if ov.v_alignment == "middle":
+            anchor_y = pos_y + h / 2
+        elif ov.v_alignment == "bottom":
+            anchor_y = pos_y + h
+            
+        x_pct = anchor_x / view_w * 100.0
+        y_pct = anchor_y / view_h * 100.0
+        self.text_overlay_position_changed.emit(idx, x_pct, y_pct)
+
+    def _update_selection_border(self) -> None:
+        """Show/hide/reposition the selection border."""
+        target_item = None
+        if self._selected_pip_index >= 0:
+            target_item = self._pip_items.get(self._selected_pip_index)
+        elif self._selected_text_index >= 0:
+            target_item = self._text_overlay_items.get(self._selected_text_index)
+
+        if target_item is None or not target_item.isVisible():
+            if self._selection_border:
+                self._selection_border.setVisible(False)
             return
 
-        pip = self._pip_items.get(self._selected_pip_index)
-        if pip is None or not pip.isVisible():
-            if self._pip_selection_border:
-                self._pip_selection_border.setVisible(False)
-            return
+        if self._selection_border is None:
+            self._selection_border = QGraphicsRectItem()
+            self._selection_border.setZValue(9) # Above all overlays
+            self._selection_border.setPen(QPen(QColor(0, 188, 212), 2, Qt.PenStyle.DashLine))
+            self._selection_border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            self._scene.addItem(self._selection_border)
 
-        if self._pip_selection_border is None:
-            self._pip_selection_border = QGraphicsRectItem()
-            self._pip_selection_border.setZValue(8)
-            self._pip_selection_border.setPen(QPen(QColor(0, 188, 212), 2, Qt.PenStyle.DashLine))
-            self._pip_selection_border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-            self._scene.addItem(self._pip_selection_border)
+        rect = target_item.boundingRect()
+        self._selection_border.setRect(rect.adjusted(-3, -3, 3, 3))
+        self._selection_border.setPos(target_item.pos())
+        self._selection_border.setVisible(True)
 
-        rect = pip.boundingRect()
-        self._pip_selection_border.setRect(rect.adjusted(-3, -3, 3, 3))
-        self._pip_selection_border.setPos(pip.pos())
-        self._pip_selection_border.setVisible(True)
+    def _text_item_at_pos(self, pos) -> int:
+        """Find index of text overlay item at current viewport position."""
+        scene_pos = self.mapToScene(pos)
+        items = self.scene().items(scene_pos)
+        for item in items:
+            if isinstance(item, QGraphicsTextItem) and item != self._subtitle_item:
+                for idx, text_item in self._text_overlay_items.items():
+                    if text_item == item:
+                        return idx
+        return -1
+
+    def _pip_item_at_pos(self, pos) -> int:
+        """Find index of PIP image item at current viewport position."""
+        scene_pos = self.mapToScene(pos)
+        items = self.scene().items(scene_pos)
+        for item in items:
+             if isinstance(item, QGraphicsPixmapItem) and item != self._overlay_item and item != self._frame_preview_item:
+                 for idx, pip_item in self._pip_items.items():
+                     if pip_item == item:
+                         return idx
+        return -1
 
     def set_video_hidden(self, hidden: bool) -> None:
         """Set visibility of the main video track."""

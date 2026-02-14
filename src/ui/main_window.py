@@ -381,6 +381,13 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        add_text_overlay_action = QAction(tr("Add &Text Overlay"), self)
+        add_text_overlay_action.setShortcut(QKeySequence("Ctrl+Shift+T"))
+        add_text_overlay_action.triggered.connect(self._on_add_text_overlay)
+        edit_menu.addAction(add_text_overlay_action)
+
+        edit_menu.addSeparator()
+
         batch_shift_action = QAction(tr("&Batch Shift Timing..."), self)
         batch_shift_action.triggered.connect(self._on_batch_shift)
         edit_menu.addAction(batch_shift_action)
@@ -737,9 +744,16 @@ class MainWindow(QMainWindow):
 
         # Image overlay signals
         self._timeline.insert_image_requested.connect(self._on_insert_image_overlay)
+        self._timeline.insert_text_requested.connect(self._on_add_text_overlay)
         self._timeline.image_overlay_moved.connect(self._on_image_overlay_moved)
         self._timeline.image_overlay_selected.connect(self._on_image_overlay_selected)
         self._timeline.image_overlay_resize.connect(self._on_image_overlay_resize)
+
+        # Text overlay signals
+        self._timeline.text_overlay_selected.connect(self._on_text_overlay_selected)
+        self._timeline.text_overlay_moved.connect(self._on_text_overlay_moved)
+        self._timeline.text_overlay_edit_requested.connect(self._on_text_overlay_edit_requested)
+        self._timeline.text_overlay_delete_requested.connect(self._on_text_overlay_delete_requested)
 
         # Video clip signals
         self._timeline.clip_selected.connect(self._on_clip_selected)
@@ -752,6 +766,7 @@ class MainWindow(QMainWindow):
 
         # PIP drag on video player
         self._video_widget.pip_position_changed.connect(self._on_pip_position_changed)
+        self._video_widget.text_overlay_position_changed.connect(self._on_text_overlay_position_changed)
 
         # Track selector signals
         self._track_selector.track_changed.connect(self._on_track_changed)
@@ -948,6 +963,61 @@ class MainWindow(QMainWindow):
         self._autosave.notify_edit()
         self.statusBar().showMessage(f"Image overlay inserted: {Path(path).name}")
 
+    def _on_add_text_overlay(self, position_ms: int = -1) -> None:
+        """Handle request to add a text overlay."""
+        if not self._project.has_video:
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
+            return
+        
+        # Use playhead position if not specified
+        if position_ms < 0:
+            position_ms = self._playhead_ms
+        
+        # Open text overlay dialog
+        from src.ui.dialogs.text_overlay_dialog import TextOverlayDialog
+        from src.models.text_overlay import TextOverlay
+        
+        # Open dialog for editing
+        dialog = TextOverlayDialog(parent=self, text="New Text", style=None)
+        dialog.set_position(50.0, 50.0)
+        dialog.set_opacity(1.0)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # Get values from dialog
+        text = dialog.get_text()
+        style = dialog.get_style()
+        x_percent, y_percent = dialog.get_position()
+        opacity = dialog.get_opacity()
+        
+        # Create text overlay
+        duration = 5000  # 5 seconds default
+        end_ms = position_ms + duration
+        if self._project.duration_ms > 0:
+            end_ms = min(end_ms, self._project.duration_ms)
+        
+        overlay = TextOverlay(
+            start_ms=position_ms,
+            end_ms=end_ms,
+            text=text,
+            x_percent=x_percent,
+            y_percent=y_percent,
+            opacity=opacity,
+            style=style,
+        )
+        
+        # Add to project
+        from src.ui.commands import AddTextOverlayCommand
+        cmd = AddTextOverlayCommand(self._project.text_overlay_track, overlay)
+        self._undo_stack.push(cmd)
+        
+        self._ensure_timeline_duration()
+        self._timeline.set_text_overlay_track(self._project.text_overlay_track)
+        self._video_widget.set_text_overlay_track(self._project.text_overlay_track)
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Text overlay added: {overlay.text[:20]}...")
+
     def _on_image_overlay_moved(self, index: int, new_start: int, new_end: int) -> None:
         """Handle image overlay drag/resize in timeline."""
         io_track = self._project.image_overlay_track
@@ -964,6 +1034,91 @@ class MainWindow(QMainWindow):
         """Handle image overlay selection in timeline."""
         self._video_widget.select_pip(index)
         self.statusBar().showMessage(f"Image overlay {index + 1} selected")
+
+    def _on_text_overlay_moved(self, index: int, new_start: int, new_end: int) -> None:
+        """Handle text overlay drag/resize in timeline."""
+        text_track = self._project.text_overlay_track
+        if 0 <= index < len(text_track.overlays):
+            ov = text_track.overlays[index]
+            old_start = ov.start_ms
+            old_end = ov.end_ms
+            # Create undo command
+            from src.ui.commands import MoveTextOverlayCommand
+            cmd = MoveTextOverlayCommand(ov, old_start, old_end, new_start, new_end)
+            self._undo_stack.push(cmd)
+            self._ensure_timeline_duration()
+            self._timeline.update()
+            self._video_widget.update()
+            self._autosave.notify_edit()
+            self.statusBar().showMessage(f"Text overlay {index + 1} moved")
+
+    def _on_text_overlay_selected(self, index: int) -> None:
+        """Handle text overlay selection in timeline."""
+        self._video_widget.select_text(index)
+        self.statusBar().showMessage(f"Text overlay {index + 1} selected")
+
+    def _on_text_overlay_edit_requested(self, index: int) -> None:
+        """Handle text overlay double-click or edit request in timeline."""
+        text_track = self._project.text_overlay_track
+        if not (text_track and 0 <= index < len(text_track.overlays)):
+            return
+        
+        ov = text_track.overlays[index]
+        
+        # Open text overlay dialog
+        from src.ui.dialogs.text_overlay_dialog import TextOverlayDialog
+        dialog = TextOverlayDialog(parent=self, text=ov.text, style=ov.style)
+        dialog.set_position(ov.x_percent, ov.y_percent)
+        dialog.set_alignment(ov.alignment, ov.v_alignment)
+        dialog.set_opacity(ov.opacity)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+            
+        old_data = {
+            "text": ov.text,
+            "style": ov.style,
+            "x_percent": ov.x_percent,
+            "y_percent": ov.y_percent,
+            "alignment": ov.alignment,
+            "v_alignment": ov.v_alignment,
+            "opacity": ov.opacity
+        }
+        
+        h_align, v_align = dialog.get_alignment()
+        new_data = {
+            "text": dialog.get_text(),
+            "style": dialog.get_style(),
+            "x_percent": dialog.get_position()[0],
+            "y_percent": dialog.get_position()[1],
+            "alignment": h_align,
+            "v_alignment": v_align,
+            "opacity": dialog.get_opacity()
+        }
+        
+        from src.ui.commands import UpdateTextOverlayCommand
+        cmd = UpdateTextOverlayCommand(ov, old_data, new_data)
+        self._undo_stack.push(cmd)
+        
+        self._timeline.update()
+        self._video_widget.update()
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Text overlay {index + 1} updated")
+
+    def _on_text_overlay_delete_requested(self, index: int) -> None:
+        """Handle text overlay deletion request from timeline context menu."""
+        text_track = self._project.text_overlay_track
+        if not (text_track and 0 <= index < len(text_track.overlays)):
+            return
+            
+        from src.ui.commands import DeleteTextOverlayCommand
+        cmd = DeleteTextOverlayCommand(text_track, index)
+        self._undo_stack.push(cmd)
+        
+        self._timeline.update()
+        self._video_widget.update()
+        self._autosave.notify_edit()
+        self.statusBar().showMessage(f"Text overlay {index + 1} deleted")
 
     def _on_image_overlay_resize(self, index: int, mode: str) -> None:
         """Resize an image overlay to a preset (fit_width, full, 16:9, 9:16)."""
@@ -1197,6 +1352,15 @@ class MainWindow(QMainWindow):
             ov.x_percent = round(x_pct, 2)
             ov.y_percent = round(y_pct, 2)
             ov.scale_percent = round(scale_pct, 2)
+            self._autosave.notify_edit()
+
+    def _on_text_overlay_position_changed(self, index: int, x_pct: float, y_pct: float) -> None:
+        """Handle text overlay dragged on video player."""
+        track = self._project.text_overlay_track
+        if track and 0 <= index < len(track.overlays):
+            ov = track.overlays[index]
+            ov.x_percent = round(x_pct, 2)
+            ov.y_percent = round(y_pct, 2)
             self._autosave.notify_edit()
 
     # --------------------------------------------- Split / Merge / Batch Shift

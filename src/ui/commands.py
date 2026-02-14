@@ -776,19 +776,19 @@ class EditClipVolumeCommand(QUndoCommand):
 class AddTextOverlayCommand(QUndoCommand):
     """Add a new text overlay to the project."""
 
-    def __init__(self, project: ProjectState, overlay: TextOverlay):
+    def __init__(self, track: TextOverlayTrack, overlay: TextOverlay):
         super().__init__(tr("Add text overlay"))
-        self._project = project
+        self._track = track
         self._overlay = overlay
 
     def redo(self) -> None:
-        self._project.text_overlay_track.add_overlay(self._overlay)
+        self._track.add_overlay(self._overlay)
 
     def undo(self) -> None:
         # Find and remove by identity
-        for i, ov in enumerate(self._project.text_overlay_track.overlays):
+        for i, ov in enumerate(self._track.overlays):
             if ov is self._overlay:
-                self._project.text_overlay_track.overlays.pop(i)
+                self._track.overlays.pop(i)
                 break
 
 
@@ -852,6 +852,10 @@ class UpdateTextOverlayCommand(QUndoCommand):
             self._overlay.x_percent = data["x_percent"]
         if "y_percent" in data:
             self._overlay.y_percent = data["y_percent"]
+        if "alignment" in data:
+            self._overlay.alignment = data["alignment"]
+        if "v_alignment" in data:
+            self._overlay.v_alignment = data["v_alignment"]
         if "opacity" in data:
             self._overlay.opacity = data["opacity"]
         if "style" in data:

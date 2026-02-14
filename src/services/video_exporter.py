@@ -432,9 +432,24 @@ def export_video(
                     text_escaped = text_escaped.replace(":", "\\:")
                     text_escaped = text_escaped.replace("%", "\\%")
                     
-                    # Calculate pixel position from percentage
-                    x_px = int(vid_w * to.x_percent / 100)
-                    y_px = int(vid_h * to.y_percent / 100)
+                    # Calculate base pixel position from percentage
+                    base_x = int(vid_w * to.x_percent / 100)
+                    base_y = int(vid_h * to.y_percent / 100)
+                    
+                    # Adjust for alignment using FFmpeg's tw (text width) and th (text height)
+                    if to.alignment == "center":
+                        draw_x = f"{base_x}-tw/2"
+                    elif to.alignment == "right":
+                        draw_x = f"{base_x}-tw"
+                    else: # left
+                        draw_x = str(base_x)
+                        
+                    if to.v_alignment == "middle":
+                        draw_y = f"{base_y}-th/2"
+                    elif to.v_alignment == "bottom":
+                        draw_y = f"{base_y}-th"
+                    else: # top
+                        draw_y = str(base_y)
                     
                     # Get style properties
                     style = to.style if to.style else SubtitleStyle()
@@ -456,8 +471,8 @@ def export_video(
                         f":fontfile=/System/Library/Fonts/Supplemental/Arial.ttf"
                         f":fontsize={font_size}"
                         f":fontcolor={font_color}"
-                        f":x={x_px}"
-                        f":y={y_px}"
+                        f":x={draw_x}"
+                        f":y={draw_y}"
                         f":alpha={to.opacity}"
                         f":enable='between(t,{start_s:.3f},{end_s:.3f})'"
                     )

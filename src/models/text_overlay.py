@@ -16,8 +16,10 @@ class TextOverlay:
     start_ms: int
     end_ms: int
     text: str
-    x_percent: float = 50.0  # Center X position as % of video width (0-100)
-    y_percent: float = 50.0  # Center Y position as % of video height (0-100)
+    x_percent: float = 50.0  # Anchor point X position as % of video width (0-100)
+    y_percent: float = 50.0  # Anchor point Y position as % of video height (0-100)
+    alignment: str = "center"  # left, center, right
+    v_alignment: str = "middle" # top, middle, bottom
     opacity: float = 1.0     # 0.0-1.0
     style: SubtitleStyle | None = None  # None = use project default style
 
@@ -32,6 +34,8 @@ class TextOverlay:
             "text": self.text,
             "x_percent": self.x_percent,
             "y_percent": self.y_percent,
+            "alignment": self.alignment,
+            "v_alignment": self.v_alignment,
             "opacity": self.opacity,
         }
         if self.style:
@@ -53,6 +57,8 @@ class TextOverlay:
             text=data["text"],
             x_percent=data.get("x_percent", 50.0),
             y_percent=data.get("y_percent", 50.0),
+            alignment=data.get("alignment", "center"),
+            v_alignment=data.get("v_alignment", "middle"),
             opacity=data.get("opacity", 1.0),
             style=style,
         )
