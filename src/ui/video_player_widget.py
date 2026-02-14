@@ -10,6 +10,7 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
+    QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -469,6 +470,10 @@ class VideoPlayerWidget(QGraphicsView):
                 self._text_overlay_items[idx].setVisible(False)
 
         self._text_overlay_active_indices = active_indices
+        
+        # Update selection border if selected text is affected
+        if self._selected_text_index >= 0:
+            self._update_selection_border()
 
     # -------------------------------------------------------- Overlay Utilities
 

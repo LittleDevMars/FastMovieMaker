@@ -139,7 +139,9 @@ class MainWindow(QMainWindow):
         self._tts_player = QMediaPlayer()
         self._tts_player.setAudioOutput(self._tts_audio_output)
 
-        # Waveform worker
+        # Waveform services
+        from src.services.timeline_waveform_service import TimelineWaveformService
+        self._waveform_service = TimelineWaveformService(self)
         self._waveform_thread: QThread | None = None
         self._waveform_worker: WaveformWorker | None = None
 
@@ -148,6 +150,11 @@ class MainWindow(QMainWindow):
         self._frame_cache_thread: QThread | None = None
         self._frame_cache_worker: FrameCacheWorker | None = None
         self._showing_cached_frame = False
+
+        # Proxy media state
+        self._use_proxies = False
+        self._proxy_map: dict[str, str] = {}  # source_path -> proxy_path
+        self._proxy_threads: list[QThread] = []
 
         self._build_ui()
         self._build_menu()
@@ -212,6 +219,7 @@ class MainWindow(QMainWindow):
 
         # Timeline
         self._timeline = TimelineWidget()
+        self._timeline.set_waveform_service(self._waveform_service)
         self._track_headers = TrackHeaderPanel()
         self._track_headers.state_changed.connect(self._on_track_state_changed)
 
@@ -414,6 +422,11 @@ class MainWindow(QMainWindow):
         gen_action.triggered.connect(self._on_generate_subtitles)
         sub_menu.addAction(gen_action)
 
+        gen_timeline_action = QAction(tr("Generate from &Edited Timeline..."), self)
+        gen_timeline_action.setShortcut(QKeySequence("Ctrl+Shift+G"))
+        gen_timeline_action.triggered.connect(self._on_generate_subtitles_from_timeline)
+        sub_menu.addAction(gen_timeline_action)
+
         tts_action = QAction(tr("Generate &Speech (TTS)..."), self)
         tts_action.setShortcut(QKeySequence("Ctrl+T"))
         tts_action.triggered.connect(self._on_generate_tts)
@@ -440,6 +453,17 @@ class MainWindow(QMainWindow):
         sub_menu.addAction(translate_action)
 
         sub_menu.addSeparator()
+
+        # View menu
+        view_menu = menubar.addMenu(tr("&View"))
+
+        self._proxy_action = QAction(tr("Use &Proxy Media"), self)
+        self._proxy_action.setCheckable(True)
+        self._proxy_action.setChecked(False)
+        self._proxy_action.triggered.connect(self._toggle_proxies)
+        view_menu.addAction(self._proxy_action)
+
+        view_menu.addSeparator()
 
         style_action = QAction(tr("Default &Style..."), self)
         style_action.triggered.connect(self._on_edit_default_style)
@@ -721,6 +745,7 @@ class MainWindow(QMainWindow):
         self._controls.stop_requested.connect(self._on_stop_all)
         self._controls.position_changed_by_user.connect(self._timeline.set_playhead)
         self._controls.position_changed_by_user.connect(self._on_position_changed_by_user)
+        self._controls.video_volume_changed.connect(self._update_playback_volume)
 
         # TTS player signals for playhead when no video
         self._tts_player.positionChanged.connect(self._on_tts_position_changed)
@@ -1320,6 +1345,10 @@ class MainWindow(QMainWindow):
         )
         self._undo_stack.push(cmd)
 
+        # Trigger proxy generation if enabled
+        if self._use_proxies:
+            self._start_proxy_generation(path)
+
         # Update duration and refresh
         self._project.duration_ms = self._project.video_tracks[v_idx].output_duration_ms
         self._timeline.set_duration(self._project.duration_ms, has_video=True)
@@ -1598,6 +1627,10 @@ class MainWindow(QMainWindow):
         # Start frame cache generation
         self._start_frame_cache_generation()
 
+        # Trigger proxy generation if enabled
+        if self._use_proxies:
+            self._start_proxy_generation(source_path)
+
     def _cleanup_temp_video(self) -> None:
         """Remove previously created temp video file."""
         if self._temp_video_path is not None and self._temp_video_path.is_file():
@@ -1659,6 +1692,7 @@ class MainWindow(QMainWindow):
             self._controls.set_output_duration(output_dur)
 
     def _on_generate_subtitles(self) -> None:
+        """Generate subtitles from the original video file."""
         if not self._project.has_video:
             QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
             return
@@ -1670,47 +1704,99 @@ class MainWindow(QMainWindow):
             )
             return
 
-        dialog = WhisperDialog(self._project.video_path, parent=self)
+        # Explicitly clear existing track if user confirms? 
+        # For now, let's just launch the dialog.
+        from src.ui.dialogs.whisper_dialog import WhisperDialog
+        dialog = WhisperDialog(video_path=self._project.video_path, parent=self)
         dialog.segment_ready.connect(self._on_whisper_segment_ready)
-        if dialog.exec():
-            # If finished successfully, we might want to replace the track or just let the real-time updates stand.
-            # However, the dialog only returns the track on finish.
-            # Real-time updates push directly to the track.
-            # To avoid duplication if we re-apply the full track at the end:
-            # We should probably clear the track at start or rely on real-time only?
-            # Actually, `dialog.result_track()` returns the full track.
-            # If we appended real-time, `self._project.subtitle_track` is already populated.
-            # Let's ensure we don't duplicate. We can just use the final result to be safe/atomic,
-            # OR rely solely on real-time.
-            # Better approach: Real-time adds to the LIVE track. The final result is just a confirmation.
-            # But `WhisperDialog` builds its own track locally. It doesn't modify the project track.
-            # So `_on_whisper_segment_ready` should take the segment and append it to `self._project.subtitle_track`.
-            # And at the end, we might not need to do anything if real-time covered it all.
-            # BUT: If user cancels, we might want to keep partials?
-            # Let's see: `_on_whisper_segment_ready` will append.
-            # If `dialog.exec()` returns Accepted, it means it finished.
-            pass
         
-        # After dialog closes (finished or cancelled), refresh one last time
-        self._refresh_all_widgets()
+        if dialog.exec():
+            # If successfully finished, update with the full resulting track
+            new_track = dialog.result_track()
+            if new_track:
+                from src.ui.commands import UpdateSubtitleTrackCommand
+                self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track))
+                self._subtitle_panel.set_track(new_track)
+                self.statusBar().showMessage(tr("Subtitles generated successfully"))
+
+    def _on_generate_subtitles_from_timeline(self) -> None:
+        """Generate subtitles from edited timeline segments."""
+        if not self._project.video_clip_track or not self._project.video_clip_track.clips:
+            QMessageBox.warning(self, tr("No Clips"), tr("Timeline is empty. Please add video clips first."))
+            return
+
+        if not find_ffmpeg():
+            QMessageBox.critical(
+                self, tr("FFmpeg Missing"),
+                tr("FFmpeg is required for subtitle generation but was not found.")
+            )
+            return
+
+        # Warning dialog
+        msg = tr(
+            "This will generate subtitles based on the current edited timeline.\n\n"
+            "1. Exporting edited audio (this may take a few moments)\n"
+            "2. Transcribing with Whisper\n"
+            "3. Replacing existing subtitles with new results\n\n"
+            "Continue?"
+        )
+        if QMessageBox.question(self, tr("Generate from Timeline"), msg) != QMessageBox.StandardButton.Yes:
+            return
+
+        # Progress dialog for audio export
+        progress_dialog = QProgressDialog(tr("Exporting timeline audio..."), tr("Cancel"), 0, 100, self)
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.show()
+
+        audio_path = None
+        try:
+            from src.services.timeline_audio_exporter import export_timeline_audio
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            tmp.close()
+            audio_path = Path(tmp.name)
+
+            # Export audio
+            export_timeline_audio(
+                self._project.video_clip_track,
+                output_path=audio_path,
+                on_progress=progress_dialog.setValue
+            )
+            
+            if progress_dialog.wasCanceled():
+                return
+
+            # Launch WhisperDialog in audio mode
+            from src.ui.dialogs.whisper_dialog import WhisperDialog
+            dialog = WhisperDialog(audio_path=audio_path, parent=self)
+            dialog.segment_ready.connect(self._on_whisper_segment_ready)
+            
+            if dialog.exec():
+                new_track = dialog.result_track()
+                if new_track:
+                    from src.ui.commands import UpdateSubtitleTrackCommand
+                    self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track))
+                    self._subtitle_panel.set_track(new_track)
+                    self.statusBar().showMessage(tr("Subtitles generated from timeline"))
+
+        except Exception as e:
+            QMessageBox.critical(self, tr("Error"), f"Failed to generate subtitles: {str(e)}")
+        finally:
+            progress_dialog.close()
+            if audio_path and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except OSError:
+                    pass
 
     def _on_whisper_segment_ready(self, segment: SubtitleSegment) -> None:
-        """Handle real-time subtitle segment generation."""
-        # Ensure we have a track
-        if self._project.subtitle_track is None:
-            self._project.subtitle_track = SubtitleTrack()
-            self._timeline.set_subtitle_track(self._project.subtitle_track)
-        
-        # Add segment
-        self._project.subtitle_track.add_segment(segment)
-        
-        # Refresh UI
-        # We don't want to do a full expensive refresh every segment if possible,
-        # but for now `_refresh_all_widgets` is safe.
-        # Maybe just repaint timeline and update subtitle panel?
-        self._timeline.update()
-        if self._subtitle_panel:
-            self._subtitle_panel.refresh()
+        """Handle real-time segment updates from WhisperDialog."""
+        if self._project and self._project.subtitle_track:
+            self._project.subtitle_track.add_segment(segment)
+            if self._subtitle_panel:
+                self._subtitle_panel.refresh()
+            self._video_player.update_subtitles()
+            self._timeline.update()
 
     def _on_generate_tts(self) -> None:
         """Open TTS dialog to generate speech from script."""
@@ -2213,6 +2299,7 @@ class MainWindow(QMainWindow):
             self._autosave.set_active_file(path)
             self._undo_stack.clear()
             self._timeline.set_project(project)
+            self._timeline.set_waveform_service(self._waveform_service)
             self._track_headers.set_project(project)
 
             # Load video if it exists
@@ -2281,6 +2368,7 @@ class MainWindow(QMainWindow):
                 self._timeline.set_playhead(position_ms)
                 self._controls.set_output_position(position_ms)
             self._sync_tts_playback()
+            self._update_playback_volume()
         else:
             # No video - directly seek TTS player
             track = self._project.subtitle_track
@@ -2378,9 +2466,10 @@ class MainWindow(QMainWindow):
             timeline_ms = int(clip_start + local_offset)
             
             self._timeline.set_playhead(timeline_ms)
-            self._controls.set_output_position(timeline_ms)
-            self._video_widget._update_subtitle(timeline_ms)
+            self._controls.set_output_position(position_ms)
+            self._video_widget._update_subtitle(position_ms)
             self._sync_tts_playback()
+            self._update_playback_volume()
         
         # Check transition to next clip or another track
         if position_ms >= current_clip.source_out_ms - 30:
@@ -2405,26 +2494,88 @@ class MainWindow(QMainWindow):
                 if self._play_intent:
                     self._player.play()
 
-    def _resolve_playback_path(self, source_path: str | None) -> str:
-        """Resolve playback path, using temp converted file if available.
+    def _toggle_proxies(self, checked: bool) -> None:
+        """Toggle use of proxy media for playback."""
+        self._use_proxies = checked
+        self.statusBar().showMessage(
+            tr("Using Proxy Media") if checked else tr("Using Original Media")
+        )
+        
+        # If we have a current project, ensure all clips have proxies being generated
+        if checked:
+            for clip in self._project.video_clip_track.clips:
+                if clip.source_path:
+                    self._start_proxy_generation(Path(clip.source_path))
 
-        If source_path is None or matches project video path, returns
-        temp playback path (e.g. converted MP4) if it exists.
+        # Refresh playback to use new source
+        self._on_player_position_changed(self._player.position())
+
+    def _start_proxy_generation(self, source_path: Path) -> None:
+        """Start background worker to generate proxy for a source file."""
+        src_str = str(source_path)
+        if src_str in self._proxy_map:
+            return
+
+        from src.workers.proxy_worker import ProxyWorker
+        
+        # Don't start duplicate thread
+        for t in self._proxy_threads:
+            if t.objectName() == src_str:
+                return
+
+        thread = QThread()
+        thread.setObjectName(src_str)
+        worker = ProxyWorker(source_path, self._current_project_path)
+        worker.moveToThread(thread)
+        
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_proxy_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._proxy_threads.remove(thread) if thread in self._proxy_threads else None)
+        
+        self._proxy_threads.append(thread)
+        thread.start()
+
+    @Slot(object, object)
+    def _on_proxy_finished(self, source_path: Path, proxy_path: Path) -> None:
+        """Callback when proxy generation completes."""
+        self._proxy_map[str(source_path)] = str(proxy_path)
+        # If this source is currently playing, we might want to switch to it
+        if self._use_proxies:
+            self._on_player_position_changed(self._player.position())
+
+    def _resolve_playback_path(self, source_path: str | Path | None) -> str:
+        """Resolve a logical path into a real file path for QMediaPlayer.
+        
+        Handles:
+        1. Non-MP4 converted temp files (on macOS).
+        2. Proxy media if enabled and available.
+        3. Original source files.
         """
-        # 1. Handle main video (source_path is None or matches project path)
+        # 1. Normalize source_path
+        if source_path is None:
+            if not self._project.video_path:
+                return ""
+            src_str = str(self._project.video_path)
+        else:
+            src_str = str(source_path)
+
+        # 2. Check for Proxy if enabled
+        if self._use_proxies:
+            # Check map
+            effective_src = src_str
+            # If it's the main video and None was passed, use project path for lookup
+            proxy = self._proxy_map.get(effective_src)
+            if proxy and Path(proxy).exists():
+                return proxy
+
+        # 3. Handle main video conversion (macOS compatibility)
         is_main_video = False
         if source_path is None:
             is_main_video = True
         elif self._project.video_path:
-            # Check string equality first, then resolve if needed
-            if source_path == str(self._project.video_path):
-                is_main_video = True
-            elif Path(source_path).resolve() == self._project.video_path.resolve():
-                is_main_video = True
-
-        if is_main_video:
-            if self._temp_video_path and self._temp_video_path.is_file():
-                return str(self._temp_video_path)
             return str(self._project.video_path) if self._project.video_path else ""
 
         # 2. Return original path for external videos (conversion not yet supported for external items)
@@ -2549,11 +2700,33 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{tr('Player error')}: {error_string}")
 
     # ------------------------------------------------------------------ Snap
-    def _toggle_magnetic_snap(self) -> None:
+    def _toggle_magnetic_snap(self, checked: bool) -> None:
         """Toggle magnetic snap state."""
-        enabled = self._timeline.toggle_magnetic_snap()
-        self._snap_toggle_btn.setChecked(enabled)
-        state = tr("Enabled") if enabled else tr("Disabled")
+        self._timeline.toggle_magnetic_snap()
+        self._snap_toggle_btn.setChecked(self._timeline.is_magnetic_snap_enabled())
+
+    def _update_playback_volume(self) -> None:
+        """Update QAudioOutput volume based on current clip volume and master volume."""
+        if not self._project or not self._audio_output:
+            return
+
+        master_vol = self._controls.get_video_volume()
+        
+        # Get clip at current timeline position (using top-most visible)
+        timeline_ms = self._timeline.get_playhead()
+        res = self._get_top_clip_at(timeline_ms)
+        
+        if res:
+            v_idx, c_idx, clip = res
+            clip_start = self._project.video_tracks[v_idx].clip_timeline_start(c_idx)
+            offset_ms = timeline_ms - clip_start
+            
+            clip_vol = clip.get_volume_at(offset_ms)
+            final_vol = max(0.0, min(1.0, master_vol * clip_vol))
+            self._audio_output.setVolume(final_vol)
+        else:
+            self._audio_output.setVolume(master_vol)
+        state = tr("Enabled") if self._timeline.is_magnetic_snap_enabled() else tr("Disabled")
         self.statusBar().showMessage(f"{tr('Magnetic Snap')}: {state}", 2000)
 
     # -------------------------------------------------------- Video clip editing
@@ -2587,10 +2760,9 @@ class MainWindow(QMainWindow):
         if was_playing:
             self._player.pause()
 
-        from src.models.video_clip import VideoClip
+        # Split using model logic to preserve volume/envelopes
         original = clip
-        first = VideoClip(clip.source_in_ms, split_source, source_path=clip.source_path, speed=clip.speed)
-        second = VideoClip(split_source, clip.source_out_ms, source_path=clip.source_path, speed=clip.speed)
+        first, second = clip.split_at(local_ms)
 
         cmd = SplitClipCommand(self._project, v_idx, clip_idx, original, first, second)
         self._undo_stack.push(cmd)
@@ -3098,21 +3270,33 @@ class MainWindow(QMainWindow):
             self._refresh_all_widgets()
 
     def _on_clip_volume_requested(self, track_idx: int, clip_idx: int) -> None:
-        """Show volume adjustment dialog for a video clip."""
+        """Show unified properties dialog for a video clip."""
         if not self._project:
             return
-        from src.ui.dialogs.clip_volume_dialog import ClipVolumeDialog
-        from src.ui.commands import EditClipVolumeCommand
+        from src.ui.dialogs.clip_properties_dialog import ClipPropertiesDialog
+        from src.ui.commands import EditClipPropertiesCommand
         
         vt = self._project.video_tracks[track_idx]
         clip = vt.clips[clip_idx]
         
-        dialog = ClipVolumeDialog(self, clip.volume)
+        dialog = ClipPropertiesDialog(
+            self, 
+            initial_volume=clip.volume,
+            initial_brightness=clip.brightness,
+            initial_contrast=clip.contrast,
+            initial_saturation=clip.saturation
+        )
         if dialog.exec():
-            new_vol = dialog.get_volume()
-            if new_vol != clip.volume:
-                cmd = EditClipVolumeCommand(clip, clip.volume, new_vol)
+            new_values = dialog.get_values()
+            old_values = {
+                "volume": clip.volume,
+                "brightness": clip.brightness,
+                "contrast": clip.contrast,
+                "saturation": clip.saturation,
+            }
+            # Only push if something changed
+            if any(new_values[k] != old_values[k] for k in new_values):
+                cmd = EditClipPropertiesCommand(clip, old_values, new_values)
                 self._undo_stack.push(cmd)
                 self._on_document_edited()
-                # 썸네일이나 타임라인 레이아웃에 영향은 없으므로 refresh만 호출
                 self._refresh_all_widgets()

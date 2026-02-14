@@ -6,7 +6,7 @@ from enum import Enum, auto
 
 from src.utils.i18n import tr
 
-from PySide6.QtCore import Qt, Signal, QPoint, QRectF
+from PySide6.QtCore import Qt, Signal, QPoint, QRectF, Slot
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -32,7 +32,9 @@ from PySide6.QtWidgets import QMenu, QWidget, QApplication
 
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.subtitle import SubtitleTrack
-from src.models.video_clip import VideoClipTrack
+from src.models.video_clip import VideoClip, VideoClipTrack
+from src.services.waveform_service import WaveformData
+from src.services.timeline_waveform_service import TimelineWaveformService
 from src.utils.config import TIMELINE_HEIGHT
 from src.utils.time_utils import ms_to_display
 
@@ -57,6 +59,7 @@ class _DragMode(Enum):
     TEXT_MOVE = auto()
     TEXT_RESIZE_LEFT = auto()
     TEXT_RESIZE_RIGHT = auto()
+    VOLUME_POINT_MOVE = auto()
 
 
 # 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
@@ -145,6 +148,11 @@ class TimelineWidget(QWidget):
     _WAVEFORM_CENTER = QColor(255, 220, 150) # Bright center line
     _VIDEO_AUDIO_BORDER = QColor(255, 160, 60)
     _VIDEO_AUDIO_COLOR = QColor(255, 140, 40, 50) # Fallback background
+    
+    # Audio Envelope (Rubber Banding)
+    _VOLUME_LINE_COLOR = QColor(255, 255, 255, 200)
+    _VOLUME_POINT_COLOR = QColor(255, 255, 255)
+    _VOLUME_POINT_RADIUS = 4
     
     # Image Overlays (Purple Gradient)
     _IMG_OVERLAY_COLOR_TOP = QColor(160, 90, 220)
@@ -266,10 +274,17 @@ class TimelineWidget(QWidget):
         self._snap_enabled: bool = True
         self._snap_guide_x: float | None = None
 
-        # 웨이브폼: 비디오 오디오 파형 (캐시로 그리기 부담 감소)
-        self._waveform_data = None  # WaveformData or None
+        # 웨이브폼 서비스 및 데이터 캐시
+        self._waveform_service = None
+        self._waveform_data = None  # Global project waveform (legacy)
+        self._waveform_image_cache = None
+        self._waveform_cache_key = None
         self._waveform_image_cache: QImage | None = None
         self._waveform_cache_key: tuple | None = None
+        
+        # Envelope Dragging
+        self._drag_volume_point_idx: int = -1
+        self._drag_clip_ref = None
 
         # 썸네일 서비스
         from src.services.timeline_thumbnail_service import TimelineThumbnailService
@@ -329,6 +344,23 @@ class TimelineWidget(QWidget):
         self._duration_ms = project.duration_ms
         self._has_video = project.has_video
         self._invalidate_static_cache()
+        self.update()
+
+    def set_waveform_service(self, service: TimelineWaveformService | None) -> None:
+        """Set the waveform service and connect signals."""
+        if self._waveform_service:
+            try:
+                self._waveform_service.waveform_ready.disconnect(self._on_waveform_ready)
+            except (TypeError, RuntimeError):
+                pass
+        self._waveform_service = service
+        if self._waveform_service:
+            self._waveform_service.waveform_ready.connect(self._on_waveform_ready)
+        self.update()
+
+    @Slot(str, object)
+    def _on_waveform_ready(self, source_path: str, data: WaveformData) -> None:
+        """Handle waveform ready signal from service."""
         self.update()
 
     def set_primary_video_path(self, path: str | None) -> None:
@@ -555,7 +587,8 @@ class TimelineWidget(QWidget):
 
     def clear_waveform(self) -> None:
         """웨이브폼 제거."""
-        self._waveform_data = None
+        self._waveform_service = None
+        self._waveform_data = None  # Global project waveform (legacy)
         self._waveform_image_cache = None
         self._waveform_cache_key = None
         self._invalidate_static_cache()
@@ -1130,6 +1163,8 @@ class TimelineWidget(QWidget):
         y = self._video_track_y(track_idx)
         h = _CLIP_H
         
+        waveform_color = self._WAVEFORM_FILL
+        waveform_edge = self._WAVEFORM_EDGE
         # Assign colors to unique source paths
         source_paths = set(c.source_path for c in track.clips)
         source_color_map = {}
@@ -1168,16 +1203,24 @@ class TimelineWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rect, 6, 6)
             
+            # --- Rendering Clip-level Waveform ---
+            if self._waveform_service and clip.source_path:
+                wf = self._waveform_service.get_waveform(clip.source_path)
+                if wf:
+                    self._draw_clip_waveform(painter, rect, clip, wf)
+                else:
+                    # Request if not available
+                    self._waveform_service.request_waveform(clip.source_path)
+            
             # --- Filmstrip Thumbnails ---
-            # Draw thumbnails for all clips (primary and external sources)
             if self._should_draw_thumbnails(rect.width()):
-                vis_x1 = max(0, int(x1))
-                vis_x2 = min(w, int(x2))
+                vis_x1 = max(int(x1), int(self._ms_to_x(start_ms)))
+                # Calculate visible end to avoid redundant requests
+                vis_x2 = min(int(x2), int(self._ms_to_x(start_ms + clip.duration_ms)))
                 
                 if vis_x2 > vis_x1:
                     interval = self._get_thumbnail_interval()
                     start_grid = (vis_x1 // interval) * interval
-                    
                     painter.save()
                     painter.setClipRect(rect)
                     
@@ -1230,6 +1273,150 @@ class TimelineWidget(QWidget):
                 painter.setFont(QFont("Arial", 8))
                 painter.drawText(rect.adjusted(10, 2, -10, -2), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
 
+            # --- Volume Envelope (Rubber Banding) ---
+            if hasattr(clip, "volume_points") and clip.volume_points:
+                self._draw_volume_envelope(painter, rect, clip)
+            else:
+                # Always draw a horizontal line at 100% volume (middle) if no points
+                # Actually, let's draw it at the clip's 'volume' property level if no points?
+                # For Phase T8, we'll draw it at y corresponding to 1.0 gain.
+                self._draw_default_volume_line(painter, rect, clip)
+
+    def _draw_clip_waveform(self, painter: QPainter, rect: QRectF, clip: VideoClip, wf: WaveformData) -> None:
+        """Draw waveform for a specific clip within its timeline rectangle."""
+        rect_x = rect.x()
+        rect_y = rect.y()
+        rect_w = rect.width()
+        rect_h = rect.height()
+        
+        center_y = rect_y + rect_h / 2.0
+        half_h = rect_h / 2.0
+        
+        # Clip source range
+        s_in = clip.source_in_ms
+        s_out = clip.source_out_ms
+        
+        # Pixels to iterate
+        p_start = max(0, int(rect_x))
+        p_end = min(self.width(), int(rect_x + rect_w))
+        
+        painter.setPen(QPen(self._WAVEFORM_EDGE, 1))
+        
+        # Get clip start on timeline for coordinate mapping
+        try:
+            # We assume current track clips are being drawn
+            idx = self._clip_track.clips.index(clip)
+            clip_start_ms = self._clip_track.clip_timeline_start(idx)
+        except (ValueError, AttributeError):
+            clip_start_ms = 0
+
+        # Optimization: Loop over pixels and pick corresponding source ms
+        for px in range(p_start, p_end):
+            # 1. Timeline pixel -> timeline ms (relative to clip start)
+            ms_on_timeline = self._x_to_ms(px)
+            local_ms = ms_on_timeline - clip_start_ms
+            
+            # 2. Local timeline ms -> source ms
+            source_ms = s_in + int(local_ms * clip.speed)
+            
+            if source_ms < s_in or source_ms >= s_out or source_ms >= wf.duration_ms:
+                continue
+            
+            # 3. Source ms -> peak data index
+            idx = int(source_ms)
+            if idx >= len(wf.peaks_pos):
+                continue
+                
+            peak_max = wf.peaks_pos[idx]
+            peak_min = wf.peaks_neg[idx]
+            
+            y_top = center_y - (peak_max * half_h)
+            y_bot = center_y - (peak_min * half_h)
+            
+            painter.drawLine(px, int(y_top), px, int(y_bot))
+
+    def _draw_volume_envelope(self, painter: QPainter, rect: QRectF, clip: VideoClip) -> None:
+        """Draw the volume line connect points + points themselves."""
+        if not clip.volume_points:
+            self._draw_default_volume_line(painter, rect, clip)
+            return
+
+        painter.save()
+        painter.setClipRect(rect)
+        
+        rect_x = rect.x()
+        rect_y = rect.y()
+        rect_h = rect.height()
+        
+        # Helper to map volume (0.0 - 2.0) to y
+        def vol_to_y(vol: float) -> float:
+            # 2.0 -> top, 1.0 -> middle, 0.0 -> bottom
+            # We use a bit of margin so points aren't cut off at the very edge
+            margin = 4
+            norm = (2.0 - vol) / 2.0  # 0.0 at 2.0 vol, 0.5 at 1.0 vol, 1.0 at 0.0 vol
+            return rect_y + margin + norm * (rect_h - 2 * margin)
+
+        # Sort points by offset
+        sorted_points = sorted(clip.volume_points, key=lambda p: p.offset_ms)
+        
+        path = []
+        # Start of clip
+        if sorted_points[0].offset_ms > 0:
+            first_vol = sorted_points[0].volume
+            path.append(QPoint(int(rect_x), int(vol_to_y(first_vol))))
+        
+        for p in sorted_points:
+            px = rect_x + p.offset_ms * self._px_per_ms
+            path.append(QPoint(int(px), int(vol_to_y(p.volume))))
+        
+        # End of clip
+        if sorted_points[-1].offset_ms < clip.duration_ms:
+            last_vol = sorted_points[-1].volume
+            path.append(QPoint(int(rect_x + rect.width()), int(vol_to_y(last_vol))))
+        
+        # Draw line
+        painter.setPen(QPen(self._VOLUME_LINE_COLOR, 1.5))
+        for i in range(len(path) - 1):
+            painter.drawLine(path[i], path[i+1])
+            
+        # Draw points
+        painter.setPen(QPen(self._VOLUME_LINE_COLOR, 1))
+        painter.setBrush(QBrush(self._VOLUME_POINT_COLOR))
+        for p in path:
+            painter.drawEllipse(p, self._VOLUME_POINT_RADIUS, self._VOLUME_POINT_RADIUS)
+            
+        painter.restore()
+
+    def _draw_default_volume_line(self, painter: QPainter, rect: QRectF, clip: VideoClip) -> None:
+        """Draw a flat volume line at clip.volume level."""
+        painter.save()
+        painter.setClipRect(rect)
+        
+        rect_x = rect.x()
+        rect_y = rect.y()
+        rect_h = rect.height()
+        
+        # 1.0 vol -> middle
+        vol = clip.volume if hasattr(clip, "volume") else 1.0
+        norm = (2.0 - vol) / 2.0
+        margin = 4
+        y = rect_y + margin + norm * (rect_h - 2 * margin)
+        
+        painter.setPen(QPen(self._VOLUME_LINE_COLOR, 1, Qt.PenStyle.DashLine))
+        painter.drawLine(int(rect_x), int(y), int(rect_x + rect.width()), int(y))
+        
+        painter.restore()
+
+    def clip_timeline_start_ms(self, clip: VideoClip) -> int:
+        """Find timeline start position of a clip."""
+        if not self._clip_track:
+            return 0
+        try:
+            idx = self._clip_track.clips.index(clip)
+            return self._clip_track.clip_timeline_start(idx)
+        except ValueError:
+            return 0
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._duration_ms <= 0 or self._px_per_ms <= 0:
             return
@@ -1239,6 +1426,12 @@ class TimelineWidget(QWidget):
 
         # Shift + 클릭 드래그: 뷰 팬
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            seg_idx, hit, v_idx = self._hit_test(x, y)
+            if hit == "clip_body" or hit == "volume_point":
+                # Shift + Click on clip body or near point -> Add / Toggle point
+                self._handle_volume_point_shift_click(v_idx, seg_idx, x, y)
+                return
+            
             self._drag_mode = _DragMode.PAN_VIEW
             self._drag_start_x = x
             self._drag_start_visible_ms = self._visible_start_ms
@@ -1258,6 +1451,21 @@ class TimelineWidget(QWidget):
             vt = self._project.video_tracks[v_idx] if self._project else None
             if vt and vt.locked:
                 return
+            
+            if hit == "volume_point":
+                self._selected_clip_track_index = v_idx
+                self._selected_clip_index = seg_idx
+                self._drag_mode = _DragMode.VOLUME_POINT_MOVE
+                self._drag_volume_point_idx = seg_idx # Wait, seg_idx from hit_test is point index in this case
+                # Actually, our _hit_test returns (point_idx, "volume_point", track_idx)
+                self._drag_volume_point_idx = seg_idx
+                self._drag_clip_track_index = v_idx
+                # We need the clip index too... hit_test doesn't return it for volume_point currently
+                # Let's fix hit_test to return clip_idx as well?
+                # Or use _drag_clip_ref which we set in hit_test
+                self.update()
+                return
+
             if hit == "clip_body":
                 self._selected_clip_track_index = v_idx
                 self._selected_clip_index = seg_idx
@@ -1430,6 +1638,10 @@ class TimelineWidget(QWidget):
             self._handle_clip_drag(x)
             return
 
+        if self._drag_mode == _DragMode.VOLUME_POINT_MOVE:
+            self._handle_volume_point_drag(x, y)
+            return
+
         # 호버 시 커서 변경 (플레이헤드·가장자리·본문)
         if self._drag_mode == _DragMode.NONE:
             seg_idx, hit, v_idx = self._hit_test(x, y)
@@ -1481,9 +1693,73 @@ class TimelineWidget(QWidget):
                         self.clip_trimmed.emit(self._drag_clip_index, new_in, new_out)
             self._drag_clip_index = -1
             self._drag_clip_track_index = -1
+        elif self._drag_mode == _DragMode.VOLUME_POINT_MOVE:
+            if self._drag_clip_ref:
+                self._drag_clip_ref.volume_points.sort(key=lambda p: p.offset_ms)
+            self._drag_volume_point_idx = -1
+            self._drag_clip_ref = None
+
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index = -1
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        self.update()
+
+    def _handle_volume_point_shift_click(self, track_idx: int, p_idx_maybe: int, x: float, y: float) -> None:
+        """Add or remove volume point with Shift+Click."""
+        if not self._project or track_idx < 0: return
+        vt = self._project.video_tracks[track_idx]
+        clip = None
+        offset = 0
+        for i, c in enumerate(vt.clips):
+            x1 = self._ms_to_x(offset)
+            x2 = self._ms_to_x(offset + c.duration_ms)
+            if x1 <= x <= x2:
+                clip = c
+                break
+            offset += c.duration_ms
+        if not clip: return
+        timeline_ms = self._x_to_ms(x)
+        clip_start_ms = self.clip_timeline_start_ms(clip)
+        offset_ms = int(max(0, min(clip.duration_ms, timeline_ms - clip_start_ms)))
+        rect_y = self._video_track_y(track_idx)
+        rect_h = _CLIP_H
+        margin = 4
+        norm = (y - rect_y - margin) / (rect_h - 2 * margin)
+        vol = 2.0 - (norm * 2.0)
+        vol = max(0.0, min(2.0, vol))
+        hit_p_idx = -1
+        for i, p in enumerate(clip.volume_points):
+            px = self._ms_to_x(clip_start_ms + p.offset_ms)
+            if abs(x - px) <= self._VOLUME_POINT_RADIUS + 3:
+                hit_p_idx = i
+                break
+        from src.models.video_clip import VolumePoint
+        if hit_p_idx != -1:
+            clip.volume_points.pop(hit_p_idx)
+        else:
+            clip.volume_points.append(VolumePoint(offset_ms=offset_ms, volume=vol))
+            clip.volume_points.sort(key=lambda p: p.offset_ms)
+        self.update()
+
+    def _handle_volume_point_drag(self, x: float, y: float) -> None:
+        """Drag a volume point to change volume and offset."""
+        if not self._drag_clip_ref: return
+        clip = self._drag_clip_ref
+        p_idx = self._drag_volume_point_idx
+        if p_idx < 0 or p_idx >= len(clip.volume_points): return
+        p = clip.volume_points[p_idx]
+        timeline_ms = self._x_to_ms(x)
+        clip_start_ms = self.clip_timeline_start_ms(clip)
+        new_offset = int(max(0, min(clip.duration_ms, timeline_ms - clip_start_ms)))
+        rect_y = self._video_track_y(self._selected_clip_track_index)
+        rect_h = _CLIP_H
+        margin = 4
+        norm = (y - rect_y - margin) / (rect_h - 2 * margin)
+        new_vol = 2.0 - (norm * 2.0)
+        new_vol = max(0.0, min(2.0, new_vol))
+        p.offset_ms = new_offset
+        p.volume = new_vol
+        self.update()
 
     def contextMenuEvent(self, event) -> None:
         """우클릭: 클립 분할/삭제, 이미지 오버레이 삭제 또는 현재 위치에 삽입."""
@@ -2129,6 +2405,24 @@ class TimelineWidget(QWidget):
                         if abs(x - x2) <= _EDGE_PX and i < len(vt.clips) - 1:
                             return i, "clip_right_edge", v_idx
                         if x1 <= x <= x2:
+                            # --- Check for volume point hits ---
+                            if hasattr(clip, "volume_points") and clip.volume_points:
+                                rect_y = track_y
+                                rect_h = _CLIP_H
+                                margin = 4
+                                # Helper to map volume to y (same logic as drawing)
+                                def vol_to_y(vol):
+                                    norm = (2.0 - vol) / 2.0
+                                    return rect_y + margin + norm * (rect_h - 2 * margin)
+                                
+                                for p_idx, p in enumerate(clip.volume_points):
+                                    px = x1 + p.offset_ms * self._px_per_ms
+                                    py = vol_to_y(p.volume)
+                                    if abs(x - px) <= self._VOLUME_POINT_RADIUS + 2 and abs(y - py) <= self._VOLUME_POINT_RADIUS + 2:
+                                        # Use a special string or tuple for volume point hit
+                                        self._drag_clip_ref = clip
+                                        return p_idx, "volume_point", v_idx
+                            
                             return i, "clip_body", v_idx
 
         # Subtitle tracks

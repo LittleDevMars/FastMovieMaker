@@ -25,6 +25,24 @@ class TransitionInfo:
 
 
 @dataclass
+class VolumePoint:
+    """A point in a volume envelope.
+    
+    offset_ms: Position relative to clip start (visual timeline time).
+    volume: Gain multiplier (0.0 to 2.0).
+    """
+    offset_ms: int
+    volume: float
+
+    def to_dict(self) -> dict:
+        return {"offset_ms": self.offset_ms, "volume": self.volume}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> VolumePoint:
+        return cls(offset_ms=data["offset_ms"], volume=data["volume"])
+
+
+@dataclass
 class VideoClip:
     """A contiguous segment of a source video.
 
@@ -38,7 +56,115 @@ class VideoClip:
     source_path: str | None = None  # None = project primary video
     speed: float = 1.0  # 0.25 to 4.0
     volume: float = 1.0  # 0.0 to 2.0
+    volume_points: list[VolumePoint] = field(default_factory=list)
+    brightness: float = 1.0  # 0.5 to 2.0
+    contrast: float = 1.0    # 0.5 to 2.0
+    saturation: float = 1.0  # 0.0 to 2.0
     transition_out: TransitionInfo | None = None  # Effect transitioning into the NEXT clip
+
+    def get_volume_at(self, offset_ms: int) -> float:
+        """Calculate the interpolated volume at a given offset within the clip.
+        
+        Args:
+            offset_ms: Offset relative to clip start (visual timeline time).
+            
+        Returns:
+            Multiplier (0.0 to 2.0).
+        """
+        if not self.volume_points:
+            return self.volume
+
+        # Ensure points are sorted
+        pts = sorted(self.volume_points, key=lambda p: p.offset_ms)
+        
+        # Before first point
+        if offset_ms <= pts[0].offset_ms:
+            return pts[0].volume
+        
+        # After last point
+        if offset_ms >= pts[-1].offset_ms:
+            return pts[-1].volume
+            
+        # Between points
+        for i in range(len(pts) - 1):
+            p1 = pts[i]
+            p2 = pts[i + 1]
+            if p1.offset_ms <= offset_ms <= p2.offset_ms:
+                # Linear interpolation
+                t = (offset_ms - p1.offset_ms) / (p2.offset_ms - p1.offset_ms)
+                return p1.volume + t * (p2.volume - p1.volume)
+        
+        return self.volume
+
+    def clone(self) -> VideoClip:
+        """Return a deep copy of this clip."""
+        tout = self.transition_out
+        c = VideoClip(
+            source_in_ms=self.source_in_ms,
+            source_out_ms=self.source_out_ms,
+            source_path=self.source_path,
+            speed=self.speed,
+            volume=self.volume,
+            volume_points=[VolumePoint(p.offset_ms, p.volume) for p in self.volume_points],
+            brightness=self.brightness,
+            contrast=self.contrast,
+            saturation=self.saturation,
+            transition_out=TransitionInfo(tout.type, tout.duration_ms) if tout else None
+        )
+        return c
+
+    def split_at(self, offset_ms: int) -> tuple[VideoClip, VideoClip]:
+        """Split this clip into two at the given visual offset.
+        
+        Preserves volume, speed, and segments the volume points correctly.
+        
+        Args:
+            offset_ms: Offset relative to clip start (visual timeline time).
+            
+        Returns:
+            Tuple of (first_part, second_part).
+        """
+        # Calculate split point in source time
+        source_split = self.source_in_ms + int(offset_ms * self.speed)
+        
+        # Create parts
+        first = self.clone()
+        first.source_out_ms = source_split
+        
+        second = self.clone()
+        second.source_in_ms = source_split
+        
+        # Handle volume points
+        current_vol = self.get_volume_at(offset_ms)
+        
+        # First part points: points before split + point at split
+        first.volume_points = [
+            VolumePoint(p.offset_ms, p.volume) 
+            for p in self.volume_points if p.offset_ms < offset_ms
+        ]
+        first.volume_points.append(VolumePoint(offset_ms, current_vol))
+        
+        # Second part points: point at start (0) + shifted points after split
+        second.volume_points = [VolumePoint(0, current_vol)]
+        for p in self.volume_points:
+            if p.offset_ms > offset_ms:
+                second.volume_points.append(VolumePoint(p.offset_ms - offset_ms, p.volume))
+        
+        return first, second
+
+    def shift_volume_points(self, delta_ms: int) -> None:
+        """Shift all volume points by delta_ms.
+        
+        Used when the START of the clip is trimmed, shifting local offsets.
+        """
+        for p in self.volume_points:
+            p.offset_ms += delta_ms
+        
+        # Remove points that are now outside the visible range?
+        # Standard: keep them but they won't be interpolated if outside [0, duration].
+        # Actually splitting/trimming might create points at visual 0.
+        # We'll just sort them to be safe.
+        self.volume_points.sort(key=lambda p: p.offset_ms)
 
     @property
     def duration_ms(self) -> int:
@@ -57,8 +183,17 @@ class VideoClip:
             d["speed"] = self.speed
         if self.volume != 1.0:
             d["volume"] = self.volume
-        if self.transition_out is not None:
-            d["transition_out"] = self.transition_out.to_dict()
+        if self.brightness != 1.0:
+            d["brightness"] = self.brightness
+        if self.contrast != 1.0:
+            d["contrast"] = self.contrast
+        if self.saturation != 1.0:
+            d["saturation"] = self.saturation
+        if self.volume_points:
+            d["volume_points"] = [p.to_dict() for p in self.volume_points]
+        tout = self.transition_out
+        if tout:
+            d["transition_out"] = tout.to_dict()
         return d
 
     @classmethod
@@ -69,6 +204,10 @@ class VideoClip:
             source_path=data.get("source_path"),
             speed=data.get("speed", 1.0),
             volume=data.get("volume", 1.0),
+            brightness=data.get("brightness", 1.0),
+            contrast=data.get("contrast", 1.0),
+            saturation=data.get("saturation", 1.0),
+            volume_points=[VolumePoint.from_dict(p) for p in data.get("volume_points", [])],
             transition_out=TransitionInfo.from_dict(data["transition_out"])
             if "transition_out" in data
             else None,
@@ -137,9 +276,9 @@ class VideoClipTrack:
         - ``None``: only clips with ``source_path is None`` (primary video).
         - ``"path.mp4"``: only clips with that exact source_path.
         """
-        offset = 0
-        last_match_clip = None
-        last_match_offset = 0
+        offset: int = 0
+        last_match_clip: VideoClip | None = None
+        last_match_offset: int = 0
         for clip in self.clips:
             if source_path is not _NO_SOURCE_FILTER and clip.source_path != source_path:
                 offset += clip.duration_ms

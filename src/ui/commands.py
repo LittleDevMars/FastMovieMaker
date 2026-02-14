@@ -518,6 +518,13 @@ class TrimClipCommand(QUndoCommand):
     def redo(self) -> None:
         if 0 <= self._index < len(self._clip_track.clips):
             clip = self._clip_track.clips[self._index]
+            
+            # Preserve volume point sync when trimming left
+            if self._new_in != self._old_in:
+                delta_src = self._new_in - self._old_in
+                delta_visual = -int(delta_src / clip.speed)
+                clip.shift_volume_points(delta_visual)
+                
             clip.source_in_ms = self._new_in
             clip.source_out_ms = self._new_out
             
@@ -527,6 +534,13 @@ class TrimClipCommand(QUndoCommand):
     def undo(self) -> None:
         if 0 <= self._index < len(self._clip_track.clips):
             clip = self._clip_track.clips[self._index]
+            
+            # Reverse volume point shift
+            if self._new_in != self._old_in:
+                delta_src = self._old_in - self._new_in
+                delta_visual = -int(delta_src / clip.speed)
+                clip.shift_volume_points(delta_visual)
+                
             clip.source_in_ms = self._old_in
             clip.source_out_ms = self._old_out
 
@@ -753,20 +767,26 @@ class EditTransitionCommand(QUndoCommand):
             self._sub_track.audio_start_ms += delta
 
 
-class EditClipVolumeCommand(QUndoCommand):
-    """Command to change the audio volume of a video clip."""
+class EditClipPropertiesCommand(QUndoCommand):
+    """Adjust video clip properties (volume, brightness, contrast, saturation)."""
 
-    def __init__(self, clip: VideoClip, old_vol: float, new_vol: float):
-        super().__init__(tr("Edit clip volume"))
+    def __init__(self, clip: VideoClip, old_values: dict, new_values: dict):
+        super().__init__(tr("Edit clip properties"))
         self._clip = clip
-        self._old_vol = old_vol
-        self._new_vol = new_vol
+        self._old = old_values
+        self._new = new_values
 
     def redo(self) -> None:
-        self._clip.volume = self._new_vol
+        self._apply(self._new)
 
     def undo(self) -> None:
-        self._clip.volume = self._old_vol
+        self._apply(self._old)
+
+    def _apply(self, values: dict) -> None:
+        self._clip.volume = values.get("volume", self._clip.volume)
+        self._clip.brightness = values.get("brightness", self._clip.brightness)
+        self._clip.contrast = values.get("contrast", self._clip.contrast)
+        self._clip.saturation = values.get("saturation", self._clip.saturation)
 
 
 # ============================================================================

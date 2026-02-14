@@ -27,9 +27,10 @@ class WhisperWorker(QObject):
     finished = Signal(SubtitleTrack)
     error = Signal(str)
 
-    def __init__(self, video_path: Path, model_name: str, language: str):
+    def __init__(self, video_path: Path | None = None, audio_path: Path | None = None, model_name: str = "base", language: str = "ko"):
         super().__init__()
         self._video_path = video_path
+        self._audio_path = audio_path
         self._model_name = model_name
         self._language = language
         self._cancelled = False
@@ -40,11 +41,17 @@ class WhisperWorker(QObject):
     def run(self) -> None:
         """Execute the full transcription pipeline."""
         wav_path: Path | None = None
+        should_cleanup_wav = False
         model = None
         try:
-            # Step 1: Extract audio
-            self.status_update.emit("Extracting audio from video...")
-            wav_path = extract_audio_to_wav(self._video_path)
+            # Step 1: Extract audio (skip if audio_path provided)
+            if self._audio_path:
+                wav_path = self._audio_path
+                should_cleanup_wav = False
+            else:
+                self.status_update.emit("Extracting audio from video...")
+                wav_path = extract_audio_to_wav(self._video_path)
+                should_cleanup_wav = True
 
             if self._cancelled:
                 return
@@ -78,7 +85,8 @@ class WhisperWorker(QObject):
             # Cleanup
             if model is not None:
                 release_model(model)
-            if wav_path is not None:
+            # Only delete temp WAV if we created it
+            if should_cleanup_wav and wav_path is not None:
                 try:
                     wav_path.unlink(missing_ok=True)
                 except OSError:

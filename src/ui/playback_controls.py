@@ -21,6 +21,7 @@ class PlaybackControls(QWidget):
     position_changed_by_user = Signal(int)  # ms
     play_toggled = Signal()   # 재생/일시정지 토글 요청
     stop_requested = Signal()  # 정지 요청
+    video_volume_changed = Signal(float)  # master volume (0.0 to 1.0)
 
     def __init__(self, player: QMediaPlayer, audio_output: QAudioOutput, parent=None):
         super().__init__(parent)
@@ -141,7 +142,13 @@ class PlaybackControls(QWidget):
         return self._tts_vol_slider.value() / 100.0
 
     def _on_video_volume_changed(self, value: int) -> None:
-        self._audio_output.setVolume(value / 100.0)
+        vol = value / 100.0
+        self._audio_output.setVolume(vol)
+        self.video_volume_changed.emit(vol)
+
+    def get_video_volume(self) -> float:
+        """Return current video master volume (0.0 to 1.0)."""
+        return self._video_vol_slider.value() / 100.0
 
     def _on_tts_volume_changed(self, value: int) -> None:
         if self._tts_audio_output:

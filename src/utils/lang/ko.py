@@ -27,6 +27,7 @@ STRINGS: dict[str, str] = {
     # ── Subtitles menu ──
     "&Subtitles": "자막(&S)",
     "&Generate (Whisper)...": "자막 생성 (Whisper)(&G)...",
+    "Generate from &Edited Timeline...": "편집된 타임라인에서 자막 생성(&E)...",
     "Generate &Speech (TTS)...": "음성 생성 (TTS)(&S)...",
     "&Play TTS Audio": "TTS 오디오 재생(&P)",
     "&Regenerate Audio from Timeline": "타임라인에서 오디오 재생성(&R)",
@@ -95,6 +96,13 @@ STRINGS: dict[str, str] = {
     "Regenerate Audio?": "오디오 재생성?",
     "Audio Regenerated": "오디오 재생성 완료",
     "Regeneration Failed": "재생성 실패",
+    "Generate from Timeline": "타임라인에서 자막 생성",
+    "This will generate subtitles based on the current edited timeline.\n\n1. Exporting edited audio (this may take a few moments)\n2. Transcribing with Whisper\n3. Replacing existing subtitles with new results\n\nContinue?": "현재 편집된 타임라인을 기반으로 자막을 생성합니다.\n\n1. 편집된 오디오 내보내기 (몇 초 정도 소요될 수 있음)\n2. Whisper로 텍스트 변환\n3. 기존 자막을 새로운 결과로 교체\n\n계속하시겠습니까?",
+    "Exporting timeline audio...": "타임라인 오디오 내보내는 중...",
+    "Subtitles generated from timeline": "타임라인에서 자막 생성 완료",
+    "Subtitles generated successfully": "자막이 성공적으로 생성되었습니다",
+    "Timeline is empty. Please add video clips first.": "타임라인이 비어 있습니다. 먼저 비디오 클립을 추가하세요.",
+    "No Clips": "클립 없음",
 
     # ── Timeline widget (context menu) ──
     "Split at Playhead (Ctrl+B)": "플레이헤드에서 분할 (Ctrl+B)",

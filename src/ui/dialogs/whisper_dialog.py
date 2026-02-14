@@ -29,13 +29,17 @@ class WhisperDialog(QDialog):
     error = Signal(str)
     segment_ready = Signal(object)  # Forwarded from worker
 
-    def __init__(self, video_path: Path, parent=None):
+    def __init__(self, video_path: Path | None = None, audio_path: Path | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Generate Subtitles (Whisper)"))
         self.setMinimumWidth(420)
         self.setModal(True)
 
+        if not video_path and not audio_path:
+            raise ValueError("Either video_path or audio_path must be provided")
+
         self._video_path = video_path
+        self._audio_path = audio_path
         self._result_track: SubtitleTrack | None = None
         self._thread: QThread | None = None
         self._worker: WhisperWorker | None = None
@@ -98,7 +102,12 @@ class WhisperDialog(QDialog):
 
         # Worker + Thread setup
         self._thread = QThread()
-        self._worker = WhisperWorker(self._video_path, model_name, language)
+        self._worker = WhisperWorker(
+            video_path=self._video_path,
+            audio_path=self._audio_path,
+            model_name=model_name,
+            language=language
+        )
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
