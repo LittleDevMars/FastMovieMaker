@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from src.models.video_clip import VideoClip, VideoClipTrack
     from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
     from src.models.text_overlay import TextOverlay, TextOverlayTrack
+    from src.models.audio import AudioClip, AudioTrack
 
 
 class EditTextCommand(QUndoCommand):
@@ -880,3 +881,85 @@ class UpdateTextOverlayCommand(QUndoCommand):
             self._overlay.opacity = data["opacity"]
         if "style" in data:
             self._overlay.style = data["style"]
+
+
+# ============================================================================
+# Audio Clip (BGM) Commands
+# ============================================================================
+
+class AddAudioClipCommand(QUndoCommand):
+    """Add a new background music clip."""
+
+    def __init__(self, project: ProjectState, track_index: int, clip: AudioClip):
+        super().__init__(tr("Add BGM clip"))
+        self._project = project
+        self._track_index = track_index
+        self._clip = clip
+
+    def redo(self) -> None:
+        if 0 <= self._track_index < len(self._project.bgm_tracks):
+            self._project.bgm_tracks[self._track_index].add_clip(self._clip)
+
+    def undo(self) -> None:
+        if 0 <= self._track_index < len(self._project.bgm_tracks):
+            self._project.bgm_tracks[self._track_index].remove_clip(self._clip)
+
+
+class MoveAudioClipCommand(QUndoCommand):
+    """Move an audio clip (change start position)."""
+
+    def __init__(self, clip: AudioClip, old_start: int, new_start: int):
+        super().__init__(tr("Move BGM clip"))
+        self._clip = clip
+        self._old_start = old_start
+        self._new_start = new_start
+
+    def redo(self) -> None:
+        self._clip.start_ms = self._new_start
+
+    def undo(self) -> None:
+        self._clip.start_ms = self._old_start
+
+
+class TrimAudioClipCommand(QUndoCommand):
+    """Trim an audio clip (change start/duration)."""
+
+    def __init__(self, clip: AudioClip, old_start: int, old_duration: int,
+                 new_start: int, new_duration: int):
+        super().__init__(tr("Trim BGM clip"))
+        self._clip = clip
+        self._old_start = old_start
+        self._old_duration = old_duration
+        self._new_start = new_start
+        self._new_duration = new_duration
+
+    def redo(self) -> None:
+        self._clip.start_ms = self._new_start
+        self._clip.duration_ms = self._new_duration
+
+    def undo(self) -> None:
+        self._clip.start_ms = self._old_start
+        self._clip.duration_ms = self._old_duration
+
+
+class DeleteAudioClipCommand(QUndoCommand):
+    """Delete a BGM clip."""
+
+    def __init__(self, project: ProjectState, track_index: int, clip_index: int, clip: AudioClip):
+        super().__init__(tr("Delete BGM clip"))
+        self._project = project
+        self._track_index = track_index
+        self._clip_index = clip_index
+        self._clip = clip
+
+    def redo(self) -> None:
+        if 0 <= self._track_index < len(self._project.bgm_tracks):
+            track = self._project.bgm_tracks[self._track_index]
+            if 0 <= self._clip_index < len(track.clips):
+                track.clips.pop(self._clip_index)
+
+    def undo(self) -> None:
+        if 0 <= self._track_index < len(self._project.bgm_tracks):
+            track = self._project.bgm_tracks[self._track_index]
+            track.clips.insert(self._clip_index, self._clip)
+            track.clips.sort(key=lambda c: c.start_ms)

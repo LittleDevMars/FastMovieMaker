@@ -10,7 +10,7 @@ from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleTrack
 from src.models.video_clip import VideoClipTrack
 from src.models.text_overlay import TextOverlayTrack
-from src.models.text_overlay import TextOverlayTrack
+from src.models.audio import AudioTrack
 
 
 @dataclass
@@ -26,6 +26,7 @@ class ProjectState:
     image_overlay_track: ImageOverlayTrack = field(default_factory=ImageOverlayTrack)
     video_tracks: list[VideoClipTrack] = field(default_factory=lambda: [VideoClipTrack()])
     text_overlay_track: TextOverlayTrack = field(default_factory=TextOverlayTrack)
+    bgm_tracks: list[AudioTrack] = field(default_factory=lambda: [AudioTrack()])
 
     @property
     def video_clip_track(self) -> VideoClipTrack:
@@ -89,3 +90,4 @@ class ProjectState:
         self.image_overlay_track = ImageOverlayTrack()
         self.video_tracks = [VideoClipTrack()]
         self.text_overlay_track = TextOverlayTrack()
+        self.bgm_tracks = [AudioTrack()]

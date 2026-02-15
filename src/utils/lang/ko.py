@@ -32,7 +32,7 @@ STRINGS: dict[str, str] = {
     "&Play TTS Audio": "TTS 오디오 재생(&P)",
     "&Regenerate Audio from Timeline": "타임라인에서 오디오 재생성(&R)",
     "&Clear Subtitles": "자막 지우기(&C)",
-    "&Translate Track...": "트랙 번역(&T)...",
+    "&Translate Track...": "AI 자막 번역(&T)...",
     "Default &Style...": "기본 스타일(&S)...",
     "Edit Subtitle &Position": "자막 위치 편집(&P)",
 
@@ -175,6 +175,8 @@ STRINGS: dict[str, str] = {
     "Background volume:": "배경 볼륨:",
     "TTS volume:": "TTS 볼륨:",
     "Apply per-segment volumes": "세그먼트별 볼륨 적용",
+    "Use Hardware Acceleration (GPU)": "하드웨어 가속 (GPU) 사용",
+    "Hardware acceleration is available on this system.": "이 시스템에서 하드웨어 가속을 사용할 수 있습니다.",
     "Export Progress": "내보내기 진행률",
     "Preparing export...": "내보내기 준비 중...",
     "Export...": "내보내기...",

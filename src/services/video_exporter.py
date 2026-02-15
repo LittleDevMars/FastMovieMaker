@@ -171,6 +171,7 @@ def export_video(
     image_overlays: list | None = None,
     video_tracks: list[VideoClipTrack] | None = None,
     text_overlays: list[TextOverlay] | None = None,
+    use_gpu: bool = False,
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -225,46 +226,43 @@ def export_video(
 
         if output_path.suffix.lower() == ".webm":
             video_encoder = "libvpx-vp9"
-            # VP9 doesn't use -preset typically like x264, but has -cpu-used
-            # We'll map preset loosely or just ignore for VP9 to keep it simple
             encoder_flags = ["-crf", str(crf), "-b:v", "0"]
             audio_codec_flags = ["-c:a", "libvorbis", "-b:a", "128k"]
         else:
-            # H.264 / HEVC
-            # Hardware encoders might not support -crf or -preset the same way.
-            # safe assumption: use libx264/libx265 if HW accel is tricky with CRF/Preset.
-            # But get_hw_encoder might return h264_videotoolbox on mac.
-            # h264_videotoolbox supports -q:v (quality) but not CRF.
-            # Let's try to stick to standard software encoders if user wants precise CRF/Preset control?
-            # Or try to map arguments.
+            # Determine encoder and flags based on GPU preference
+            from src.utils.hw_accel import get_hw_encoder
             
-            # For now, let's prioritize the user's explicit codec choice over auto-detection if possible,
-            # OR just append flags and hope ffmpeg maps them (it usually doesn't for HW encoders).
-            
-            # If we want to support Preset/CRF reliably, software encoding (libx264/libx265) is safer.
-            # But it's slower.
-            # Let's try standard get_hw_encoder, but if it returns libx264/libx265, add preset/crf.
-            # If it returns hardware encoder (e.g. h264_nvenc, h264_videotoolbox), we might need specific flags.
-            
-            # MacOS VideoToolbox: -q:v (0-100), no -preset usually.
-            # NVENC: -cq, -preset (p1-p7).
-            
-            # heuristic: if we want extended control, maybe force software?
-            # For this feature "Advanced Export", users might expect CPU encoding reliability.
-            # bit let's try to be smart.
-            
-            if codec == "h264":
-                video_encoder = "libx264"
-            elif codec == "hevc":
-                video_encoder = "libx265"
-            else:
-                video_encoder = "libx264"
+            if use_gpu:
+                hw_encoder, hw_flags = get_hw_encoder(codec)
+                video_encoder = hw_encoder
+                encoder_flags = hw_flags
                 
-            encoder_flags = [
-                "-preset", preset,
-                "-crf", str(crf),
-                "-pix_fmt", "yuv420p"  # Ensure compatibility
-            ]
+                # If using HW, we might need to adjust flags based on specific encoder
+                if "videotoolbox" in hw_encoder:
+                    # VideoToolbox quality is 0-100, where 100 is best.
+                    # CRF 23 is roughly 65-70 quality.
+                    quality = int(max(0, min(100, 100 - (crf * 1.5)))) # Very loose mapping
+                    encoder_flags = ["-q:v", str(int(quality)), "-realtime", "0"]
+                elif "nvenc" in hw_encoder:
+                    # NVENC supports -cq and -preset
+                    encoder_flags = ["-preset", "p4", "-cq", str(crf)]
+                elif "vaapi" in hw_encoder or "amf" in hw_encoder:
+                    # Standard HW flags from get_hw_encoder
+                    pass
+            else:
+                if codec == "h264":
+                    video_encoder = "libx264"
+                elif codec == "hevc":
+                    video_encoder = "libx265"
+                else:
+                    video_encoder = "libx264"
+                
+                encoder_flags = [
+                    "-preset", preset,
+                    "-crf", str(crf),
+                ]
+
+            encoder_flags.extend(["-pix_fmt", "yuv420p"])
             audio_codec_flags = ["-c:a", "aac", "-b:a", "192k"]
 
         # Determine if overlay / PIP is used

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from src.models.subtitle import SubtitleTrack
 from src.utils.i18n import tr
 from src.workers.export_worker import ExportWorker
+from src.utils.hw_accel import get_hw_info
 
 
 class ExportDialog(QDialog):
@@ -176,6 +177,19 @@ class ExportDialog(QDialog):
         crf_hint.setAlignment(Qt.AlignmentFlag.AlignRight)
         video_layout.addWidget(crf_hint)
 
+        # GPU Acceleration
+        self._gpu_checkbox = QCheckBox(tr("Use Hardware Acceleration (GPU)"))
+        hw_info = get_hw_info()
+        has_hw = hw_info.get("recommended") is not None and hw_info.get("recommended") != "software"
+        self._gpu_checkbox.setChecked(has_hw)
+        if has_hw:
+            self._gpu_checkbox.setToolTip(tr("Hardware acceleration is available on this system."))
+        else:
+            self._gpu_checkbox.setEnabled(False)
+            self._gpu_checkbox.setToolTip(tr("No hardware encoder detected."))
+        
+        video_layout.addWidget(self._gpu_checkbox)
+
         layout.addWidget(self._video_group)
 
         # --- Progress section (hidden initially) ---
@@ -283,6 +297,7 @@ class ExportDialog(QDialog):
             crf=crf,
             scale_width=w,
             scale_height=h,
+            use_gpu=self._gpu_checkbox.isChecked(),
         )
         self._worker.moveToThread(self._thread)
 

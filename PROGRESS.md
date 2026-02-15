@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 17 완료 (2026-02-13)
+**현재 상태:** Day 18 완료 (2026-02-15)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -30,6 +30,8 @@
 | 성능 최적화: Timeline QPixmap 캐시, faster-whisper, Waveform 청크, 자막 가상화 | 완료 (Day 14) |
 | **Phase T1: 영상 컷 편집** — 분할(Ctrl+B)/삭제(Delete)/트림, 클립 트랙 UI, 시간 매핑, FFmpeg concat 내보내기, Undo/Redo, 프로젝트 직렬화 v3 | **완료 (Day 15)** |
 | **i18n 다국어 지원** — tr() 기반 번역 시스템, 한국어/영어 전환, 환경설정 언어 선택, ~200+ 번역 키 (15개 UI 파일) | **완료 (Day 16)** |
+| **Phase T13: BGM 트랙 및 오디오 믹싱** — AudioClip/Track 모델, 타임라인 전용 영역, 드래그&트림, 자석 스냅, Undo/Redo | **완료 (Day 18)** |
+| **AI 자막 번역 및 GPU 가속** — Google/GPT 연동, NVENC/QSV/AMF 하드웨어 가속 내보내기 | **완료 (Day 17)** |
 
 ---
 
@@ -1301,6 +1303,52 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 2. ~~Phase 4 Week 3 나머지 기능 (Waveform, Batch Export)~~ → Day 12 완료. Phase 5 계획 또는 P1
 
 ---
+
+## 2026-02-15 (Day 18) 작업 요약
+
+**BGM 트랙 및 오디오 믹싱, 타임라인 가시성 버그 수정**
+
+### 1. BGM 트랙 및 오디오 믹싱 (`src/models/audio.py`, `src/ui/timeline_widget.py`)
+- **데이터 모델:** `AudioClip` 및 `AudioTrack` 도입으로 비디오와 독립적인 오디오 관리 가능
+- **타임라인 UI:** 
+    - 하단 BGM 전용 섹션 추가 (그라데이션 스타일 렌더링)
+    - 오디오 파일(.mp3, .wav, .m4a 등) 드래그 앤 드롭으로 즉시 추가
+- **상호작용 및 편집:**
+    - 클립 이동(Move), 리사이즈(Trim Left/Right) 완벽 지원
+    - **자석 스냅 (Magnetic Snap):** 프레임 경계 및 다른 클립 가장자리 자동 흡착
+    - **Undo/Redo:** `AddAudioClipCommand`, `MoveAudioClipCommand`, `TrimAudioClipCommand`, `DeleteAudioClipCommand` 구현
+- **컨텍스트 메뉴:** BGM 클립 우클릭 삭제 기능 추가
+
+### 2. 타임라인 가시성 버그 수정 (`src/ui/main_window.py`, `src/ui/timeline_widget.py`)
+- **현상:** 비디오를 타임라인으로 드래그할 때 전체 타임라인 위젯이 사라지거나 표시되지 않는 이슈 해결
+- **원인:** 중복된 리프레시 로직(`_refresh_all_widgets`) 및 `set_project` 시 비디오 트랙 데이터 유실
+- **수정:** 
+    - `MainWindow` 내 리프레시 함수 단일화 및 최적화
+    - `TimelineWidget.set_project()`에서 `_clip_track` 동기화 보장
+
+### 3. AI 자막 번역 및 GPU 가속 고도화 (v0.9.6-0.9.8)
+- **AI 번역:** Google Translate 및 GPT API 연동, 번역 후 새 자막 트랙 생성 및 관리
+- **GPU 가속:** `VideoExporter` 최적화로 NVENC(NVIDIA), QSV(Intel), AMF(AMD) 자동 감지하여 내보내기 속도 향상
+
+### 수정 파일
+- **신규:** `src/models/audio.py`
+- **수정:** `src/ui/timeline_widget.py`, `src/ui/main_window.py`, `src/ui/commands.py`, `src/models/project.py`, `src/services/video_exporter.py`
+
+---
+
+## 2026-02-13 (Day 17) 작업 요약
+
+**AI 자막 번역 및 하드웨어 가속 내보내기 구현**
+
+### 1. AI 자막 번역 (Google/GPT)
+- `src/services/translator.py` 인터페이스 및 구체적인 엔진 구현
+- `MainWindow` 메뉴 및 번역 다이얼로그 연동
+
+### 2. 하드웨어 가속 (GPU) 내보내기
+- `VideoExporter`에서 플랫폼별 하드웨어 인코더(`h264_nvenc`, `h264_qsv`, `h264_amf`) 자동 감지 및 적용
+
+---
+
 
 ## Phase 1 구현 상태
 

@@ -38,6 +38,7 @@ class ExportWorker(QObject):
         crf: int = 23,
         scale_width: int = 0,
         scale_height: int = 0,
+        use_gpu: bool = False,
     ):
         super().__init__()
         self._video_path = video_path
@@ -53,6 +54,7 @@ class ExportWorker(QObject):
         self._crf = crf
         self._scale_width = scale_width
         self._scale_height = scale_height
+        self._use_gpu = use_gpu
 
     def run(self) -> None:
         try:

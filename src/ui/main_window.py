@@ -811,6 +811,11 @@ class MainWindow(QMainWindow):
         # Timeline drag-and-drop signals
         self._timeline.image_file_dropped.connect(self._on_image_file_dropped)
         self._timeline.video_file_dropped.connect(self._on_video_file_dropped)
+        self._timeline.audio_file_dropped.connect(self._on_audio_file_dropped)
+        self._timeline.bgm_clip_selected.connect(self._on_bgm_clip_selected)
+        self._timeline.bgm_clip_moved.connect(self._on_bgm_clip_moved)
+        self._timeline.bgm_clip_trimmed.connect(self._on_bgm_clip_trimmed)
+        self._timeline.bgm_clip_delete_requested.connect(self._on_bgm_clip_delete_requested)
 
         # Template signals
         self._templates_panel.template_applied.connect(self._on_template_applied)
@@ -827,6 +832,7 @@ class MainWindow(QMainWindow):
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
         self._subtitle_panel.set_track(track if len(track) > 0 else None)
         self._timeline.set_track(track if len(track) > 0 else None)
+        self._timeline.set_bgm_tracks(self._project.bgm_tracks)
 
         # Sync image overlay track
         io_track = self._project.image_overlay_track
@@ -3300,3 +3306,107 @@ class MainWindow(QMainWindow):
                 self._undo_stack.push(cmd)
                 self._on_document_edited()
                 self._refresh_all_widgets()
+
+
+    @Slot(str, int)
+    def _on_audio_file_dropped(self, file_path: str, position_ms: int) -> None:
+        """BGM 파일이 드롭되었을 때 처리."""
+        path = Path(file_path)
+        if not path.is_file(): return
+        
+        from src.models.audio import AudioClip, AudioTrack
+        duration_ms = self._get_audio_duration_ms(path)
+        if duration_ms <= 0:
+            duration_ms = 5000  # Fallback
+            
+        clip = AudioClip(source_path=path, start_ms=position_ms, duration_ms=duration_ms)
+        
+        # 기본 BGM 트랙이 없으면 생성
+        if not self._project.bgm_tracks:
+            self._project.bgm_tracks = [AudioTrack()]
+            
+        # 첫 번째 트랙에 추가 (추후 트랙 선택 기능 추가 가능)
+        
+        # self._project.bgm_tracks[0].add_clip(clip)
+        
+        from src.ui.commands import AddAudioClipCommand
+        cmd = AddAudioClipCommand(self._project, 0, clip)
+        self._undo_stack.push(cmd)
+        
+        self._refresh_all_widgets()
+        self._on_document_edited()
+        self.statusBar().showMessage(tr("BGM added: {}").format(path.name))
+
+    @Slot(int, int)
+    def _on_bgm_clip_selected(self, track_idx: int, clip_idx: int) -> None:
+        """BGM 클립 선택 처리."""
+        # 추후 속성 패널 연동 가능
+        pass
+
+    @Slot(int, int, int)
+    def _on_bgm_clip_moved(self, track_idx: int, clip_idx: int, new_start_ms: int) -> None:
+        """BGM 클립 이동 처리 (Undo 지원)."""
+        if not (0 <= track_idx < len(self._project.bgm_tracks)): return
+        track = self._project.bgm_tracks[track_idx]
+        if not (0 <= clip_idx < len(track.clips)): return
+        
+        clip = track.clips[clip_idx]
+        old_start = clip.start_ms
+        if old_start == new_start_ms: return
+        
+        from src.ui.commands import MoveAudioClipCommand
+        cmd = MoveAudioClipCommand(clip, old_start, new_start_ms)
+        self._undo_stack.push(cmd)
+        self._on_document_edited()
+        self._refresh_all_widgets()
+
+    @Slot(int, int, int, int)
+    def _on_bgm_clip_trimmed(self, track_idx: int, clip_idx: int, new_start_ms: int, new_dur_ms: int) -> None:
+        """BGM 클립 트리밍 처리 (Undo 지원)."""
+        if not (0 <= track_idx < len(self._project.bgm_tracks)): return
+        track = self._project.bgm_tracks[track_idx]
+        if not (0 <= clip_idx < len(track.clips)): return
+        
+        clip = track.clips[clip_idx]
+        old_start = clip.start_ms
+        old_dur = clip.duration_ms
+        if old_start == new_start_ms and old_dur == new_dur_ms: return
+        
+        from src.ui.commands import TrimAudioClipCommand
+        cmd = TrimAudioClipCommand(clip, old_start, old_dur, new_start_ms, new_dur_ms)
+        self._undo_stack.push(cmd)
+        self._on_document_edited()
+        self._refresh_all_widgets()
+
+    @Slot(int, int)
+    def _on_bgm_clip_delete_requested(self, track_idx: int, clip_idx: int) -> None:
+        """BGM 클립 삭제 처리 (Undo 지원)."""
+        if not (0 <= track_idx < len(self._project.bgm_tracks)): return
+        track = self._project.bgm_tracks[track_idx]
+        if not (0 <= clip_idx < len(track.clips)): return
+        
+        from src.ui.commands import DeleteAudioClipCommand
+        cmd = DeleteAudioClipCommand(self._project, track_idx, clip_idx)
+        self._undo_stack.push(cmd)
+        self._on_document_edited()
+        self._refresh_all_widgets()
+        self.statusBar().showMessage(tr("BGM clip deleted"))
+
+    def _get_audio_duration_ms(self, path: Path) -> int:
+        """FFmpeg(ffprobe)을 사용하여 오디오 길이를 가져옴."""
+        try:
+            ffmpeg_bin = find_ffmpeg()
+            if not ffmpeg_bin: return 0
+            ffprobe_bin = str(Path(ffmpeg_bin).parent / "ffprobe")
+            if sys.platform == "win32" and not ffprobe_bin.endswith(".exe"):
+                ffprobe_bin += ".exe"
+                
+            cmd = [
+                ffprobe_bin, "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(path)
+            ]
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+            return int(float(out) * 1000)
+        except Exception as e:
+            print(f"Error getting audio duration: {e}")
+            return 0

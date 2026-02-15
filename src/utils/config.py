@@ -44,11 +44,18 @@ IMAGE_FILTER = "Image Files ({});;All Files (*)".format(
     " ".join(f"*{ext}" for ext in IMAGE_EXTENSIONS)
 )
 
+# Supported audio formats
+AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"]
+AUDIO_FILTER = "Audio Files ({});;All Files (*)".format(
+    " ".join(f"*{ext}" for ext in AUDIO_EXTENSIONS)
+)
+
 # Combined media filter (for media library import)
-MEDIA_FILTER = "Media Files ({});;Video Files ({});;Image Files ({});;Subtitle Files (*.srt *.smi);;All Files (*)".format(
-    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS + [".srt", ".smi"]),
+MEDIA_FILTER = "Media Files ({});;Video Files ({});;Image Files ({});;Audio Files ({});;Subtitle Files (*.srt *.smi);;All Files (*)".format(
+    " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS + AUDIO_EXTENSIONS + [".srt", ".smi"]),
     " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS),
     " ".join(f"*{ext}" for ext in IMAGE_EXTENSIONS),
+    " ".join(f"*{ext}" for ext in AUDIO_EXTENSIONS),
 )
 
 # TTS settings

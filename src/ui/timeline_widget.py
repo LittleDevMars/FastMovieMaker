@@ -60,6 +60,9 @@ class _DragMode(Enum):
     TEXT_RESIZE_LEFT = auto()
     TEXT_RESIZE_RIGHT = auto()
     VOLUME_POINT_MOVE = auto()
+    BGM_MOVE = auto()
+    BGM_RESIZE_LEFT = auto()
+    BGM_RESIZE_RIGHT = auto()
 
 
 # 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
@@ -74,6 +77,7 @@ _CLIP_H = 32
 _SEG_H = 40
 _AUDIO_H = 34
 _WAVEFORM_H = 45
+_BGM_H = 34
 
 # Helper methods for dynamic Y (to be placed in TimelineWidget)
 
@@ -94,6 +98,7 @@ class TimelineWidget(QWidget):
     insert_text_requested = Signal(int)  # 텍스트 오버레이 삽입 위치(ms)
     image_file_dropped = Signal(str, int)  # (file_path, position_ms)
     video_file_dropped = Signal(str, int)  # (file_path, position_ms)
+    audio_file_dropped = Signal(str, int)  # (file_path, position_ms)
     clip_selected = Signal(int, int)            # (track_index, clip_index)
     clip_split_requested = Signal(int)          # (timeline_ms) - No track index needed usually as it splits all or current? 
                                                 # Actually better to track-specific: 
@@ -102,6 +107,10 @@ class TimelineWidget(QWidget):
     clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
     clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
     transition_requested = Signal(int, int)     # (track_index, clip_index)
+    bgm_clip_selected = Signal(int, int)        # (track_index, clip_index)
+    bgm_clip_moved = Signal(int, int, int)      # (track_index, clip_index, new_start_ms)
+    bgm_clip_trimmed = Signal(int, int, int, int) # (track_index, clip_index, new_start_ms, new_dur_ms)
+    bgm_clip_delete_requested = Signal(int, int) # (track_index, clip_index)
     
     # Text overlay signals
     text_overlay_selected = Signal(int)  # overlay index
@@ -141,6 +150,13 @@ class TimelineWidget(QWidget):
     _AUDIO_BORDER = QColor(100, 200, 120)
     _AUDIO_SELECTED_BORDER = QColor(100, 220, 255)
     _AUDIO_SELECTED_COLOR = QColor(0, 100, 140)
+    
+    # BGM Tracks (Deep Purple/Blue Gradient)
+    _BGM_COLOR_TOP = QColor(100, 80, 200)
+    _BGM_COLOR_BOT = QColor(60, 40, 160)
+    _BGM_BORDER = QColor(130, 100, 240)
+    _BGM_SELECTED_BORDER = QColor(100, 220, 255)
+    _BGM_SELECTED_COLOR = QColor(40, 20, 100)
 
     # Video Audio / Waveform (Orange)
     _WAVEFORM_FILL = QColor(255, 140, 40, 120)
@@ -267,6 +283,15 @@ class TimelineWidget(QWidget):
         self._drag_orig_source_in: int = 0
         self._drag_orig_source_out: int = 0
 
+        # BGM 트랙 상태
+        self._bgm_tracks: list = [] # AudioTrack list
+        self._selected_bgm_track_index: int = -1
+        self._selected_bgm_clip_index: int = -1
+        self._drag_bgm_track_index: int = -1
+        self._drag_bgm_clip_index: int = -1
+        self._drag_bgm_orig_start_ms: int = 0
+        self._drag_bgm_orig_duration_ms: int = 0
+
         # 프레임 스냅 FPS (0 = 비활성화)
         self._snap_fps: int = 0
         
@@ -319,6 +344,14 @@ class TimelineWidget(QWidget):
     def _video_track_y(self, track_index: int) -> int:
         return _CLIP_Y + (track_index * _CLIP_H)
 
+    def _get_num_img_rows(self) -> int:
+        rows = self._compute_overlay_rows()
+        return max(rows) + 1 if rows else 1
+
+    def _get_num_text_rows(self) -> int:
+        rows = self._compute_text_overlay_rows()
+        return max(rows) + 1 if rows else 1
+
     def _subtitle_track_y(self) -> int:
         num_v = len(self._project.video_tracks) if self._project else 1
         return _CLIP_Y + (num_v * _CLIP_H) + 4
@@ -334,13 +367,22 @@ class TimelineWidget(QWidget):
         num_v = len(self._project.video_tracks) if self._project else 1
         return _CLIP_Y + (num_v * _CLIP_H) + 4
 
+    def _bgm_track_base_y(self) -> int:
+        num_text_rows = self._get_num_text_rows() if hasattr(self, "_get_num_text_rows") else 1
+        return self._text_overlay_base_y() + num_text_rows * (self._TEXT_ROW_H + self._TEXT_ROW_GAP) + 8
+
+    def _bgm_track_y(self, track_index: int) -> int:
+        return self._bgm_track_base_y() + track_index * (_BGM_H + 4)
+
     # -------------------------------------------------------- 공개 API
 
     def set_project(self, project) -> None:
         """Set the current project and refresh."""
         self._project = project
+        self._clip_track = project.video_clip_track
         self._track = project.subtitle_track
         self._image_overlay_track = project.image_overlay_track
+        self._bgm_tracks = getattr(project, "bgm_tracks", [])
         self._duration_ms = project.duration_ms
         self._has_video = project.has_video
         self._invalidate_static_cache()
@@ -406,6 +448,11 @@ class TimelineWidget(QWidget):
         self._track = track
         self._selected_index = -1
         self._invalidate_static_cache()
+        self.update()
+
+    def set_bgm_tracks(self, tracks: list) -> None:
+        """BGM 트랙 데이터 설정."""
+        self._bgm_tracks = tracks
         self.update()
 
     def set_duration(self, duration_ms: int, has_video: bool | None = None) -> None:
@@ -678,6 +725,9 @@ class TimelineWidget(QWidget):
             
             if self._text_overlay_track:
                 self._draw_text_overlays(pp, h)
+            
+            if hasattr(self, "_bgm_tracks") and self._bgm_tracks:
+                self._draw_bgm_tracks(pp, h)
             
             pp.end()
 
@@ -1127,6 +1177,55 @@ class TimelineWidget(QWidget):
                     ),
                 )
 
+    def _draw_bgm_tracks(self, painter: QPainter, h: int) -> None:
+        """BGM 트랙들을 타임라인에 그림."""
+        if not hasattr(self, "_bgm_tracks") or not self._bgm_tracks:
+            return
+        
+        for idx, track in enumerate(self._bgm_tracks):
+            self._draw_bgm_track_clips(painter, idx, track)
+
+    def _draw_bgm_track_clips(self, painter: QPainter, track_idx: int, trackObject) -> None:
+        # We'll use a local import if needed or just trust the type
+        from src.models.audio import AudioTrack
+        track: AudioTrack = trackObject
+        
+        y = self._bgm_track_y(track_idx)
+        th = _BGM_H
+        
+        for i, clip in enumerate(track.clips):
+            x1 = self._ms_to_x(clip.start_ms)
+            x2 = self._ms_to_x(clip.start_ms + clip.duration_ms)
+            
+            if x2 < 0 or x1 > self.width():
+                continue
+            
+            rect = QRectF(x1, y, max(x2 - x1, 2), th)
+            
+            # Draw BGM clip with gradient
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient.setColorAt(0, self._BGM_COLOR_TOP)
+            gradient.setColorAt(1, self._BGM_COLOR_BOT)
+            
+            # TODO: Implement selection state for BGM
+            is_selected = False # self._selected_bgm_track == track_idx and self._selected_bgm_clip == i
+            
+            if is_selected:
+                painter.setPen(QPen(self._BGM_SELECTED_BORDER, 2))
+                painter.setBrush(QBrush(self._BGM_SELECTED_COLOR))
+            else:
+                painter.setPen(QPen(self._BGM_BORDER, 1))
+                painter.setBrush(QBrush(gradient))
+                
+            painter.drawRoundedRect(rect, 4, 4)
+            
+            # Label
+            if rect.width() > 40:
+                painter.setPen(Qt.GlobalColor.white)
+                painter.setFont(QFont("Arial", 8))
+                label = clip.source_path.name if clip.source_path else "BGM"
+                painter.drawText(rect.adjusted(10, 2, -10, -2), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
+
 
     def _draw_playhead(self, painter: QPainter, h: int) -> None:
         """현재 재생 위치 세로선 + 상단 노브 (Pentagon)."""
@@ -1555,6 +1654,29 @@ class TimelineWidget(QWidget):
                     self.text_overlay_selected.emit(seg_idx)
             return
 
+        # BGM 영역 (Locked check)
+        if hit.startswith("bgm"):
+            if hasattr(self, "_bgm_tracks"):
+                track = self._bgm_tracks[v_idx]
+                if track.locked:
+                    return
+                
+                self._selected_bgm_track_index = v_idx
+                self._selected_bgm_clip_index = seg_idx
+                self._selected_index = -1
+                self._selected_overlay_index = -1
+                self._selected_text_overlay_index = -1
+                
+                if hit == "bgm_left_edge":
+                    self._start_bgm_drag(_DragMode.BGM_RESIZE_LEFT, v_idx, seg_idx, x)
+                elif hit == "bgm_right_edge":
+                    self._start_bgm_drag(_DragMode.BGM_RESIZE_RIGHT, v_idx, seg_idx, x)
+                elif hit == "bgm_body":
+                    self._start_bgm_drag(_DragMode.BGM_MOVE, v_idx, seg_idx, x)
+                
+                self.update()
+                return
+
         # 자막 세그먼트 (Locked check)
         elif hit in ("left_edge", "right_edge", "body"):
             if self._track and self._track.locked:
@@ -1642,6 +1764,10 @@ class TimelineWidget(QWidget):
             self._handle_volume_point_drag(x, y)
             return
 
+        if self._drag_mode in (_DragMode.BGM_MOVE, _DragMode.BGM_RESIZE_LEFT, _DragMode.BGM_RESIZE_RIGHT):
+            self._handle_bgm_drag(x)
+            return
+
         # 호버 시 커서 변경 (플레이헤드·가장자리·본문)
         if self._drag_mode == _DragMode.NONE:
             seg_idx, hit, v_idx = self._hit_test(x, y)
@@ -1649,9 +1775,10 @@ class TimelineWidget(QWidget):
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
                 return
             elif hit in ("left_edge", "right_edge", "img_left_edge", "img_right_edge",
-                         "clip_left_edge", "clip_right_edge", "audio_left_edge", "audio_right_edge"):
+                         "clip_left_edge", "clip_right_edge", "audio_left_edge", "audio_right_edge",
+                         "bgm_left_edge", "bgm_right_edge"):
                 self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
-            elif hit in ("body", "audio_body", "img_body", "clip_body"):
+            elif hit in ("body", "audio_body", "img_body", "clip_body", "bgm_body"):
                 self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
             else:
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -1698,6 +1825,23 @@ class TimelineWidget(QWidget):
                 self._drag_clip_ref.volume_points.sort(key=lambda p: p.offset_ms)
             self._drag_volume_point_idx = -1
             self._drag_clip_ref = None
+        elif self._drag_mode in (_DragMode.BGM_MOVE, _DragMode.BGM_RESIZE_LEFT, _DragMode.BGM_RESIZE_RIGHT):
+            if 0 <= self._drag_bgm_track_index < len(self._bgm_tracks):
+                track = self._bgm_tracks[self._drag_bgm_track_index]
+                if 0 <= self._drag_bgm_clip_index < len(track.clips):
+                    clip = track.clips[self._drag_bgm_clip_index]
+                    new_start = clip.start_ms
+                    new_dur = clip.duration_ms
+                    
+                    if self._drag_mode == _DragMode.BGM_MOVE:
+                        if new_start != self._drag_bgm_orig_start_ms:
+                            clip.start_ms = self._drag_bgm_orig_start_ms # Revert for undo command
+                            self.bgm_clip_moved.emit(self._drag_bgm_track_index, self._drag_bgm_clip_index, new_start)
+                    else:
+                        if new_start != self._drag_bgm_orig_start_ms or new_dur != self._drag_bgm_orig_duration_ms:
+                            clip.start_ms = self._drag_bgm_orig_start_ms
+                            clip.duration_ms = self._drag_bgm_orig_duration_ms
+                            self.bgm_clip_trimmed.emit(self._drag_bgm_track_index, self._drag_bgm_clip_index, new_start, new_dur)
 
         self._drag_mode = _DragMode.NONE
         self._drag_seg_index = -1
@@ -1836,6 +1980,13 @@ class TimelineWidget(QWidget):
                 self.text_overlay_delete_requested.emit(seg_idx)
             return
 
+        if hit.startswith("bgm_"):
+            delete_act = menu.addAction(tr("Delete BGM Clip"))
+            action = menu.exec(event.globalPos())
+            if action == delete_act:
+                self.bgm_clip_delete_requested.emit(v_idx, seg_idx)
+            return
+        
         insert_image_action = menu.addAction(tr("Insert Image Overlay"))
         insert_text_action = menu.addAction(tr("Insert Text Overlay"))
         action = menu.exec(event.globalPos())
@@ -1906,6 +2057,14 @@ class TimelineWidget(QWidget):
                     if seg.audio_file:
                         candidates.add(seg.audio_start_ms)
                         candidates.add(seg.audio_start_ms + seg.audio_duration_ms)
+
+        # BGM Clips
+        if hasattr(self, "_bgm_tracks"):
+            for t_idx, track in enumerate(self._bgm_tracks):
+                for i, clip in enumerate(track.clips):
+                    if not (t_idx == self._drag_bgm_track_index and i == self._drag_bgm_clip_index):
+                        candidates.add(clip.start_ms)
+                        candidates.add(clip.start_ms + clip.duration_ms)
 
         # Image Overlays
         if self._image_overlay_track:
@@ -2356,6 +2515,25 @@ class TimelineWidget(QWidget):
             self._drag_orig_audio_start_ms = self._track.audio_start_ms
             self._drag_orig_audio_duration_ms = self._track.audio_duration_ms
 
+    def _start_bgm_drag(self, mode: _DragMode, track_idx: int, clip_idx: int, x: float) -> None:
+        """BGM 드래그 시작."""
+        self._drag_mode = mode
+        self._drag_start_x = x
+        self._drag_bgm_track_index = track_idx
+        self._drag_bgm_clip_index = clip_idx
+
+        if 0 <= track_idx < len(self._bgm_tracks):
+            track = self._bgm_tracks[track_idx]
+            if 0 <= clip_idx < len(track.clips):
+                clip = track.clips[clip_idx]
+                self._drag_bgm_orig_start_ms = clip.start_ms
+                self._drag_bgm_orig_duration_ms = clip.duration_ms
+
+        if mode == _DragMode.BGM_MOVE:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
     def _handle_audio_drag(self, x: float) -> None:
         """오디오 트랙 이동/리사이즈 처리."""
         if not self._track:
@@ -2482,6 +2660,23 @@ class TimelineWidget(QWidget):
                 if abs(x - x2) <= _EDGE_PX: return i, "text_right_edge", 0
                 if x1 <= x <= x2: return i, "text_body", 0
 
+        # BGM tracks
+        if hasattr(self, "_bgm_tracks"):
+            for track_idx, track in enumerate(self._bgm_tracks):
+                ty = self._bgm_track_y(track_idx)
+                if ty <= y < ty + _BGM_H:
+                    for i, clip in enumerate(track.clips):
+                        x1 = self._ms_to_x(clip.start_ms)
+                        x2 = self._ms_to_x(clip.start_ms + clip.duration_ms)
+                        if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
+                            continue
+                        if abs(x - x1) <= _EDGE_PX:
+                            return i, "bgm_left_edge", track_idx
+                        if abs(x - x2) <= _EDGE_PX:
+                            return i, "bgm_right_edge", track_idx
+                        if x1 <= x <= x2:
+                            return i, "bgm_body", track_idx
+
         return -1, "", -1
 
     # ----------------------------------------------------------- 유틸
@@ -2511,6 +2706,53 @@ class TimelineWidget(QWidget):
         max_start = max(0.0, float(self._duration_ms) - visible_range)
         self._visible_start_ms = min(self._visible_start_ms, max_start)
 
+    def _start_bgm_drag(self, mode: _DragMode, track_idx: int, clip_idx: int, x: float) -> None:
+        """BGM 클립 드래그 시작."""
+        self._drag_mode = mode
+        self._drag_bgm_track_index = track_idx
+        self._drag_bgm_clip_index = clip_idx
+        self._drag_start_x = x
+        
+        track = self._bgm_tracks[track_idx]
+        clip = track.clips[clip_idx]
+        self._drag_bgm_orig_start_ms = clip.start_ms
+        self._drag_bgm_orig_duration_ms = clip.duration_ms
+        
+        if mode == _DragMode.BGM_MOVE:
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+    def _handle_bgm_drag(self, x: float) -> None:
+        """BGM 클립 드래그 처리."""
+        if self._drag_bgm_track_index < 0 or not hasattr(self, "_bgm_tracks"):
+            return
+        track = self._bgm_tracks[self._drag_bgm_track_index]
+        clip = track.clips[self._drag_bgm_clip_index]
+        
+        dx_ms = (x - self._drag_start_x) / self._px_per_ms if self._px_per_ms > 0 else 0
+        
+        candidates = sorted(list(self._get_magnetic_snap_candidates()))
+        
+        if self._drag_mode == _DragMode.BGM_MOVE:
+            new_start = int(max(0, self._drag_bgm_orig_start_ms + dx_ms))
+            new_start = self._apply_magnetic_snap(new_start, candidates)
+            clip.start_ms = new_start
+        elif self._drag_mode == _DragMode.BGM_RESIZE_LEFT:
+            new_start = int(max(0, self._drag_bgm_orig_start_ms + dx_ms))
+            new_start = self._apply_magnetic_snap(new_start, candidates)
+            # Duration must be at least 10ms
+            new_dur = int(max(10, self._drag_bgm_orig_duration_ms - (new_start - self._drag_bgm_orig_start_ms)))
+            # Re-calculate start to match duration clamp
+            clip.start_ms = self._drag_bgm_orig_start_ms + (self._drag_bgm_orig_duration_ms - new_dur)
+            clip.duration_ms = new_dur
+        elif self._drag_mode == _DragMode.BGM_RESIZE_RIGHT:
+            new_end = int(self._drag_bgm_orig_start_ms + self._drag_bgm_orig_duration_ms + dx_ms)
+            new_end = self._apply_magnetic_snap(new_end, candidates)
+            clip.duration_ms = int(max(10, new_end - clip.start_ms))
+            
+        self.update()
+
     @staticmethod
     def _nice_tick_interval(visible_ms: float) -> int:
         target_ticks = 8
@@ -2538,10 +2780,10 @@ class TimelineWidget(QWidget):
                 return True
             # Also check file extension
             from pathlib import Path
-            from src.utils.config import VIDEO_EXTENSIONS
+            from src.utils.config import VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
             url = mime.urls()[0]
             suffix = Path(url.toLocalFile()).suffix.lower()
-            return suffix in VIDEO_EXTENSIONS
+            return suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS
         return True
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -2570,7 +2812,7 @@ class TimelineWidget(QWidget):
             return
 
         from pathlib import Path
-        from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+        from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
 
         url = mime.urls()[0]
         file_path = url.toLocalFile()
@@ -2589,6 +2831,9 @@ class TimelineWidget(QWidget):
             event.acceptProposedAction()
         elif suffix in VIDEO_EXTENSIONS:
             self.video_file_dropped.emit(file_path, position_ms)
+            event.acceptProposedAction()
+        elif suffix in AUDIO_EXTENSIONS:
+            self.audio_file_dropped.emit(file_path, position_ms)
             event.acceptProposedAction()
         else:
             event.ignore()
