@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -9,7 +10,7 @@ if TYPE_CHECKING:
     from src.models.style import SubtitleStyle
 
 
-@dataclass
+@dataclass(slots=True)
 class TextOverlay:
     """A single independent text overlay with time range, position, and style."""
 
@@ -64,7 +65,7 @@ class TextOverlay:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class TextOverlayTrack:
     """An ordered collection of text overlays."""
 
@@ -73,16 +74,18 @@ class TextOverlayTrack:
     hidden: bool = False
 
     def overlays_at(self, position_ms: int) -> list[TextOverlay]:
-        """Return all text overlays active at the given position."""
-        return [
-            ov for ov in self.overlays
-            if ov.start_ms <= position_ms < ov.end_ms
-        ]
+        """Return all text overlays active at the given position.
+
+        이진 탐색으로 시작점 한정 후 선형 탐색.
+        """
+        if not self.overlays:
+            return []
+        idx = bisect.bisect_right(self.overlays, position_ms, key=lambda o: o.start_ms)
+        return [ov for ov in self.overlays[:idx] if ov.end_ms > position_ms]
 
     def add_overlay(self, overlay: TextOverlay) -> None:
-        """Add a text overlay and keep the list sorted by start time."""
-        self.overlays.append(overlay)
-        self.overlays.sort(key=lambda o: o.start_ms)
+        """Add a text overlay and keep the list sorted by start time. bisect.insort O(n)."""
+        bisect.insort(self.overlays, overlay, key=lambda o: o.start_ms)
 
     def remove_overlay(self, index: int) -> None:
         """Remove the text overlay at *index*."""

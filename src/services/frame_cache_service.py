@@ -20,6 +20,8 @@ def _ms_from_path(path: Path) -> int:
 class FrameCacheService:
     """Manages a directory of pre-extracted JPEG frames for quick lookup.
 
+    LRU eviction으로 디스크 캐시 크기를 제한 (HPP Ch.11 — 메모리 관리).
+
     Cache structure::
 
         <cache_dir>/
@@ -29,8 +31,13 @@ class FrameCacheService:
                 ...
     """
 
+    # 최대 소스별 캐시 디렉토리 수
+    _MAX_SOURCE_DIRS = 10
+
     def __init__(self) -> None:
         self._cache_dir: Path | None = None
+        # LRU 순서 추적: source_path → hash (최근 접근 순)
+        self._access_order: list[str] = []
 
     @property
     def cache_dir(self) -> Path | None:
@@ -49,10 +56,25 @@ class FrameCacheService:
         self._cache_dir = None
 
     def source_cache_dir(self, source_path: str) -> Path:
-        """Return the cache subdirectory for a given source video."""
+        """Return the cache subdirectory for a given source video.
+
+        LRU eviction: 소스 디렉토리 수가 _MAX_SOURCE_DIRS를 초과하면
+        가장 오래된 소스의 캐시를 삭제.
+        """
         h = hashlib.md5(source_path.encode()).hexdigest()[:12]
         d = self.initialize() / h
         d.mkdir(exist_ok=True)
+        # LRU 순서 갱신
+        if source_path in self._access_order:
+            self._access_order.remove(source_path)
+        self._access_order.append(source_path)
+        # Eviction
+        while len(self._access_order) > self._MAX_SOURCE_DIRS:
+            oldest = self._access_order.pop(0)
+            old_h = hashlib.md5(oldest.encode()).hexdigest()[:12]
+            old_dir = self._cache_dir / old_h
+            if old_dir.exists():
+                shutil.rmtree(old_dir, ignore_errors=True)
         return d
 
     def is_cached(self, source_path: str) -> bool:

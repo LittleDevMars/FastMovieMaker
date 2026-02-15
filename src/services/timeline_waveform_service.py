@@ -23,19 +23,27 @@ class TimelineWaveformService(QObject):
     waveform_ready = Signal(str, object)
     status_updated = Signal(str, str)  # (source_path, status_text)
 
+    # 최대 캐시 항목 수 — 각 WaveformData가 수 MB일 수 있으므로 제한
+    _MAX_CACHE_SIZE = 20
+
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._cache: Dict[str, WaveformData] = {}
+        # OrderedDict으로 LRU 구현 (HPP Ch.4 — 해시 테이블 + 순서 유지)
+        self._cache: collections.OrderedDict[str, WaveformData] = collections.OrderedDict()
         self._workers: Dict[str, WaveformWorker] = {}
         self._threads: Dict[str, QThread] = {}
 
     def get_waveform(self, source_path: str | None) -> Optional[WaveformData]:
         """Get waveform data if available, else return None.
-        
+
+        LRU: 접근 시 move_to_end로 최근 사용 순서 갱신.
         Note: This does NOT start generation. Use request_waveform for that.
         """
         path_str = source_path or ""
-        return self._cache.get(path_str)
+        data = self._cache.get(path_str)
+        if data is not None:
+            self._cache.move_to_end(path_str)
+        return data
 
     def request_waveform(self, source_path: str | None) -> None:
         """Request waveform generation for a source path if not already cached or started."""
@@ -79,6 +87,10 @@ class TimelineWaveformService(QObject):
 
     def _on_worker_finished(self, source_path: str, data: WaveformData) -> None:
         self._cache[source_path] = data
+        self._cache.move_to_end(source_path)
+        # LRU eviction: 가장 오래 사용하지 않은 항목 제거
+        while len(self._cache) > self._MAX_CACHE_SIZE:
+            self._cache.popitem(last=False)
         self.waveform_ready.emit(source_path, data)
 
     def _on_worker_error(self, source_path: str, message: str) -> None:

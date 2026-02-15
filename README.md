@@ -31,10 +31,14 @@
 - **BGM 트랙 및 오디오 믹싱** — 독립적인 BGM 트랙 관리, 트리밍, 자석 스냅 및 볼륨 제어 지원 (Day 18)
 
 ### ⚡️ 성능 및 안정성
-- **최적화된 탐색** — 썸네일 생성 및 미리보기 시 프레임 캐싱 고도화로 지연 시간 최소화
+- **알고리즘 최적화** — 핵심 모델 조회(`segment_at`, `clip_at_timeline`, `overlays_at`)를 O(log n) 이진 탐색으로 교체
+- **NumPy 벡터화 렌더링** — 타임라인 웨이브폼 픽셀별 Python 루프를 NumPy 배열 연산으로 치환
+- **메모리 최적화** — 전 데이터클래스 `__slots__` 적용, `@lru_cache` 메모이제이션, LRU 캐시 관리
+- **HW 가속 미디어 임포트** — MKV→MP4 변환 시 VideoToolbox(macOS)/NVENC(Windows) 자동 활용
 - **프록시 미디어 (Proxy Media)** — 고해상도(4K 등) 영상의 부드러운 편집을 위한 저해상도 프록시 자동 생성 및 전환 기능
 - **MKV 지원 (macOS)** — macOS 환경에서 MKV 파일의 자동 프록시 변환 및 재생 지원
 - **재생 동기화 개선** — 스크럽, 분할(Split) 후 재생 재개 시 끊김 없는 경험 제공
+- **스레드 안전성** — `MediaController(QObject)` 기반으로 worker→UI signal이 메인 스레드에서만 실행됨
 
 ### 🎨 전문적인 비디오 미리보기
 - **비동기 비디오 로드** — 대용량 파일도 즉시 로딩 (UI 멈춤 없음)
@@ -99,17 +103,53 @@
 - **타임라인 드래그 수정:**
   - 자막 세그먼트 이동/리사이즈 드래그 복원 (`_start_drag` 메서드 누락 수정)
 
+### ⚡ 성능 최적화 및 리팩토링 (v0.9.8)
+
+#### 📐 알고리즘 최적화 (CLRS 기반)
+- **O(log n) 이진 탐색** — `segment_at()`, `clip_at_timeline()`, `overlays_at()` 등 핵심 조회를 `bisect` 기반 이진 탐색으로 교체 (기존 O(n) 선형 스캔)
+- **접두사 합(Prefix Sum)** — `VideoClipTrack`의 타임라인 위치 계산을 접두사 합 배열로 최적화, `clip_timeline_start()` O(1) 조회
+- **정렬 삽입** — `add_segment()`, `add_overlay()`, `add_clip()` 등에 `bisect.insort` 적용 (기존 append+sort O(n log n) → O(n))
+- **자석 스냅** — `apply_snap()`의 후보 탐색을 O(log k) 이진 탐색으로 개선
+
+#### 🚀 High-Performance Python 최적화
+- **`__slots__` 적용** — 모든 모델 데이터클래스(`SubtitleSegment`, `VideoClip`, `ImageOverlay` 등 12개)에 메모리 효율 및 속성 접근 가속
+- **`@lru_cache` 메모이제이션** — `ms_to_display()`, `ms_to_srt_time()`, `ms_to_frame()`, `frame_to_ms()` 등 빈번 호출 함수 캐싱
+- **NumPy 벡터화** — 타임라인 웨이브폼 렌더링의 Python 루프를 NumPy 배열 연산으로 교체 (60fps 타임라인 스크롤 성능 대폭 개선)
+- **LRU 캐시 관리** — `TimelineWaveformService`(메모리) 및 `FrameCacheService`(디스크) 무한 증가 방지를 위한 LRU 정리 정책 도입
+- **로컬 변수 캐싱** — 타임라인 페인팅 핫루프 내 `self.tw._xxx` 속성 조회를 로컬 변수로 캐싱
+- **문자열 연결 최적화** — FFmpeg 필터 그래프 빌드의 `str +=` 패턴을 `list.append()` + `"".join()`으로 교체
+
+#### 🔧 아키텍처 리팩토링
+- **MVC 컨트롤러 분리** — `MainWindow`(3200행)에서 7개 컨트롤러 모듈로 분리:
+  - `MediaController` — 비디오 로드/프록시/웨이브폼/프레임캐시/BGM
+  - `PlaybackController` — 재생/시크/클립 전환
+  - `SubtitleController` — 자막 편집/생성/번역
+  - `ClipController` — 비디오 클립 편집/분할/전환
+  - `OverlayController` — 이미지/텍스트 오버레이
+  - `ProjectController` — 프로젝트 저장/불러오기/내보내기
+  - `AppContext` — 공유 상태 컨테이너
+- **타임라인 위젯 분리** — `TimelineWidget`(2100행)에서 드래그/페인팅 로직 분리:
+  - `TimelineDragManager` — 모든 드래그 핸들링 로직
+  - `TimelinePainter` — 모든 페인팅/렌더링 로직
+
+#### 🛡️ 스레드 안전성 수정
+- **`MediaController(QObject)` 변환** — non-QObject signal→slot 연결 시 DirectConnection으로 GUI 코드가 워커 스레드에서 실행되던 크래시 해결
+- **비디오 임포트 store-and-process 패턴** — `progress.exec()` 반환 후 메인 스레드에서 안전하게 GUI 업데이트
+- **MKV→MP4 변환 HW 가속** — Remux → VideoToolbox/NVENC → libx264 3단계 폴백 전략 ([상세 문서](docs/HARDWARE_ACCELERATION.md))
+
 ---
 
 ## 🏗️ 아키텍처
 
-### Layered + Clean Architecture
+### Layered + Clean Architecture (MVC)
 ```
 src/
-├── models/              # 순수 Python 데이터 모델 (Qt 종속성 없음)
+├── models/              # 순수 Python 데이터 모델 (Qt 종속성 없음, __slots__ 적용)
 │   ├── project.py
-│   ├── subtitle.py
-│   ├── video_clip.py
+│   ├── subtitle.py       # bisect 기반 O(log n) 탐색
+│   ├── video_clip.py     # 접두사 합 기반 타임라인 계산
+│   ├── image_overlay.py
+│   ├── text_overlay.py
 │   └── style.py
 ├── infrastructure/      # 외부 어댑터 (FFmpeg, Whisper 추상화)
 │   ├── ffmpeg_runner.py     # FFmpeg/FFprobe 실행 통합
@@ -118,14 +158,30 @@ src/
 │   ├── whisper_service.py
 │   ├── tts_service.py
 │   ├── video_exporter.py
-│   └── frame_cache_service.py
+│   ├── frame_cache_service.py  # LRU 디스크 캐시
+│   └── timeline_waveform_service.py  # LRU 메모리 캐시
 ├── workers/             # QThread 백그라운드 워커
 │   ├── whisper_worker.py
 │   ├── tts_worker.py
+│   ├── video_load_worker.py  # HW 가속 변환 (3단계 폴백)
 │   └── frame_cache_worker.py
+├── utils/               # 유틸리티 (@lru_cache 메모이제이션)
+│   ├── config.py
+│   ├── time_utils.py
+│   └── hw_accel.py       # HW 인코더 자동 탐지
 └── ui/                  # PySide6 UI 컴포넌트
-    ├── main_window.py
-    ├── timeline_widget.py
+    ├── main_window.py       # 얇은 셸 (이벤트 바인딩만)
+    ├── controllers/         # MVC 컨트롤러 (v0.9.8)
+    │   ├── app_context.py       # 공유 상태 컨테이너
+    │   ├── media_controller.py  # QObject 기반 — 스레드 안전
+    │   ├── playback_controller.py
+    │   ├── subtitle_controller.py
+    │   ├── clip_controller.py
+    │   ├── overlay_controller.py
+    │   └── project_controller.py
+    ├── timeline_widget.py   # 레이아웃/이벤트 핸들러
+    ├── timeline_painter.py  # NumPy 벡터화 렌더링
+    ├── timeline_drag.py     # bisect 기반 자석 스냅
     ├── video_player_widget.py
     └── dialogs/
 ```
@@ -134,11 +190,13 @@ src/
 
 ### 기술적 특징
 - **Worker-moveToThread 패턴** — Whisper/TTS 작업을 위한 논블로킹 백그라운드 처리
-- **커스텀 QPainter 타임라인** — 줌/스크롤을 지원하는 프레임 단위 비디오 편집
+- **QObject 기반 컨트롤러** — `MediaController(QObject)` 상속으로 worker signal→slot 자동 `QueuedConnection` 보장
+- **커스텀 QPainter 타임라인** — 줌/스크롤을 지원하는 프레임 단위 비디오 편집 (NumPy 벡터화 웨이브폼)
 - **멀티 소스 재생 시스템:**
   - 명시적인 `_current_clip_index` 추적 (모호한 소스→타임라인 매핑 방지)
   - 자동 전환을 위한 클립 경계 감지 (30ms 임계값)
   - 즉각적인 스크럽 미리보기를 위한 프레임 캐시 통합
+- **알고리즘 최적화:** 이진 탐색(CLRS Ch.2.3), 접두사 합(CLRS Ch.15), `bisect.insort`로 핵심 조회 O(log n)
 - **출력 시간 모드(Output Time Mode)** — A→B→A 등 복합 클립 전반에 걸친 통합 타임라인 동기화
 
 ---

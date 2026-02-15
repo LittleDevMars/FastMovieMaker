@@ -39,40 +39,61 @@ pytest tests/test_models.py::TestSubtitleTrack::test_segment_at -v
 
 ## Architecture
 
-### Three-Layer Separation
+### Layered + MVC Separation
 
 ```
 src/
-├── models/     # Pure Python dataclasses (no Qt dependency)
-├── services/   # Business logic (no Qt dependency)
-├── workers/    # QThread workers bridging services to UI
-├── ui/         # PySide6 widgets
-└── utils/      # Config and utilities
+├── models/          # Pure Python dataclasses (no Qt dependency, __slots__)
+├── infrastructure/  # External adapters (FFmpeg, Whisper abstraction)
+├── services/        # Business logic (uses infrastructure, Qt-free)
+├── workers/         # QThread workers bridging services to UI
+├── utils/           # Config, time utils, hw_accel
+└── ui/              # PySide6 UI components
+    ├── controllers/     # MVC controllers (QObject-based for thread safety)
+    │   ├── app_context.py       # Shared state container
+    │   ├── media_controller.py  # Video load/proxy/waveform/frame cache/BGM
+    │   ├── playback_controller.py
+    │   ├── subtitle_controller.py
+    │   ├── clip_controller.py
+    │   ├── overlay_controller.py
+    │   └── project_controller.py
+    ├── main_window.py       # Thin shell (event binding only)
+    ├── timeline_widget.py   # Layout + event handlers
+    ├── timeline_painter.py  # NumPy-vectorized rendering
+    ├── timeline_drag.py     # Drag handling with bisect snap
+    └── dialogs/
 ```
 
-Models and services are intentionally Qt-free for testability. Workers wrap services with Qt signals for background execution.
+Models and services are intentionally Qt-free for testability. Workers wrap services with Qt signals for background execution. Controllers inherit `QObject` so worker signal→slot connections auto-use `QueuedConnection` across threads.
 
 ### Key Patterns
 
 **Video Playback**: Uses `QGraphicsView` + `QGraphicsVideoItem` instead of `QVideoWidget` to enable subtitle text overlay via `QGraphicsTextItem` on the same scene.
 
-**Background Transcription**: `WhisperWorker` uses the `moveToThread` pattern:
+**Background Workers** use the `moveToThread` pattern:
 1. Create `QThread` and worker object
 2. Move worker to thread via `moveToThread()`
 3. Connect `thread.started` to `worker.run`
-4. Worker emits signals (`progress`, `finished`, `error`) that are safely received on the main thread
+4. Worker emits signals (`progress`, `finished`, `error`)
+5. Controller (QObject on main thread) receives signals via `QueuedConnection` — GUI-safe
 
-**Timeline Widget**: Custom-painted with `QPainter`. Supports zoom (Ctrl+wheel), scroll (wheel), click-to-seek, and auto-follows playhead.
+**IMPORTANT**: `MediaController` inherits `QObject` specifically because non-QObject receivers default to `DirectConnection` in PySide6, causing worker signals to run GUI code on the worker thread (crash on macOS).
+
+**Video Import (special case)**: `VideoLoadWorker` uses a blocking `QProgressDialog.exec()` pattern. Results are stored in local variables via `DirectConnection` (GIL-safe), then processed on the main thread after `exec()` returns.
+
+**Timeline Widget**: Custom-painted with `QPainter`. Supports zoom (Ctrl+wheel), scroll (wheel), click-to-seek, and auto-follows playhead. Waveform rendering uses NumPy vectorization.
+
+**Algorithm Optimizations**: Core lookups use `bisect` binary search (O(log n)). `VideoClipTrack` uses prefix sums for O(1) timeline offset queries. All dataclasses use `__slots__`.
 
 ### Data Flow
 
-1. User opens video → `MainWindow._load_video()` → `QMediaPlayer.setSource()`
+1. User opens video → `MediaController.load_video()` → `VideoLoadWorker` (background, HW-accelerated MKV→MP4)
 2. Generate subtitles → `WhisperDialog` → `WhisperWorker` runs in background:
    - Extract audio via FFmpeg (`audio_extractor.py`)
    - Load Whisper model
    - Transcribe → returns `SubtitleTrack`
 3. `SubtitleTrack` is passed to `VideoPlayerWidget`, `TimelineWidget`, and `SubtitlePanel`
-4. On `positionChanged`, `VideoPlayerWidget` queries `SubtitleTrack.segment_at(position_ms)` for current subtitle
+4. On `positionChanged`, `VideoPlayerWidget` queries `SubtitleTrack.segment_at(position_ms)` for current subtitle (O(log n) binary search)
 
 ### Time Units
 

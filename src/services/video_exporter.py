@@ -51,62 +51,53 @@ def _build_concat_filter(
         vl = f"cv{i}"
         al = f"ca{i}"
 
-        v_filter = f"[{idx}:v]trim=start={start_s:.3f}:end={end_s:.3f},setpts=PTS-STARTPTS"
-        
+        # 리스트 + join 패턴 (HPP Ch.11 — O(n) vs O(n²) 문자열 연결)
+        v_chain: list[str] = [f"[{idx}:v]trim=start={start_s:.3f}:end={end_s:.3f}", "setpts=PTS-STARTPTS"]
+
         # Apply visual filters (Brightness, Contrast, Saturation)
         if clip.brightness != 1.0 or clip.contrast != 1.0 or clip.saturation != 1.0:
-            # Map model values to FFmpeg eq filter values
-            # brightness: model 1.0 -> ffmpeg 0.0
             f_bri = clip.brightness - 1.0
-            v_filter += f",eq=brightness={f_bri:.2f}:contrast={clip.contrast:.2f}:saturation={clip.saturation:.2f}"
+            v_chain.append(f"eq=brightness={f_bri:.2f}:contrast={clip.contrast:.2f}:saturation={clip.saturation:.2f}")
 
         if hasattr(clip, "speed") and clip.speed != 1.0:
-            v_filter += f",setpts=PTS/{clip.speed:.3f}"
+            v_chain.append(f"setpts=PTS/{clip.speed:.3f}")
         if need_scale:
-            v_filter += (
-                f",scale={out_w}:{out_h}:force_original_aspect_ratio=decrease"
-                f",pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
-            )
-        v_filter += f"[{vl}]"
-        parts.append(v_filter)
+            v_chain.append(f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease")
+            v_chain.append(f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2")
+            v_chain.append("format=yuv420p")
+        parts.append(",".join(v_chain) + f"[{vl}]")
 
-        a_filter = f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f},asetpts=PTS-STARTPTS"
+        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}", "asetpts=PTS-STARTPTS"]
         if hasattr(clip, "speed") and clip.speed != 1.0:
             speed = clip.speed
             while speed > 2.0:
-                a_filter += ",atempo=2.0"
+                a_chain.append("atempo=2.0")
                 speed /= 2.0
             while speed < 0.5:
-                a_filter += ",atempo=0.5"
+                a_chain.append("atempo=0.5")
                 speed /= 0.5
-            a_filter += f",atempo={speed:.3f}"
+            a_chain.append(f"atempo={speed:.3f}")
         
         if hasattr(clip, "volume_points") and clip.volume_points:
             pts = sorted(clip.volume_points, key=lambda p: p.offset_ms)
             if pts:
-                # Build nested IF expression for linear interpolation
-                # volume='if(lte(t,t0), v0, if(lte(t,t1), v0+(v1-v0)*(t-t0)/(t1-t0), ...))'
-                expr = f"{pts[-1].volume:.3f}" # Default to last value
+                expr = f"{pts[-1].volume:.3f}"
                 for j in range(len(pts) - 1, 0, -1):
                     p1 = pts[j-1]
                     p2 = pts[j]
                     t1, v1 = p1.offset_ms / 1000.0, p1.volume
                     t2, v2 = p2.offset_ms / 1000.0, p2.volume
                     if t2 > t1:
-                        # Interpolation formula: v1 + (v2-v1)*(t-t1)/(t2-t1)
                         seg_expr = f"{v1:.3f}+({v2-v1:.3f})*(t-{t1:.3f})/({t2-t1:.3f})"
                         expr = f"if(lte(t,{t2:.3f}),{seg_expr},{expr})"
                 
-                # Handling before first point
                 t0, v0 = pts[0].offset_ms / 1000.0, pts[0].volume
                 expr = f"if(lte(t,{t0:.3f}),{v0:.3f},{expr})"
-                
-                a_filter += f",volume='{expr}'"
+                a_chain.append(f"volume='{expr}'")
         elif hasattr(clip, "volume") and clip.volume != 1.0:
-            a_filter += f",volume={clip.volume:.3f}"
+            a_chain.append(f"volume={clip.volume:.3f}")
             
-        a_filter += f"[{al}]"
-        parts.append(a_filter)
+        parts.append(",".join(a_chain) + f"[{al}]")
         v_labels.append(f"{vl}")
         a_labels.append(f"{al}")
 

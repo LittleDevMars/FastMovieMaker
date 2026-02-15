@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, Signal, QThread
 
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.services.audio_merger import AudioMerger
+from src.utils.hw_accel import get_hw_encoder
 
 
 class VideoLoadWorker(QObject):
@@ -81,14 +82,21 @@ class VideoLoadWorker(QObject):
                     self._temp_path.unlink(missing_ok=True)
 
     def _convert_to_mp4(self, source: Path) -> Path | None:
-        """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
+        """Convert a non-MP4 video to a temp MP4 file using FFmpeg.
+
+        3단계 전략:
+        1. Remux (스트림 복사) — 가장 빠름, 코덱 호환 시
+        2. HW 가속 인코딩 (VideoToolbox/NVENC) — 빠른 재인코딩
+        3. SW 폴백 (libx264 fast) — 최후 수단
+        """
         runner = get_ffmpeg_runner()
         if not runner.is_available():
             return None
 
         tmp = Path(tempfile.mktemp(suffix=".mp4", prefix="fmm_"))
 
-        args = [
+        # --- 1단계: Remux (스트림 복사, 재인코딩 없음) ---
+        args_remux = [
             "-i", str(source),
             "-map", "0:v:0",
             "-map", "0:a:0?",
@@ -103,7 +111,7 @@ class VideoLoadWorker(QObject):
 
         try:
             result = runner.run(
-                args,
+                args_remux,
                 encoding="utf-8",
                 errors="replace",
                 timeout=300,
@@ -115,9 +123,47 @@ class VideoLoadWorker(QObject):
             if self._cancelled:
                 return None
 
-            self.progress.emit(f"Copy failed, re-encoding {source.name}...")
+            # --- 2단계: HW 가속 인코딩 ---
+            encoder, hw_flags = get_hw_encoder("h264")
+            is_hw = encoder != "libx264"
 
-            args_reencode = [
+            if is_hw:
+                label = encoder.replace("_", " ").title()
+                self.progress.emit(
+                    f"HW 가속 인코딩 ({label})으로 {source.name} 변환 중..."
+                )
+
+                args_hw = [
+                    "-i", str(source),
+                    "-map", "0:v:0",
+                    "-map", "0:a:0?",
+                    "-c:v", encoder,
+                    *hw_flags,
+                    "-c:a", "aac",
+                    "-ac", "2",
+                    "-b:a", "192k",
+                    "-strict", "experimental",
+                    "-y",
+                    str(tmp),
+                ]
+
+                result_hw = runner.run(
+                    args_hw,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=600,
+                )
+
+                if result_hw.returncode == 0 and tmp.is_file():
+                    return tmp
+
+                if self._cancelled:
+                    return None
+
+            # --- 3단계: SW 폴백 (libx264 fast) ---
+            self.progress.emit(f"소프트웨어 인코딩으로 {source.name} 변환 중...")
+
+            args_sw = [
                 "-i", str(source),
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
@@ -130,16 +176,16 @@ class VideoLoadWorker(QObject):
                 str(tmp),
             ]
 
-            result2 = runner.run(
-                args_reencode,
+            result_sw = runner.run(
+                args_sw,
                 encoding="utf-8",
                 errors="replace",
                 timeout=600,
             )
-            
-            if result2.returncode == 0 and tmp.is_file():
+
+            if result_sw.returncode == 0 and tmp.is_file():
                 return tmp
-            
+
             return None
 
         except subprocess.TimeoutExpired:

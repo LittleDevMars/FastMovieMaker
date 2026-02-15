@@ -1,6 +1,9 @@
 """Time conversion utilities."""
 
+from functools import lru_cache
 
+
+@lru_cache(maxsize=4096)
 def ms_to_display(ms: int) -> str:
     """Convert milliseconds to display string 'MM:SS.mmm'."""
     if ms < 0:
@@ -11,6 +14,7 @@ def ms_to_display(ms: int) -> str:
     return f"{minutes:02d}:{seconds:06.3f}"
 
 
+@lru_cache(maxsize=4096)
 def ms_to_srt_time(ms: int) -> str:
     """Convert milliseconds to SRT time format 'HH:MM:SS,mmm'."""
     if ms < 0:
@@ -48,6 +52,7 @@ def display_to_ms(text: str) -> int:
     return int(minutes * 60_000 + sec_ms * 1000)
 
 
+@lru_cache(maxsize=2048)
 def ms_to_frame(ms: int, fps: int) -> int:
     """Convert milliseconds to frame number.
 
@@ -65,6 +70,7 @@ def ms_to_frame(ms: int, fps: int) -> int:
     return int(round(ms * fps / 1000))
 
 
+@lru_cache(maxsize=2048)
 def frame_to_ms(frame: int, fps: int) -> int:
     """Convert frame number to milliseconds.
 

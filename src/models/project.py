@@ -13,7 +13,7 @@ from src.models.text_overlay import TextOverlayTrack
 from src.models.audio import AudioTrack
 
 
-@dataclass
+@dataclass(slots=True)
 class ProjectState:
     """Holds the current state of the editing session."""
 

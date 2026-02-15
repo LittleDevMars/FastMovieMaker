@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
-@dataclass
+@dataclass(slots=True)
 class AudioClip:
     """Represents a single audio file on an audio track."""
 
@@ -30,7 +31,7 @@ class AudioClip:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class AudioTrack:
     """A collection of audio clips."""
 
@@ -47,8 +48,8 @@ class AudioTrack:
         return iter(self.clips)
 
     def add_clip(self, clip: AudioClip) -> None:
-        self.clips.append(clip)
-        self.clips.sort(key=lambda c: c.start_ms)
+        """bisect.insort로 정렬 유지 — O(n)."""
+        bisect.insort(self.clips, clip, key=lambda c: c.start_ms)
 
     def remove_clip(self, clip: AudioClip) -> None:
         if clip in self.clips:

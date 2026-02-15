@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field
 
 # Sentinel: "no source filter" (consider all clips regardless of source_path).
@@ -9,7 +10,7 @@ from dataclasses import dataclass, field
 _NO_SOURCE_FILTER = object()
 
 
-@dataclass
+@dataclass(slots=True)
 class TransitionInfo:
     """Properties of a transition effect between clips."""
 
@@ -24,7 +25,7 @@ class TransitionInfo:
         return cls(type=data["type"], duration_ms=data["duration_ms"])
 
 
-@dataclass
+@dataclass(slots=True)
 class VolumePoint:
     """A point in a volume envelope.
     
@@ -42,7 +43,7 @@ class VolumePoint:
         return cls(offset_ms=data["offset_ms"], volume=data["volume"])
 
 
-@dataclass
+@dataclass(slots=True)
 class VideoClip:
     """A contiguous segment of a source video.
 
@@ -64,37 +65,39 @@ class VideoClip:
 
     def get_volume_at(self, offset_ms: int) -> float:
         """Calculate the interpolated volume at a given offset within the clip.
-        
+
+        volume_points는 offset_ms 기준 정렬 상태를 가정.
+        이진 탐색(CLRS Ch.2.3)으로 O(log n) — 매 호출마다 O(n log n) sort 제거.
+
         Args:
             offset_ms: Offset relative to clip start (visual timeline time).
-            
+
         Returns:
             Multiplier (0.0 to 2.0).
         """
         if not self.volume_points:
             return self.volume
 
-        # Ensure points are sorted
-        pts = sorted(self.volume_points, key=lambda p: p.offset_ms)
-        
+        pts = self.volume_points  # 이미 정렬된 상태 (shift_volume_points에서 보장)
+
         # Before first point
         if offset_ms <= pts[0].offset_ms:
             return pts[0].volume
-        
+
         # After last point
         if offset_ms >= pts[-1].offset_ms:
             return pts[-1].volume
-            
-        # Between points
-        for i in range(len(pts) - 1):
-            p1 = pts[i]
-            p2 = pts[i + 1]
-            if p1.offset_ms <= offset_ms <= p2.offset_ms:
-                # Linear interpolation
-                t = (offset_ms - p1.offset_ms) / (p2.offset_ms - p1.offset_ms)
-                return p1.volume + t * (p2.volume - p1.volume)
-        
-        return self.volume
+
+        # 이진 탐색으로 offset_ms가 위치하는 구간 [pts[i-1], pts[i]) 찾기
+        idx = bisect.bisect_right(pts, offset_ms, key=lambda p: p.offset_ms)
+        p1 = pts[idx - 1]
+        p2 = pts[idx]
+        # Linear interpolation
+        span = p2.offset_ms - p1.offset_ms
+        if span == 0:
+            return p1.volume
+        t = (offset_ms - p1.offset_ms) / span
+        return p1.volume + t * (p2.volume - p1.volume)
 
     def clone(self) -> VideoClip:
         """Return a deep copy of this clip."""
@@ -214,19 +217,41 @@ class VideoClip:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class VideoClipTrack:
     """Ordered collection of video clips defining the output timeline.
 
     Clips are stored in playback order. The output timeline is the
     sequential concatenation of all clips. Each clip references a
     region of the single source video via source_in_ms / source_out_ms.
+
+    내부적으로 접두사 합(prefix sum) 캐시를 유지하여
+    clip_at_timeline(), clip_timeline_start() 등을 O(log n)에 수행.
     """
 
     clips: list[VideoClip] = field(default_factory=list)
     locked: bool = False
     muted: bool = False
     hidden: bool = False
+
+    def _build_prefix(self) -> list[int]:
+        """접두사 합 배열을 구축한다. O(n).
+
+        _prefix[i] = clips[0..i-1]의 누적 timeline 시작 offset.
+        _prefix[-1] = output_duration_ms.
+
+        외부에서 clip 속성(transition_out, speed 등)을 직접 수정할 수 있으므로
+        캐시 대신 매번 재계산. n이 작으므로(보통 <100) 비용 무시 가능.
+        """
+        offsets: list[int] = []
+        offset = 0
+        for i, clip in enumerate(self.clips):
+            offsets.append(offset)
+            offset += clip.duration_ms
+            if clip.transition_out and i < len(self.clips) - 1:
+                offset -= clip.transition_out.duration_ms
+        offsets.append(offset)
+        return offsets
 
     @classmethod
     def from_full_video(cls, duration_ms: int, source_path: str | None = None) -> VideoClipTrack:
@@ -238,36 +263,34 @@ class VideoClipTrack:
 
     @property
     def output_duration_ms(self) -> int:
-        """Total output timeline length (sum of durations minus transitions)."""
-        total = 0
-        for i, clip in enumerate(self.clips):
-            total += clip.duration_ms
-            if clip.transition_out and i < len(self.clips) - 1:
-                total -= clip.transition_out.duration_ms
-        return total
+        """Total output timeline length (sum of durations minus transitions). O(1) 캐시."""
+        prefix = self._build_prefix()
+        return prefix[-1] if prefix else 0
 
     # -------------------------------------------------------- Time mapping
 
     def timeline_to_source(self, timeline_ms: int) -> int | None:
         """Convert output-timeline position to source-video position.
 
+        접두사 합 + 이진 탐색으로 O(log n).
         Returns None if timeline_ms is beyond end of all clips.
         """
+        if not self.clips:
+            return None
         if timeline_ms < 0:
-            return self.clips[0].source_in_ms if self.clips else None
-        offset = 0
-        for clip in self.clips:
-            clip_dur = clip.duration_ms
-            if timeline_ms < offset + clip_dur:
-                # local_timeline_pos * speed = local_source_pos
-                local_timeline = timeline_ms - offset
-                return clip.source_in_ms + int(local_timeline * clip.speed)
-            offset += clip_dur
-        return None
+            return self.clips[0].source_in_ms
+        result = self.clip_at_timeline(timeline_ms)
+        if result is None:
+            return None
+        idx, clip = result
+        prefix = self._build_prefix()
+        local_timeline = timeline_ms - prefix[idx]
+        return clip.source_in_ms + int(local_timeline * clip.speed)
 
     def source_to_timeline(self, source_ms: int, source_path=_NO_SOURCE_FILTER) -> int | None:
         """Convert source-video position to output-timeline position.
 
+        접두사 합 캐시를 사용하여 offset 재계산 방지.
         Returns timeline position within the first clip containing source_ms,
         or None if source_ms is not in any clip (deleted region).
 
@@ -276,60 +299,57 @@ class VideoClipTrack:
         - ``None``: only clips with ``source_path is None`` (primary video).
         - ``"path.mp4"``: only clips with that exact source_path.
         """
-        offset: int = 0
+        prefix = self._build_prefix()
         last_match_clip: VideoClip | None = None
         last_match_offset: int = 0
-        for clip in self.clips:
+        for i, clip in enumerate(self.clips):
             if source_path is not _NO_SOURCE_FILTER and clip.source_path != source_path:
-                offset += clip.duration_ms
                 continue
+            offset = prefix[i]
             if clip.source_in_ms <= source_ms < clip.source_out_ms:
-                # local_source_pos / speed = local_timeline_pos
                 local_source = source_ms - clip.source_in_ms
                 return offset + int(local_source / clip.speed)
             last_match_clip = clip
             last_match_offset = offset
-            offset += clip.duration_ms
-        # Check if exactly at end of last matching clip
+        # 마지막 매칭 클립의 끝과 정확히 일치
         if last_match_clip is not None and source_ms == last_match_clip.source_out_ms:
             return last_match_offset + last_match_clip.duration_ms
-        # Fallback: no source_path filter
+        # 전체 클립 끝 Fallback
         if source_path is _NO_SOURCE_FILTER and self.clips and source_ms == self.clips[-1].source_out_ms:
-            return offset
+            return prefix[-1]
         return None
 
     def clip_at_timeline(self, timeline_ms: int) -> tuple[int, VideoClip] | None:
-        """Find clip at given timeline position (ms)."""
-        offset = 0
-        for i, clip in enumerate(self.clips):
-            end_ms = offset + clip.duration_ms
-            if offset <= timeline_ms < end_ms:
-                return i, clip
-            offset = end_ms
-            if clip.transition_out and i < len(self.clips) - 1:
-                offset -= clip.transition_out.duration_ms
+        """Find clip at given timeline position (ms).
+
+        접두사 합 + 이진 탐색(CLRS Ch.2.3)으로 O(log n).
+        """
+        if not self.clips:
+            return None
+        prefix = self._build_prefix()
+        # bisect_right: prefix[i] <= timeline_ms 인 가장 큰 i 를 찾음
+        idx = bisect.bisect_right(prefix, timeline_ms) - 1
+        if idx < 0:
+            idx = 0
+        if idx >= len(self.clips):
+            return None
+        # 범위 확인
+        if prefix[idx] <= timeline_ms < prefix[idx + 1]:
+            return idx, self.clips[idx]
         return None
 
     def clip_timeline_start(self, index: int) -> int:
-        """Return timeline start position (ms) for clip at index."""
-        offset = 0
-        for i in range(index):
-            clip = self.clips[i]
-            offset += clip.duration_ms
-            if clip.transition_out and i < len(self.clips) - 1:
-                offset -= clip.transition_out.duration_ms
-        return offset
+        """Return timeline start position (ms) for clip at index. O(1) 캐시."""
+        prefix = self._build_prefix()
+        if 0 <= index < len(prefix) - 1:
+            return prefix[index]
+        return 0
 
     def clip_boundaries_ms(self) -> list[int]:
-        """Return list of start timestamps (ms) for each clip on the timeline."""
-        boundaries = []
-        offset = 0
-        for i, clip in enumerate(self.clips):
-            boundaries.append(offset)
-            offset += clip.duration_ms
-            if clip.transition_out and i < len(self.clips) - 1:
-                offset -= clip.transition_out.duration_ms
-        return boundaries
+        """Return list of start timestamps (ms) for each clip on the timeline. O(1) 캐시."""
+        prefix = self._build_prefix()
+        # 마지막 원소(output_duration)는 제외
+        return prefix[:-1] if len(prefix) > 1 else list(prefix)
 
     def next_clip_source_in(self, source_ms: int) -> int | None:
         """Find the source_in_ms of the next clip after source_ms.
@@ -354,8 +374,8 @@ class VideoClipTrack:
             return False
 
         idx, clip = result
-        offset = self.clip_timeline_start(idx)
-        local_offset = timeline_ms - offset
+        prefix = self._build_prefix()
+        local_offset = timeline_ms - prefix[idx]
 
         # Too close to clip edges
         if local_offset < 100 or local_offset > clip.duration_ms - 100:
@@ -375,7 +395,8 @@ class VideoClipTrack:
             return None
         if len(self.clips) <= 1:
             return None  # Cannot remove the last clip
-        return self.clips.pop(index)
+        removed = self.clips.pop(index)
+        return removed
 
     def trim_clip_left(self, index: int, new_source_in: int) -> None:
         """Adjust source_in of clip (trim from left)."""

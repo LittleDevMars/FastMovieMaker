@@ -17,6 +17,12 @@ Welcome to the FastMovieMaker documentation! This directory contains guides and 
   - Video audio mixing
   - Troubleshooting and tips
 
+### Technical Guides
+- **[Hardware Acceleration Guide](HARDWARE_ACCELERATION.md)** — 하드웨어 가속 인코딩 가이드
+  - VideoToolbox (macOS), NVENC (Windows/Linux), QSV (Intel) 지원
+  - MKV→MP4 변환 시 자동 HW 가속 활용
+  - 3단계 폴백 전략 (Remux → HW 인코딩 → SW 폴백)
+
 ## 🚀 Quick Start
 
 ### For Beginners

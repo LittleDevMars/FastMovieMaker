@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(slots=True)
 class SubtitleStyle:
     """Visual style for subtitle rendering."""
 

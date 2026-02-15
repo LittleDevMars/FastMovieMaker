@@ -131,26 +131,26 @@ def _build_audio_concat_filter(
         end_s = clip.source_out_ms / 1000.0
         al = f"a{i}"
 
-        a_filter = f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f},asetpts=PTS-STARTPTS"
+        # 리스트 + join 패턴 (HPP Ch.11)
+        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}", "asetpts=PTS-STARTPTS"]
 
         # Apply speed adjustment
         if hasattr(clip, "speed") and clip.speed != 1.0:
             speed = clip.speed
             # FFmpeg atempo only supports 0.5-2.0, so chain multiple if needed
             while speed > 2.0:
-                a_filter += ",atempo=2.0"
+                a_chain.append("atempo=2.0")
                 speed /= 2.0
             while speed < 0.5:
-                a_filter += ",atempo=0.5"
+                a_chain.append("atempo=0.5")
                 speed /= 0.5
-            a_filter += f",atempo={speed:.3f}"
+            a_chain.append(f"atempo={speed:.3f}")
 
         # Apply volume adjustment
         if hasattr(clip, "volume") and clip.volume != 1.0:
-            a_filter += f",volume={clip.volume:.3f}"
+            a_chain.append(f"volume={clip.volume:.3f}")
 
-        a_filter += f"[{al}]"
-        parts.append(a_filter)
+        parts.append(",".join(a_chain) + f"[{al}]")
         a_labels.append(al)
 
     # Concatenate all audio segments
