@@ -13,7 +13,7 @@ from src.models.style import SubtitleStyle
 from src.models.video_clip import VideoClipTrack
 from src.models.text_overlay import TextOverlay
 from src.services.subtitle_exporter import export_srt
-from src.utils.config import find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 def _build_concat_filter(
@@ -191,8 +191,8 @@ def export_video(
         video_tracks: Optional list of video tracks to composite.
         text_overlays: Optional list of TextOverlay objects to render.
     """
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
+    runner = get_ffmpeg_runner()
+    if not runner.is_available():
         raise RuntimeError("FFmpeg not found")
 
     # Use .ass for advanced styling support (colors, fonts, positioning)
@@ -202,7 +202,7 @@ def export_video(
         ass_w, ass_h = scale_width, scale_height
     else:
         # Probe primary video
-        vw, vh = _get_video_resolution(ffmpeg, video_path)
+        vw, vh = _get_video_resolution(runner, video_path)
         ass_w, ass_h = (vw, vh) if vw > 0 and vh > 0 else (1920, 1080)
 
     from src.services.subtitle_exporter import export_ass
@@ -347,7 +347,7 @@ def export_video(
             norm_w = scale_width if scale_width > 0 else 0
             norm_h = scale_height if scale_height > 0 else 0
             if norm_w == 0 or norm_h == 0:
-                norm_w, norm_h = _get_video_resolution(ffmpeg, video_path)
+                norm_w, norm_h = _get_video_resolution(runner, video_path)
                 if norm_w <= 0 or norm_h <= 0:
                     norm_w, norm_h = 1920, 1080
 
@@ -409,7 +409,7 @@ def export_video(
 
             # PIP image overlays
             if img_inputs:
-                vid_w, vid_h = _get_video_resolution(ffmpeg, video_path)
+                vid_w, vid_h = _get_video_resolution(runner, video_path)
                 render_w = scale_width if scale_width > 0 else vid_w
                 render_h = scale_height if scale_height > 0 else vid_h
                 if render_w <= 0 or render_h <= 0:
@@ -449,7 +449,7 @@ def export_video(
                 vid_w = scale_width if scale_width > 0 else 0
                 vid_h = scale_height if scale_height > 0 else 0
                 if vid_w <= 0 or vid_h <= 0:
-                    vid_w, vid_h = _get_video_resolution(ffmpeg, video_path)
+                    vid_w, vid_h = _get_video_resolution(runner, video_path)
                     if vid_w <= 0 or vid_h <= 0:
                         vid_w, vid_h = 1920, 1080
 
@@ -513,7 +513,7 @@ def export_video(
             filter_complex = ";".join(fc_parts)
 
             # ---- Build command ----
-            cmd = [ffmpeg, *input_args,
+            args = [*input_args,
                    "-filter_complex", filter_complex,
                    "-map", "[out]"]
 
@@ -521,19 +521,19 @@ def export_video(
                 # Mixing with external audio might need amix or just replacement
                 # For now let's assume external audio overrides all track audio 
                 # (consistent with previous behavior for simplification)
-                cmd.extend(["-map", f"{audio_idx}:a",
+                args.extend(["-map", f"{audio_idx}:a",
                             "-c:v", video_encoder, *encoder_flags,
                             *audio_codec_flags])
             elif final_a_label:
-                cmd.extend(["-map", final_a_label,
+                args.extend(["-map", final_a_label,
                             "-c:v", video_encoder, *encoder_flags,
                             *audio_codec_flags])
             else:
-                cmd.extend(["-map", "0:a?",
+                args.extend(["-map", "0:a?",
                             "-c:v", video_encoder, *encoder_flags,
                             "-c:a", "copy"])
 
-            cmd.extend(["-y", "-progress", "pipe:1", str(output_path)])
+            args.extend(["-y", "-progress", "pipe:1", str(output_path)])
 
         else:
             # simple -vf filter chain
@@ -548,8 +548,7 @@ def export_video(
             vf_string = ",".join(vf_parts)
 
             if audio_path and audio_path.exists():
-                cmd = [
-                    ffmpeg,
+                args = [
                     "-i", str(video_path),
                     "-i", str(audio_path),
                     "-vf", vf_string,
@@ -563,8 +562,7 @@ def export_video(
                     str(output_path),
                 ]
             else:
-                cmd = [
-                    ffmpeg,
+                args = [
                     "-i", str(video_path),
                     "-vf", vf_string,
                     "-c:v", video_encoder,
@@ -575,8 +573,8 @@ def export_video(
                     str(output_path),
                 ]
 
-        process = subprocess.Popen(
-            cmd,
+        process = runner.run_async(
+            args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -601,7 +599,7 @@ def export_video(
         if multi_track and video_tracks:
             total_duration = max((vt.output_duration_ms for vt in video_tracks), default=0) / 1000.0
         else:
-            total_duration = _get_video_duration(ffmpeg, video_path)
+            total_duration = _get_video_duration(runner, video_path)
 
         if process.stdout:
             for line in process.stdout:
@@ -626,51 +624,42 @@ def export_video(
         tmp_subs.unlink(missing_ok=True)
 
 
-def _get_video_resolution(ffmpeg: str, video_path: Path) -> tuple[int, int]:
+def _get_video_resolution(runner: "FFmpegRunner", video_path: Path) -> tuple[int, int]:
     """Get video width and height using ffprobe."""
-    ffprobe = str(Path(ffmpeg).parent / "ffprobe.exe")
-    if not Path(ffprobe).is_file():
-        ffprobe = str(Path(ffmpeg).parent / "ffprobe")
-    if not Path(ffprobe).is_file():
-        return 0, 0
-
     try:
-        result = subprocess.run(
+        result = runner.run_ffprobe(
             [
-                ffprobe, "-v", "error",
+                "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=width,height",
                 "-of", "csv=s=x:p=0",
                 str(video_path),
             ],
-            capture_output=True, text=True, timeout=10,
+            timeout=10,
         )
-        parts = result.stdout.strip().split("x")
-        if len(parts) == 2:
-            return int(parts[0]), int(parts[1])
+        if result.stdout:
+            parts = result.stdout.strip().split("x")
+            if len(parts) == 2:
+                return int(parts[0]), int(parts[1])
     except Exception:
         pass
     return 0, 0
 
 
-def _get_video_duration(ffmpeg: str, video_path: Path) -> float:
-    """Get video duration in seconds using ffprobe or FFmpeg."""
-    ffprobe = str(Path(ffmpeg).parent / "ffprobe.exe")
-    if not Path(ffprobe).is_file():
-        ffprobe = str(Path(ffmpeg).parent / "ffprobe")
-    if not Path(ffprobe).is_file():
-        return 0.0
-
+def _get_video_duration(runner: "FFmpegRunner", video_path: Path) -> float:
+    """Get video duration in seconds using ffprobe."""
     try:
-        result = subprocess.run(
+        result = runner.run_ffprobe(
             [
-                ffprobe, "-v", "error",
+                "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(video_path),
             ],
-            capture_output=True, text=True, timeout=10,
+            timeout=10,
         )
-        return float(result.stdout.strip())
+        if result.stdout:
+            return float(result.stdout.strip())
     except Exception:
-        return 0.0
+        pass
+    return 0.0

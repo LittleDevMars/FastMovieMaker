@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.models.media_item import MediaItem
-from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, find_ffmpeg
+from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 
 def _get_library_dir() -> Path:
@@ -188,16 +188,15 @@ class MediaLibraryService:
 
     def _convert_gif_to_mp4(self, gif_path: Path) -> Path | None:
         """Convert an animated GIF to MP4 using FFmpeg. Returns the MP4 path or None."""
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return None
 
         conv_dir = _get_converted_dir()
         mp4_name = f"{gif_path.stem}_{uuid.uuid4().hex[:8]}.mp4"
         mp4_path = conv_dir / mp4_name
 
-        cmd = [
-            ffmpeg,
+        args = [
             "-i", str(gif_path),
             "-movflags", "faststart",
             "-pix_fmt", "yuv420p",
@@ -206,10 +205,7 @@ class MediaLibraryService:
             str(mp4_path),
         ]
         try:
-            subprocess.run(
-                cmd, capture_output=True, timeout=60,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
+            runner.run(args, timeout=60)
             if mp4_path.exists() and mp4_path.stat().st_size > 0:
                 return mp4_path
         except Exception:
@@ -234,13 +230,11 @@ class MediaLibraryService:
         return None
 
     def _generate_video_thumbnail(self, video_path: Path, thumb_path: Path) -> Path | None:
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return None
 
-        # Use input seeking (-ss before -i) for fast thumbnail generation
-        cmd = [
-            ffmpeg,
+        args = [
             "-ss", "1",
             "-i", str(video_path),
             "-vframes", "1",
@@ -249,10 +243,7 @@ class MediaLibraryService:
             str(thumb_path),
         ]
         try:
-            subprocess.run(
-                cmd, capture_output=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
+            runner.run(args, timeout=10)
             if thumb_path.exists() and thumb_path.stat().st_size > 0:
                 return thumb_path
         except Exception:
@@ -278,28 +269,21 @@ class MediaLibraryService:
 
     def _get_video_info(self, video_path: Path) -> tuple[int, int, int]:
         """Returns (width, height, duration_ms)."""
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            return 0, 0, 0
-
-        ffprobe = str(Path(ffmpeg).parent / "ffprobe.exe")
-        if not Path(ffprobe).is_file():
-            ffprobe = str(Path(ffmpeg).parent / "ffprobe")
-        if not Path(ffprobe).is_file():
+        runner = get_ffmpeg_runner()
+        if not runner.ffprobe_path:
             return 0, 0, 0
 
         try:
-            result = subprocess.run(
+            result = runner.run_ffprobe(
                 [
-                    ffprobe, "-v", "error",
+                    "-v", "error",
                     "-select_streams", "v:0",
                     "-show_entries", "stream=width,height",
                     "-show_entries", "format=duration",
                     "-of", "json",
                     str(video_path),
                 ],
-                capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                timeout=10,
             )
             data = json.loads(result.stdout)
             width = 0

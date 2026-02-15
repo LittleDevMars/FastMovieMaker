@@ -18,11 +18,11 @@ elif sys.platform == "win32":
 else:
     FFMPEG_PATH = "ffmpeg"
 
+
 def find_ffmpeg() -> str | None:
-    """Return FFmpeg path if available."""
-    if Path(FFMPEG_PATH).is_file():
-        return FFMPEG_PATH
-    return shutil.which("ffmpeg")
+    """Return FFmpeg path (config path → PATH → bundled). Lazy import to avoid circular deps."""
+    from src.utils.ffmpeg_utils import find_ffmpeg as _find
+    return _find()
 
 # Audio extraction settings
 AUDIO_SAMPLE_RATE = 16000  # Whisper expects 16kHz

@@ -4,9 +4,9 @@
 
 **FastMovieMaker**는 멀티 소스 비디오 편집, Whisper 기반 자동 자막 생성, AI 텍스트 음성 변환(TTS) 등 고급 기능을 갖춘 데스크톱 자막 편집 프로그램입니다.
 
-[![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
-[![Tests](https://img.shields.io/badge/tests-43%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-414%20passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
@@ -23,7 +23,7 @@
 - **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
 - 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
 - 끊김 없는 클립 간 자동 소스 전환
-- **43개의 유닛 테스트**로 검증된 견고한 재생 시스템
+- **414개의 유닛 테스트**로 검증된 견고한 재생 시스템
 - **GPU 가속 인코딩** — NVENC, QSV, AMF 내보내기 가속 지원
 - **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 - **자석 스냅 (Magnetic Snap)** — 클립 이동 시 인접 클립 및 플레이헤드에 자동 정렬 (Toggle: `S`)
@@ -84,42 +84,53 @@
   - 백업 시스템을 포함한 자동 저장
   - QUndoStack을 이용한 실행 취소/다시 실행
 
-### 🔧 최근 안정성 개선 (v0.9.2)
-- **멀티 트랙 리팩토링 리그레션 수정:**
-  - `TimelineWidget` 초기화 오류 해결 (`_project`, `_clip_track` 속성 누락)
-  - `AddVideoClipCommand` 시그니처 불일치 수정
-  - 썸네일 서비스 API 호출 오류 수정 (`request_thumbnail` 사용)
-  - 동적 Y 좌표 계산 메서드 추가 (웨이브폼, 이미지 오버레이)
-  - `VideoClip` 라벨 렌더링 로직 개선 (파일명 기반 표시)
+### 🔧 안정성 개선 (v0.9.7)
+- **아키텍처 개선 (Layered + Clean Architecture):**
+  - `infrastructure/` 계층 도입 — `FFmpegRunner`, `ITranscriber` 프로토콜로 외부 의존성 추상화
+  - 모든 서비스에서 직접 `subprocess` 호출 제거 → `FFmpegRunner` 통합
+- **Whisper 자막 생성 안정화:**
+  - Python 3.14 호환 — QThread C 스택 오버플로우 해결 (메인 스레드 사전 임포트)
+  - 취소 즉시 반영 — Cancel 버튼 클릭 시 다이얼로그 즉시 닫힘 (스레드 백그라운드 종료)
+  - 모델 로딩 중 취소 지원 — `load_model()` 후 취소 상태 체크 추가
+- **QThread 크래시 방지:**
+  - `_cleanup_thread()`에 `quit()` 호출 추가 (이벤트 루프 미종료 버그 수정)
+  - 앱 종료 시 `QThreadPool.waitForDone()` 안전망 추가
+  - 강제 닫기 시 고아 스레드 참조 보관 (GC 파괴 방지)
+- **타임라인 드래그 수정:**
+  - 자막 세그먼트 이동/리사이즈 드래그 복원 (`_start_drag` 메서드 누락 수정)
 
 ---
 
 ## 🏗️ 아키텍처
 
-### 깔끔한 3계층 설계
+### Layered + Clean Architecture
 ```
 src/
-├── models/          # 순수 Python 데이터 모델 (Qt 종속성 없음)
+├── models/              # 순수 Python 데이터 모델 (Qt 종속성 없음)
 │   ├── project.py
 │   ├── subtitle.py
 │   ├── video_clip.py
 │   └── style.py
-├── services/        # 비즈니스 로직 (FFmpeg, Whisper, TTS)
-│   ├── ffmpeg_service.py
+├── infrastructure/      # 외부 어댑터 (FFmpeg, Whisper 추상화)
+│   ├── ffmpeg_runner.py     # FFmpeg/FFprobe 실행 통합
+│   └── transcriber.py       # ITranscriber 프로토콜 + WhisperTranscriber
+├── services/            # 비즈니스 로직 (infrastructure 사용, Qt 무관)
 │   ├── whisper_service.py
 │   ├── tts_service.py
+│   ├── video_exporter.py
 │   └── frame_cache_service.py
-├── workers/         # QThread 백그라운드 워커
+├── workers/             # QThread 백그라운드 워커
 │   ├── whisper_worker.py
 │   ├── tts_worker.py
-│   ├── waveform_worker.py
 │   └── frame_cache_worker.py
-└── ui/              # PySide6 UI 컴포넌트
+└── ui/                  # PySide6 UI 컴포넌트
     ├── main_window.py
     ├── timeline_widget.py
     ├── video_player_widget.py
-    └── playback_controls.py
+    └── dialogs/
 ```
+
+**의존성 규칙:** `models` ← `infrastructure` ← `services` ← `workers` / `ui`
 
 ### 기술적 특징
 - **Worker-moveToThread 패턴** — Whisper/TTS 작업을 위한 논블로킹 백그라운드 처리
@@ -171,22 +182,16 @@ python main.py
 
 ### 포괄적인 테스트 스위트
 ```bash
-# 전체 테스트 실행 (20개 모듈에 걸친 326개 이상의 테스트 케이스)
+# 전체 테스트 실행 (29개 모듈에 걸친 414개 테스트 케이스)
 pytest tests/ -v
 
-# 멀티 소스 재생 테스트 실행 (43개 테스트 케이스)
-pytest tests/test_multi_source_playback.py -v
-
-# 테스트 범주:
-# - 스크럽 시 소스 전환
-# - 재생/일시정지 레이스 컨디션
-# - 미디어 상태 처리
-# - 위치 변경 이벤트
-# - 스크럽→재생 시나리오
-# - 재생 버튼 동기화
-# - 클립 경계 교차
-# - 타임라인/슬라이더 동기화
-# - 엣지 케이스 (짧은 클립, 빠른 전환 등)
+# 주요 테스트 모듈:
+pytest tests/test_multi_source_playback.py -v   # 멀티 소스 재생 (43개)
+pytest tests/test_time_utils.py -v               # 시간 변환 (46개)
+pytest tests/test_video_clip.py -v               # 비디오 클립 (44개)
+pytest tests/test_cancel_crash.py -v             # 취소 크래시 방지 (8개)
+pytest tests/test_whisper_cancel.py -v           # Whisper 취소 (3개)
+pytest tests/test_whisper_integration.py -v      # Whisper 통합 (5개)
 ```
 
 ---
@@ -195,7 +200,7 @@ pytest tests/test_multi_source_playback.py -v
 
 | 분류 | 기술 |
 |----------|-----------|
-| **언어** | Python 3.13 |
+| **언어** | Python 3.13+ (3.14 테스트 완료) |
 | **GUI 프레임워크** | PySide6 6.10 (Qt 6.10) |
 | **비디오 처리** | FFmpeg, opencv-python |
 | **AI/ML** | OpenAI Whisper, PyTorch 2.6 (CUDA 12.4) |
@@ -243,7 +248,7 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 
 ## 🎯 로드맵
 
-- [ ] Whisper 변환 중 실시간 자막 미리보기
+- [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
 - [ ] 커스텀 TTS 제공자를 위한 플러그인 시스템
 - [ ] 클라우드 프로젝트 동기화 (협업 편집)
 - [ ] 오디오 더킹 (Audio Ducking) 고도화

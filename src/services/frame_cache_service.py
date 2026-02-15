@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
-import sys
 import shutil
 import tempfile
 from pathlib import Path
 
-from src.utils.ffmpeg_utils import find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 def _ms_from_path(path: Path) -> int:
@@ -110,42 +109,30 @@ class FrameCacheService:
         Returns:
             True if successful, False otherwise
         """
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return False
 
-        # Double-SS technique:
-        # 1. Seek before the timestamp (input seek) -> fast to keyframe
-        # 2. Seek accurately to the target (output seek)
-        
-        # Calculate timestamps
         target_sec = ms / 1000.0
-        # Seek 10 seconds before (or to 0) for the input seek
         input_seek = max(0.0, target_sec - 10.0)
-        # Relative seek from that point
         output_seek = target_sec - input_seek
 
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = subprocess.CREATE_NO_WINDOW
-
-        cmd = [
-            ffmpeg,
+        args = [
             "-ss", f"{input_seek:.3f}",
             "-i", source_path,
             "-ss", f"{output_seek:.3f}",
             "-frames:v", "1",
-            "-q:v", "5",  # High quality
+            "-q:v", "5",
             "-y",
             str(output_path),
         ]
 
         try:
-            subprocess.run(
-                cmd,
+            runner.run(
+                args,
+                capture_output=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=creation_flags,
                 timeout=5,
             )
             return output_path.exists() and output_path.stat().st_size > 0
@@ -167,18 +154,13 @@ class FrameCacheService:
         Uses the ``fps`` video filter for efficient batch extraction.
         Returns the number of frames extracted.
         """
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             raise FileNotFoundError("FFmpeg not found")
 
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = subprocess.CREATE_NO_WINDOW
+        fps_value = 1000.0 / interval_ms
 
-        fps_value = 1000.0 / interval_ms  # e.g., 1.0 for 1000ms interval
-
-        cmd = [
-            ffmpeg,
+        args = [
             "-i", source_path,
             "-vf", f"fps={fps_value},scale={width}:-1",
             "-q:v", "5",
@@ -187,11 +169,10 @@ class FrameCacheService:
             str(output_dir / "frame_%06d.jpg"),
         ]
 
-        proc = subprocess.Popen(
-            cmd,
+        proc = runner.run_async(
+            args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            creationflags=creation_flags,
         )
 
         # Poll with cancel check

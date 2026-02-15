@@ -5,9 +5,10 @@ Detects and uses platform-specific hardware encoders.
 from __future__ import annotations
 
 import sys
-import subprocess
 from pathlib import Path
 from typing import List
+
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 def get_hw_encoder(codec: str = "h264") -> tuple[str, List[str]]:
@@ -97,17 +98,11 @@ def get_hw_encoder(codec: str = "h264") -> tuple[str, List[str]]:
 def _check_nvenc_available() -> bool:
     """Check if NVIDIA NVENC encoder is available."""
     try:
-        from ..utils.ffmpeg_utils import find_ffmpeg
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return False
 
-        result = subprocess.run(
-            [ffmpeg, "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = runner.run(["-hide_banner", "-encoders"], timeout=5)
         return "h264_nvenc" in result.stdout
     except Exception:
         return False
@@ -116,17 +111,11 @@ def _check_nvenc_available() -> bool:
 def _check_vaapi_available() -> bool:
     """Check if VAAPI encoder is available (Linux Intel)."""
     try:
-        from ..utils.ffmpeg_utils import find_ffmpeg
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return False
 
-        result = subprocess.run(
-            [ffmpeg, "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = runner.run(["-hide_banner", "-encoders"], timeout=5)
         return "h264_vaapi" in result.stdout
     except Exception:
         return False
@@ -146,17 +135,10 @@ def get_hw_info() -> dict:
         "recommended": None
     }
 
-    # Check available encoders
     try:
-        from ..utils.ffmpeg_utils import find_ffmpeg
-        ffmpeg = find_ffmpeg()
-        if ffmpeg:
-            result = subprocess.run(
-                [ffmpeg, "-hide_banner", "-encoders"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+        runner = get_ffmpeg_runner()
+        if runner.is_available():
+            result = runner.run(["-hide_banner", "-encoders"], timeout=5)
             encoders_output = result.stdout
 
             # macOS VideoToolbox

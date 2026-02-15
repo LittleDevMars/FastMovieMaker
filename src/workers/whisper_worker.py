@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from src.infrastructure.transcriber import WhisperTranscriber
 from src.models.subtitle import SubtitleTrack
 from src.services.audio_extractor import extract_audio_to_wav
-from src.services.whisper_service import load_model, release_model, transcribe
 
 
 class WhisperWorker(QObject):
@@ -42,7 +42,6 @@ class WhisperWorker(QObject):
         """Execute the full transcription pipeline."""
         wav_path: Path | None = None
         should_cleanup_wav = False
-        model = None
         try:
             # Step 1: Extract audio (skip if audio_path provided)
             if self._audio_path:
@@ -56,19 +55,13 @@ class WhisperWorker(QObject):
             if self._cancelled:
                 return
 
-            # Step 2: Load model
-            self.status_update.emit(f"Loading faster-whisper '{self._model_name}' model...")
-            model = load_model(self._model_name)
-
-            if self._cancelled:
-                return
-
-            # Step 3: Transcribe
+            # Step 2 & 3: Transcribe (ITranscriber가 모델 로드/해제 포함)
             self.status_update.emit("Transcribing audio (faster-whisper)...")
-            track = transcribe(
-                model,
+            transcriber = WhisperTranscriber()
+            track = transcriber.transcribe(
                 wav_path,
                 language=self._language,
+                model_name=self._model_name,
                 on_progress=lambda cur, total: self.progress.emit(cur, total),
                 on_segment=lambda seg: self.segment_ready.emit(seg),
                 check_cancelled=lambda: self._cancelled,
@@ -79,12 +72,13 @@ class WhisperWorker(QObject):
 
         except Exception as e:
             if not self._cancelled:
+                import traceback
+                tb = traceback.format_exc()
+                # 디버그용: 콘솔에도 전체 traceback 출력
+                print(f"[WhisperWorker ERROR]\n{tb}", flush=True)
                 self.error.emit(str(e))
 
         finally:
-            # Cleanup
-            if model is not None:
-                release_model(model)
             # Only delete temp WAV if we created it
             if should_cleanup_wav and wav_path is not None:
                 try:

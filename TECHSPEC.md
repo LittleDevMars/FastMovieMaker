@@ -1,10 +1,10 @@
 # FastMovieMaker Technical Specification
 
-**Version:** 0.2.0
-**Platform:** Windows (primary), macOS/Linux (partial)
-**Python:** 3.13
+**Version:** 0.3.0
+**Platform:** Windows (primary), macOS (Apple Silicon 지원)
+**Python:** 3.13+ (3.14 테스트 완료)
 **Framework:** PySide6 (Qt 6)
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-15
 
 ---
 
@@ -30,18 +30,19 @@ FastMovieMaker is a desktop video subtitle editor combining AI-powered transcrip
 
 ## 2. Architecture
 
-### 2.1 Three-Layer Design
+### 2.1 Layered Design (Layered + Clean Architecture)
 
 ```
 src/
-  models/      Pure Python dataclasses (no Qt dependency)
-  services/    Business logic, FFmpeg/Whisper integration (no Qt)
-  workers/     QObject-based background thread classes
-  ui/          PySide6 widgets, dialogs, commands
-  utils/       Configuration, i18n, time conversion, FFmpeg path detection
+  models/         Domain: Pure Python dataclasses (no Qt, no external deps)
+  infrastructure/ External adapters: FFmpegRunner, ITranscriber (WhisperTranscriber)
+  services/       Application: Business logic, uses infrastructure (no Qt widgets)
+  workers/        QObject-based background thread classes
+  ui/             Presentation: PySide6 widgets, dialogs, commands
+  utils/          Configuration, i18n, time conversion
 ```
 
-**Dependency rule:** `models` <- `services` <- `workers` / `ui`. Models never import Qt. Services never import Qt widgets.
+**Dependency rule:** `models` <- `infrastructure` <- `services` <- `workers` / `ui`. Models never import Qt. Services use `FFmpegRunner`, `ITranscriber` instead of direct subprocess/faster-whisper calls.
 
 ### 2.2 Concurrency Model
 
@@ -60,6 +61,12 @@ MainWindow                        QThread
 ```
 
 Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker`, `WaveformWorker`, `FrameCacheWorker`, `VideoLoadWorker`, `ThumbnailRunnable`
+
+**Thread safety notes:**
+- `_cleanup_thread()`는 반드시 `quit()` → `wait()` 순서로 호출 (이벤트 루프 미종료 방지)
+- Python 3.14에서 `import torch`는 QThread의 작은 C 스택(~512KB)에서 오버플로우 — 메인 스레드에서 사전 임포트 필수
+- Whisper 취소: ctranslate2 C 연산은 중단 불가 → Cancel = 즉시 다이얼로그 닫기 + 스레드 백그라운드 자연 종료
+- 앱 종료 시 `QThreadPool.globalInstance().waitForDone()` 호출로 스레드 파괴 크래시 방지
 
 ### 2.3 Undo/Redo System
 
@@ -492,6 +499,9 @@ FastMovieMaker/
     icon.png                      App icon
     templates/                    Built-in overlay templates
   src/
+    infrastructure/
+      ffmpeg_runner.py    FFmpegRunner (run, run_async, run_ffprobe)
+      transcriber.py      ITranscriber protocol, WhisperTranscriber
     models/
       project.py                  ProjectState
       subtitle.py                 SubtitleSegment, SubtitleTrack
@@ -563,7 +573,7 @@ FastMovieMaker/
       lang/
         en.py                     English strings
         ko.py                     Korean strings
-  tests/                          20 test modules, 336 test cases
+  tests/                          29 test modules, 414 test cases
 ```
 
 ---
@@ -590,10 +600,10 @@ FastMovieMaker/
 
 | Item | Value |
 |------|-------|
-| Python | 3.13 (venv at `.venv/`) |
-| FFmpeg | `E:\Python\Scripts\ffmpeg.exe` (configurable) |
-| GPU | NVIDIA RTX 3080 (CUDA 12.4) |
-| OS | Windows 10/11 |
+| Python | 3.13+ (3.14 테스트 완료, venv at `venv/`) |
+| FFmpeg | macOS: `/opt/homebrew/bin/ffmpeg`, Windows: configurable |
+| GPU | CUDA (Windows), MPS (Apple Silicon), CPU fallback |
+| OS | macOS (Apple Silicon), Windows 10/11 |
 | Data dir | `~/.fastmoviemaker/` |
 | Temp cache | `%TEMP%/fmm_framecache_*` |
 
@@ -607,6 +617,6 @@ FastMovieMaker/
 ## 13. Testing
 
 - **Framework:** pytest + pytest-qt
-- **Test count:** 326+ cases across 20 modules
-- **Coverage:** Models, services, UI integration, export pipeline, i18n
-- **Run:** `.venv/Scripts/python.exe -m pytest tests/ -v`
+- **Test count:** 414 cases across 29 modules
+- **Coverage:** Models, services, UI integration, export pipeline, i18n, Whisper cancel/crash
+- **Run:** `python -m pytest tests/ -v`

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Callable
 
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.models.video_clip import VideoClipTrack
-from src.utils.config import AUDIO_SAMPLE_RATE, find_ffmpeg
+from src.utils.config import AUDIO_SAMPLE_RATE
 
 
 def export_timeline_audio(
@@ -35,8 +34,8 @@ def export_timeline_audio(
         RuntimeError: If FFmpeg export fails.
         ValueError: If clip_track is empty or invalid.
     """
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
+    runner = get_ffmpeg_runner()
+    if not runner.is_available():
         raise FileNotFoundError("FFmpeg not found. Please install FFmpeg.")
 
     if not clip_track or len(clip_track.clips) == 0:
@@ -68,38 +67,33 @@ def export_timeline_audio(
     else:
         primary_source = None
 
-    # Build FFmpeg command
-    cmd = [ffmpeg, "-y"]
+    # Build FFmpeg args (without ffmpeg binary)
+    args = ["-y"]
 
     # Add inputs
     if source_index_map:
         for src in source_paths:
-            cmd.extend(["-i", src])
+            args.extend(["-i", src])
     else:
-        cmd.extend(["-i", primary_source])
+        args.extend(["-i", primary_source])
 
     # Build audio filter chain
     filter_parts = _build_audio_concat_filter(clips, source_index_map)
     filter_complex = ";".join(filter_parts)
 
-    cmd.extend([
+    args.extend([
         "-filter_complex", filter_complex,
         "-map", "[outa]",
         "-acodec", "pcm_s16le",
         "-ar", str(AUDIO_SAMPLE_RATE),
-        "-ac", "1",  # mono
+        "-ac", "1",
         str(output_path),
     ])
-
-    # Run FFmpeg
-    kwargs = dict(capture_output=True, text=True)
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
     if on_progress:
         on_progress(0)
 
-    result = subprocess.run(cmd, **kwargs)
+    result = runner.run(args)
 
     if on_progress:
         on_progress(100)

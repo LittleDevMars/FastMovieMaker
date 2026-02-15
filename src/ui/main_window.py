@@ -609,8 +609,8 @@ class MainWindow(QMainWindow):
     def _sync_tts_playback(self) -> None:
         """Synchronize TTS audio playback with video position.
 
-        Only starts TTS audio if the video player is actually playing.
-        When video is paused (e.g. seek), TTS position is updated but not played.
+        Uses output timeline position so that after clip delete/trim,
+        TTS plays only in the valid timeline range.
         """
         try:
             track = self._project.subtitle_track
@@ -628,8 +628,12 @@ class MainWindow(QMainWindow):
                 self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
             )
 
-            # Get current playback position
-            current_pos_ms = self._player.position()
+            # 출력 타임라인 기준 위치 사용 (클립 삭제 후에도 삭제 구간 음성 재생 방지)
+            if self._project.video_clip_track and len(self._project.video_clip_track.clips) > 0:
+                current_pos_ms = self._timeline.get_playhead()
+            else:
+                current_pos_ms = self._player.position()
+
             audio_start_ms = track.audio_start_ms
             audio_end_ms = audio_start_ms + track.audio_duration_ms
 
@@ -1369,6 +1373,16 @@ class MainWindow(QMainWindow):
         # Cache frames for the newly added source
         self._start_frame_cache_generation()
 
+        # Initialize player with correct source after adding clips
+        # This ensures playback works immediately after dropping a video
+        current_timeline_pos = self._timeline.get_playhead()
+        if current_timeline_pos == 0 or not self._current_playback_source:
+            # Start from beginning if at 0 or no source loaded
+            self._on_timeline_seek(0)
+        else:
+            # Re-sync player to current position to load correct clip source
+            self._on_timeline_seek(current_timeline_pos)
+
     def _on_delete_image_overlay(self, index: int) -> None:
         """Delete an image overlay by index."""
         io_track = self._project.image_overlay_track
@@ -1710,20 +1724,29 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Explicitly clear existing track if user confirms? 
-        # For now, let's just launch the dialog.
         from src.ui.dialogs.whisper_dialog import WhisperDialog
         dialog = WhisperDialog(video_path=self._project.video_path, parent=self)
+        self._whisper_dialog_cancelled = False
         dialog.segment_ready.connect(self._on_whisper_segment_ready)
-        
+
         if dialog.exec():
-            # If successfully finished, update with the full resulting track
+            # 성공 시 전체 결과 트랙 적용 (실시간 미리보기로 이미 동기화됨)
             new_track = dialog.result_track()
             if new_track:
                 from src.ui.commands import UpdateSubtitleTrackCommand
-                self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track))
+                old_track = self._create_track_from_whisper_backup()
+                self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track, old_track))
                 self._subtitle_panel.set_track(new_track)
+                self._video_widget.set_subtitle_track(new_track)
+                self._timeline.set_track(new_track)
                 self.statusBar().showMessage(tr("Subtitles generated successfully"))
+            if hasattr(self, "_whisper_preview_active"):
+                self._whisper_preview_active = False
+            if hasattr(self, "_whisper_original_segments"):
+                del self._whisper_original_segments
+        else:
+            self._whisper_dialog_cancelled = True
+            self._restore_whisper_on_cancel()
 
     def _on_generate_subtitles_from_timeline(self) -> None:
         """Generate subtitles from edited timeline segments."""
@@ -1772,18 +1795,28 @@ class MainWindow(QMainWindow):
             if progress_dialog.wasCanceled():
                 return
 
-            # Launch WhisperDialog in audio mode
             from src.ui.dialogs.whisper_dialog import WhisperDialog
             dialog = WhisperDialog(audio_path=audio_path, parent=self)
+            self._whisper_dialog_cancelled = False
             dialog.segment_ready.connect(self._on_whisper_segment_ready)
-            
+
             if dialog.exec():
                 new_track = dialog.result_track()
                 if new_track:
                     from src.ui.commands import UpdateSubtitleTrackCommand
-                    self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track))
+                    old_track = self._create_track_from_whisper_backup()
+                    self._undo_stack.push(UpdateSubtitleTrackCommand(self._project, new_track, old_track))
                     self._subtitle_panel.set_track(new_track)
+                    self._video_widget.set_subtitle_track(new_track)
+                    self._timeline.set_track(new_track)
                     self.statusBar().showMessage(tr("Subtitles generated from timeline"))
+                if hasattr(self, "_whisper_preview_active"):
+                    self._whisper_preview_active = False
+                if hasattr(self, "_whisper_original_segments"):
+                    del self._whisper_original_segments
+            else:
+                self._whisper_dialog_cancelled = True
+                self._restore_whisper_on_cancel()
 
         except Exception as e:
             QMessageBox.critical(self, tr("Error"), f"Failed to generate subtitles: {str(e)}")
@@ -1796,13 +1829,79 @@ class MainWindow(QMainWindow):
                     pass
 
     def _on_whisper_segment_ready(self, segment: SubtitleSegment) -> None:
-        """Handle real-time segment updates from WhisperDialog."""
-        if self._project and self._project.subtitle_track:
-            self._project.subtitle_track.add_segment(segment)
-            if self._subtitle_panel:
-                self._subtitle_panel.refresh()
-            self._video_player.update_subtitles()
+        """Handle real-time segment updates from WhisperDialog (실시간 자막 미리보기)."""
+        try:
+            # 취소 후 큐에 남은 시그널 무시
+            if getattr(self, "_whisper_dialog_cancelled", False):
+                return
+            if not self._project:
+                return
+            # 위젯이 이미 파괴된 경우(앱 종료 중 등) 접근 방지
+            if not (self._subtitle_panel and self._video_widget and self._timeline):
+                return
+            track = self._project.subtitle_track
+            # 첫 세그먼트 수신 시 기존 트랙 클리어 후 새로 시작 (취소 시 복원용 백업)
+            if not getattr(self, "_whisper_preview_active", False):
+                self._whisper_preview_active = True
+                self._whisper_original_segments = [
+                    (s.start_ms, s.end_ms, s.text, s.style, s.audio_file, s.volume)
+                    for s in track.segments
+                ]
+                track.clear()
+            track.add_segment(segment)
+            # UI 실시간 갱신
+            self._subtitle_panel.set_track(track)
+            self._subtitle_panel.refresh()
+            self._video_widget.set_subtitle_track(track)
+            self._timeline.set_track(track)
+            self._video_widget._update_subtitle(self._timeline.get_playhead())
             self._timeline.update()
+        except RuntimeError:
+            # Qt 객체가 이미 삭제된 경우 등
+            pass
+        except Exception:
+            # 예기치 않은 오류 시 로그만 하고 크래시 방지
+            import traceback
+            traceback.print_exc()
+
+    def _create_track_from_whisper_backup(self) -> SubtitleTrack | None:
+        """취소/Undo용: 백업된 세그먼트로 원본 트랙 복원."""
+        if not hasattr(self, "_whisper_original_segments"):
+            return None
+        track = self._project.subtitle_track
+        restored = SubtitleTrack(name=track.name, language=track.language)
+        for t in self._whisper_original_segments:
+            restored.add_segment(
+                SubtitleSegment(start_ms=t[0], end_ms=t[1], text=t[2], style=t[3], audio_file=t[4], volume=t[5])
+            )
+        return restored
+
+    def _restore_whisper_on_cancel(self) -> None:
+        """Whisper 취소 시 원본 트랙 복원 및 UI 동기화."""
+        try:
+            if not getattr(self, "_whisper_preview_active", False):
+                return
+            self._whisper_preview_active = False
+            if not hasattr(self, "_whisper_original_segments"):
+                return
+            if not (self._project and self._subtitle_panel and self._video_widget and self._timeline):
+                return
+            track = self._project.subtitle_track
+            track.clear()
+            for t in self._whisper_original_segments:
+                track.add_segment(
+                    SubtitleSegment(start_ms=t[0], end_ms=t[1], text=t[2], style=t[3], audio_file=t[4], volume=t[5])
+                )
+            self._subtitle_panel.set_track(track)
+            self._video_widget.set_subtitle_track(track)
+            self._timeline.set_track(track)
+            self._video_widget._update_subtitle(self._timeline.get_playhead())
+            self._timeline.update()
+        except RuntimeError:
+            pass
+        finally:
+            if hasattr(self, "_whisper_original_segments"):
+                del self._whisper_original_segments
 
     def _on_generate_tts(self) -> None:
         """Open TTS dialog to generate speech from script."""
@@ -2472,8 +2571,8 @@ class MainWindow(QMainWindow):
             timeline_ms = int(clip_start + local_offset)
             
             self._timeline.set_playhead(timeline_ms)
-            self._controls.set_output_position(position_ms)
-            self._video_widget._update_subtitle(position_ms)
+            self._controls.set_output_position(timeline_ms)
+            self._video_widget._update_subtitle(timeline_ms)
             self._sync_tts_playback()
             self._update_playback_volume()
         
@@ -2578,14 +2677,20 @@ class MainWindow(QMainWindow):
                 return proxy
 
         # 3. Handle main video conversion (macOS compatibility)
-        is_main_video = False
+        # Only treat as main video when None or path equals project.video_path
         if source_path is None:
-            is_main_video = True
-        elif self._project.video_path:
-            return str(self._project.video_path) if self._project.video_path else ""
+            if not self._project.video_path:
+                return ""
+            if self._temp_video_path and self._temp_video_path.exists():
+                return str(self._temp_video_path)
+            return str(self._project.video_path)
+        if self._project.video_path and Path(src_str).resolve() == Path(self._project.video_path).resolve():
+            if self._temp_video_path and self._temp_video_path.exists():
+                return str(self._temp_video_path)
+            return str(self._project.video_path)
 
-        # 2. Return original path for external videos (conversion not yet supported for external items)
-        return source_path or ""
+        # External clip: return path as-is (conversion not yet supported for external items)
+        return src_str
 
     def _switch_player_source(self, source_path: str, seek_ms: int,
                               auto_play: bool = False) -> None:
@@ -2812,6 +2917,9 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(cmd)
         self._timeline.select_clip(-1, -1)
 
+        # 타임라인 길이 갱신 (삭제 후 오디오/자막 영역이 새 길이에 맞게 다시 그려지도록)
+        self._project.duration_ms = self._project.video_tracks[track_index].output_duration_ms
+
         # Reset player state after deletion
         self._current_clip_index = -1
         self._current_playback_source = None
@@ -2864,6 +2972,8 @@ class MainWindow(QMainWindow):
             ripple=self._timeline.is_ripple_mode()
         )
         self._undo_stack.push(cmd)
+        # 타임라인 길이 갱신 (트림 후 오디오/자막 영역이 새 길이에 맞게 다시 그려지도록)
+        self._project.duration_ms = self._project.video_tracks[track_index].output_duration_ms
         self._refresh_all_widgets()
 
     def _on_edit_clip_speed(self, track_index: int, clip_index: int) -> None:
@@ -3093,6 +3203,15 @@ class MainWindow(QMainWindow):
         self._stop_frame_cache_generation()
         if self._frame_cache_service:
             self._frame_cache_service.cleanup()
+        # QThreadPool 실행 중 파괴 시 크래시 방지 (QRunnable.warnNullCallable / QThread destroyed)
+        thumb_svc = getattr(self._timeline, "_thumbnail_service", None)
+        if thumb_svc:
+            if hasattr(thumb_svc, "cancel_all_requests"):
+                thumb_svc.cancel_all_requests()
+            if hasattr(thumb_svc, "wait_for_done"):
+                thumb_svc.wait_for_done(30000)
+        from PySide6.QtCore import QThreadPool
+        QThreadPool.globalInstance().waitForDone(15000)
         self._cleanup_temp_video()
         # Final save before closing
         self._autosave.save_now()

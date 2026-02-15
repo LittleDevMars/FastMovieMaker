@@ -216,6 +216,28 @@ class EditVolumeCommand(QUndoCommand):
             self._track[self._index].volume = self._old_volume
 
 
+class UpdateSubtitleTrackCommand(QUndoCommand):
+    """Replace the active subtitle track (e.g. after Whisper/TTS generation)."""
+
+    def __init__(self, project: ProjectState, new_track: SubtitleTrack, old_track: SubtitleTrack | None = None):
+        super().__init__(tr("Update subtitles"))
+        self._project = project
+        self._new_track = new_track
+        self._old_track = old_track
+        if self._old_track is None:
+            idx = project.active_track_index
+            if 0 <= idx < len(project.subtitle_tracks):
+                self._old_track = project.subtitle_tracks[idx]
+
+    def redo(self) -> None:
+        if 0 <= self._project.active_track_index < len(self._project.subtitle_tracks):
+            self._project.subtitle_tracks[self._project.active_track_index] = self._new_track
+
+    def undo(self) -> None:
+        if self._old_track is not None and 0 <= self._project.active_track_index < len(self._project.subtitle_tracks):
+            self._project.subtitle_tracks[self._project.active_track_index] = self._old_track
+
+
 class BatchShiftCommand(QUndoCommand):
     """Shift all subtitle times by a given offset."""
 
@@ -301,9 +323,10 @@ class DeleteClipCommand(QUndoCommand):
         self._truncated_overlays: list[tuple[int, int, int]] = []
         self._shifted_overlays: list[tuple[int, int, int]] = []
 
-        # Snapshot of affected audio track
+        # Snapshot of affected audio track (for undo when TTS invalidated)
         self._old_audio_start = subtitle_track.audio_start_ms
         self._old_audio_duration = subtitle_track.audio_duration_ms
+        self._old_audio_path = getattr(subtitle_track, "audio_path", "") or ""
 
     def redo(self) -> None:
         # 1. Remove the clip
@@ -366,16 +389,20 @@ class DeleteClipCommand(QUndoCommand):
                 self._overlay_track.overlays.pop(i)
 
         # 4. Process Audio Track (TTS)
-        # Only shift if audio starts strictly after the deleted region (simple strategy)
-        # Or if it overlaps, we might need to truncate, but currently Audio Track is just a bar.
-        # Let's shift it if it's after the cut.
-        if self._sub_track.audio_start_ms >= self._clip_end:
+        # 삭제 구역과 TTS 구간이 겹치면 오디오 무효화(재생 안 함, 재생성 필요)
+        old_audio_end = self._sub_track.audio_start_ms + self._sub_track.audio_duration_ms
+        deleted_overlaps_tts = (
+            self._sub_track.audio_duration_ms > 0
+            and (self._sub_track.audio_start_ms < self._clip_end and old_audio_end > self._clip_start)
+        )
+        if deleted_overlaps_tts:
+            self._sub_track.audio_path = ""
+            self._sub_track.audio_duration_ms = 0
+            self._sub_track.audio_start_ms = 0
+        elif self._sub_track.audio_start_ms >= self._clip_end:
             self._sub_track.audio_start_ms -= self._shift
         elif self._sub_track.audio_start_ms > self._clip_start:
-             # Audio starts inside deleted region -> snap to cut point? or shift?
-             # Let's just clamp it to the cut point for now if it was inside
-             self._sub_track.audio_start_ms = self._clip_start
-        
+            self._sub_track.audio_start_ms = self._clip_start
 
     def undo(self) -> None:
         if self._ripple:
@@ -411,9 +438,11 @@ class DeleteClipCommand(QUndoCommand):
             # 5. Restore audio track
             self._sub_track.audio_start_ms = self._old_audio_start
             self._sub_track.audio_duration_ms = self._old_audio_duration
+            self._sub_track.audio_path = self._old_audio_path
 
         # 6. Restore the clip
-        self._clip_track.clips.insert(self._clip_index, self._removed_clip)
+        vt = self._project.video_tracks[self._track_index]
+        vt.clips.insert(self._clip_index, self._removed_clip)
 
         self._sub_track.segments.sort(key=lambda s: s.start_ms)
         if self._overlay_track:
@@ -512,9 +541,10 @@ class TrimClipCommand(QUndoCommand):
 
         self._ripple_point = self._clip_start_tl + old_duration
 
-        # Snapshot for Audio (TTS)
+        # Snapshot for Audio (TTS) — 트림 시 TTS 무효화 후 undo에서 복원
         self._old_audio_start = subtitle_track.audio_start_ms
         self._old_audio_duration = subtitle_track.audio_duration_ms
+        self._old_audio_path = getattr(subtitle_track, "audio_path", "") or ""
 
     def redo(self) -> None:
         if 0 <= self._index < len(self._clip_track.clips):
@@ -531,6 +561,11 @@ class TrimClipCommand(QUndoCommand):
             
             if self._ripple and self._delta != 0:
                 self._apply_shift(self._delta)
+                # 타임라인 길이 변경 시 TTS 오디오 무효화(삭제 구간 음성 제거)
+                if self._sub_track.audio_duration_ms > 0:
+                    self._sub_track.audio_path = ""
+                    self._sub_track.audio_duration_ms = 0
+                    self._sub_track.audio_start_ms = 0
 
     def undo(self) -> None:
         if 0 <= self._index < len(self._clip_track.clips):
@@ -547,6 +582,10 @@ class TrimClipCommand(QUndoCommand):
 
             if self._ripple and self._delta != 0:
                 self._apply_shift(-self._delta, threshold=self._ripple_point + self._delta)
+                # TTS 오디오 복원 (_apply_shift가 audio를 건드린 뒤 덮어씀)
+                self._sub_track.audio_start_ms = self._old_audio_start
+                self._sub_track.audio_duration_ms = self._old_audio_duration
+                self._sub_track.audio_path = self._old_audio_path
                 
     def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
         threshold = threshold if threshold is not None else self._ripple_point

@@ -845,8 +845,9 @@ class TimelineWidget(QWidget):
         """비디오 오디오 웨이브폼 또는 로딩 중일 때 대체 바 그리기."""
         if self._duration_ms <= 0 or not self._has_video:
             return
-        # Hide waveform when multi-clip (T2에서 클립별 웨이브폼 구현 예정)
-        if self._clip_track and len(self._clip_track.clips) > 1:
+        # 클립 트랙이 있으면 전체 폭 웨이브폼 비표시 — 영상+음성은 클립 막대 안에만 표시
+        # (클립 삭제/분할 후에도 삭제된 구간 음성 영역이 남지 않음)
+        if self._clip_track and len(self._clip_track.clips) >= 1:
             return
 
         if self._waveform_data is not None and self._waveform_data.duration_ms > 0:
@@ -2506,6 +2507,41 @@ class TimelineWidget(QWidget):
 
         self._invalidate_static_cache()
         self.update()
+
+    def _start_drag(self, mode: _DragMode, *args) -> None:
+        """자막/클립 드래그 시작.
+
+        자막: _start_drag(mode, seg_idx, x)
+        클립: _start_drag(mode, track_idx, clip_idx, x)
+        """
+        if mode in (_DragMode.RESIZE_LEFT, _DragMode.RESIZE_RIGHT, _DragMode.MOVE):
+            # 자막 세그먼트 드래그
+            seg_idx, x = args
+            if not self._track or seg_idx < 0 or seg_idx >= len(self._track):
+                return
+            seg = self._track[seg_idx]
+            self._drag_mode = mode
+            self._drag_seg_index = seg_idx
+            self._drag_start_x = x
+            self._drag_orig_start_ms = seg.start_ms
+            self._drag_orig_end_ms = seg.end_ms
+            if mode == _DragMode.MOVE:
+                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+        elif mode in (_DragMode.CLIP_TRIM_LEFT, _DragMode.CLIP_TRIM_RIGHT):
+            # 비디오 클립 트림 드래그
+            track_idx, clip_idx, x = args
+            self._drag_mode = mode
+            self._drag_clip_track_index = track_idx
+            self._drag_clip_index = clip_idx
+            self._drag_start_x = x
+            if self._clip_track and 0 <= clip_idx < len(self._clip_track.clips):
+                clip = self._clip_track.clips[clip_idx]
+                self._drag_orig_source_in = clip.source_in_ms
+                self._drag_orig_source_out = clip.source_out_ms
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
     def _start_audio_drag(self, mode: _DragMode, x: float) -> None:
         """오디오 트랙 드래그 시작."""

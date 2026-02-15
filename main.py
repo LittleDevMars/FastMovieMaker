@@ -4,6 +4,13 @@ import os
 import sys
 from pathlib import Path
 
+# SIGABRT 등 크래시 시 Python 트레이스백 출력 (원인 분석용)
+try:
+    import faulthandler
+    faulthandler.enable(all_threads=True)
+except Exception:
+    pass
+
 # Set platform-appropriate media backend
 if sys.platform == "darwin":
     os.environ.setdefault("QT_MEDIA_BACKEND", "darwin")
@@ -11,7 +18,7 @@ elif sys.platform == "win32":
     os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor, QPalette
 
 from src.utils.config import APP_NAME, ORG_NAME
@@ -71,6 +78,12 @@ def main() -> None:
 
     window = MainWindow()
     window.show()
+
+    # 앱 종료 시 전역 QThreadPool 대기 (QRunnable 스레드 파괴 크래시 방지)
+    def _on_about_to_quit() -> None:
+        QThreadPool.globalInstance().waitForDone(20000)
+
+    app.aboutToQuit.connect(_on_about_to_quit)
 
     # Allow opening a video via command-line argument
     if len(sys.argv) > 1:

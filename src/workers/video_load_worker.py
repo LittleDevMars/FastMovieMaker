@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, QThread
 
-from src.utils.config import find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.services.audio_merger import AudioMerger
 
 
@@ -82,21 +82,19 @@ class VideoLoadWorker(QObject):
 
     def _convert_to_mp4(self, source: Path) -> Path | None:
         """Convert a non-MP4 video to a temp MP4 file using FFmpeg."""
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return None
 
         tmp = Path(tempfile.mktemp(suffix=".mp4", prefix="fmm_"))
-        
-        # Fast copy if possible, otherwise re-encode
-        cmd = [
-            ffmpeg,
+
+        args = [
             "-i", str(source),
-            "-map", "0:v:0",   # Map first video stream
-            "-map", "0:a:0?",  # Map first audio stream if exists
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
             "-c:v", "copy",
             "-c:a", "aac",
-            "-ac", "2",        # Downmix to stereo
+            "-ac", "2",
             "-b:a", "192k",
             "-strict", "experimental",
             "-y",
@@ -104,26 +102,22 @@ class VideoLoadWorker(QObject):
         ]
 
         try:
-            # We can't easily parse progress from ffmpeg directly without complex parsing,
-            # so we use a simple blocking call with timeout.
-            # For a better UX, we could read stdout line by line, but 'subprocess.run' is simpler 
-            # and still keeps the UI responsive because we are in a worker thread.
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=300,
+            result = runner.run(
+                args,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
             )
-            
+
             if result.returncode == 0 and tmp.is_file():
                 return tmp
-            
-            # If copy failed, try re-encoding
+
             if self._cancelled:
                 return None
 
             self.progress.emit(f"Copy failed, re-encoding {source.name}...")
-            
-            cmd_reencode = [
-                ffmpeg,
+
+            args_reencode = [
                 "-i", str(source),
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
@@ -135,10 +129,12 @@ class VideoLoadWorker(QObject):
                 "-y",
                 str(tmp),
             ]
-            
-            result2 = subprocess.run(
-                cmd_reencode, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=600,
+
+            result2 = runner.run(
+                args_reencode,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
             )
             
             if result2.returncode == 0 and tmp.is_file():

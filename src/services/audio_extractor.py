@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-from src.utils.config import AUDIO_SAMPLE_RATE, find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
+from src.utils.config import AUDIO_SAMPLE_RATE
 
 
 def extract_audio_to_wav(video_path: Path, output_path: Path | None = None) -> Path:
@@ -24,8 +23,8 @@ def extract_audio_to_wav(video_path: Path, output_path: Path | None = None) -> P
         FileNotFoundError: If FFmpeg is not found.
         RuntimeError: If FFmpeg extraction fails.
     """
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
+    runner = get_ffmpeg_runner()
+    if not runner.is_available():
         raise FileNotFoundError("FFmpeg not found. Please install FFmpeg.")
 
     if output_path is None:
@@ -33,24 +32,20 @@ def extract_audio_to_wav(video_path: Path, output_path: Path | None = None) -> P
         tmp.close()
         output_path = Path(tmp.name)
 
-    cmd = [
-        ffmpeg,
-        "-y",                   # overwrite
+    args = [
+        "-y",
         "-i", str(video_path),
-        "-vn",                  # no video
+        "-vn",
         "-acodec", "pcm_s16le",
         "-ar", str(AUDIO_SAMPLE_RATE),
-        "-ac", "1",             # mono
+        "-ac", "1",
         str(output_path),
     ]
 
-    kwargs = dict(capture_output=True, text=True)
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-    result = subprocess.run(cmd, **kwargs)
+    result = runner.run(args)
 
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed:\n{result.stderr[:500]}")
+        stderr = result.stderr[:500] if result.stderr else ""
+        raise RuntimeError(f"FFmpeg failed:\n{stderr}")
 
     return output_path

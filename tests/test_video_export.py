@@ -15,9 +15,9 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 class TestExportVideoCommand:
     """Test FFmpeg command construction in export_video."""
 
-    @patch("src.services.video_exporter.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.video_exporter.export_srt")
-    @patch("src.services.video_exporter.subprocess.Popen")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     def test_export_without_audio_path(self, mock_dur, mock_popen, mock_srt, mock_ffmpeg):
         """Without audio_path, command should use -c:a copy."""
@@ -41,9 +41,9 @@ class TestExportVideoCommand:
         # Should NOT have -map flags
         assert "-map" not in cmd
 
-    @patch("src.services.video_exporter.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.video_exporter.export_srt")
-    @patch("src.services.video_exporter.subprocess.Popen")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     def test_export_with_audio_path(self, mock_dur, mock_popen, mock_srt, mock_ffmpeg, tmp_path):
         """With audio_path, command should map video from input 0 and audio from input 1."""
@@ -183,8 +183,9 @@ class TestMultiSourceConcatFilter:
 
         assert v_label == "[concatv]"
         assert a_label == "[concata]"
-        # All clips should reference [0:v] and [0:a]
-        for part in parts[:-1]:  # last part is concat
+        # Input-referencing parts (trim/atrim) should use [0:v] and [0:a]
+        input_parts = [p for p in parts if ":v]trim=" in p or ":a]atrim=" in p]
+        for part in input_parts:
             assert "[0:v]" in part or "[0:a]" in part
 
     def test_multi_source_index_map(self):
@@ -229,12 +230,18 @@ class TestMultiSourceConcatFilter:
             assert "pad=1920:1080" in vp
 
     def test_concat_n_matches_clip_count(self):
-        """concat=n=N should match the number of clips."""
+        """All N clips are processed in the xfade chain."""
         from src.services.video_exporter import _build_concat_filter
         from src.models.video_clip import VideoClip
 
         clips = [VideoClip(0, 2000), VideoClip(2000, 4000), VideoClip(4000, 6000)]
-        parts, _, _ = _build_concat_filter(clips)
+        parts, v_label, a_label = _build_concat_filter(clips)
 
-        concat_part = parts[-1]
-        assert "concat=n=3:v=1:a=1" in concat_part
+        # Should have 2*N trim/atrim parts (one video + one audio per clip)
+        input_parts = [p for p in parts if ":v]trim=" in p or ":a]atrim=" in p]
+        assert len(input_parts) == 2 * len(clips)
+        # Final output labels
+        assert v_label == "[concatv]"
+        assert a_label == "[concata]"
+        assert "[concatv]" in "".join(parts)
+        assert "[concata]" in "".join(parts)

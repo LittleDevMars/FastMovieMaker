@@ -3,9 +3,10 @@ Audio merger service using FFmpeg for concatenating and mixing audio tracks.
 """
 from pathlib import Path
 from typing import List
-import subprocess
 import json
 import tempfile
+
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 class AudioMerger:
@@ -29,36 +30,27 @@ class AudioMerger:
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-        # Find ffprobe
-        from ..utils.ffmpeg_utils import find_ffprobe
-        ffprobe_path = find_ffprobe()
-
-        if not ffprobe_path:
+        runner = get_ffmpeg_runner()
+        if not runner.ffprobe_path:
             raise Exception("FFprobe not found")
 
-        # Run ffprobe
-        cmd = [
-            ffprobe_path,
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            str(audio_path)
-        ]
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
+            result = runner.run_ffprobe(
+                [
+                    "-v", "quiet",
+                    "-print_format", "json",
+                    "-show_format",
+                    str(audio_path),
+                ],
+                check=True,
             )
-
             data = json.loads(result.stdout)
             duration = float(data["format"]["duration"])
             return duration
-
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"FFprobe failed: {e.stderr}")
+        except Exception as e:
+            if "FFprobe" in str(e) or "ffprobe" in str(e).lower():
+                raise Exception(f"FFprobe failed: {e}") from e
+            raise
         except (KeyError, ValueError, json.JSONDecodeError) as e:
             raise Exception(f"Failed to parse FFprobe output: {e}")
 
@@ -89,20 +81,15 @@ class AudioMerger:
         if not audio_files:
             raise ValueError("audio_files cannot be empty")
 
-        # Find ffmpeg
-        from ..utils.ffmpeg_utils import find_ffmpeg
-        ffmpeg_path = find_ffmpeg()
-
-        if not ffmpeg_path:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             raise Exception("FFmpeg not found")
 
-        # Check if any volume differs from 1.0
         needs_volume = volumes and any(v != 1.0 for v in volumes)
 
         if needs_volume:
-            # Use filter_complex approach for per-file volume
             return AudioMerger._merge_with_volumes(
-                ffmpeg_path, audio_files, output_path, volumes
+                runner, audio_files, output_path, volumes
             )
 
         # Create temporary concat file (simple concat, no volume changes)
@@ -127,28 +114,20 @@ class AudioMerger:
                     f.write(f"file 'anullsrc=d={silence_duration}'\n")
 
         try:
-            # FFmpeg concat command
-            cmd = [
-                ffmpeg_path,
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
-                "-c", "copy",
-                "-y",
-                str(output_path)
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
+            runner.run(
+                [
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", str(concat_file),
+                    "-c", "copy",
+                    "-y",
+                    str(output_path),
+                ],
+                check=True,
             )
-
             return output_path
-
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"FFmpeg merge failed: {e.stderr}")
+        except Exception as e:
+            raise Exception(f"FFmpeg merge failed: {e}") from e
 
         finally:
             # Clean up temp file
@@ -157,20 +136,18 @@ class AudioMerger:
 
     @staticmethod
     def _merge_with_volumes(
-        ffmpeg_path: str,
+        runner,
         audio_files: List[Path],
         output_path: Path,
         volumes: List[float],
     ) -> Path:
         """Merge audio files with per-file volume using FFmpeg filter_complex."""
-        # Build inputs and filter
-        cmd = [ffmpeg_path]
+        args = []
         for audio_file in audio_files:
             if not audio_file.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_file}")
-            cmd.extend(["-i", str(audio_file)])
+            args.extend(["-i", str(audio_file)])
 
-        # Build filter_complex: apply volume to each input, then concat
         parts = []
         for i, vol in enumerate(volumes):
             parts.append(f"[{i}:a]volume={vol:.2f}[a{i}]")
@@ -179,13 +156,13 @@ class AudioMerger:
         parts.append(f"{concat_inputs}concat=n={len(audio_files)}:v=0:a=1[out]")
 
         filter_complex = ";".join(parts)
-        cmd.extend(["-filter_complex", filter_complex, "-map", "[out]", "-y", str(output_path)])
+        args.extend(["-filter_complex", filter_complex, "-map", "[out]", "-y", str(output_path)])
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            runner.run(args, check=True)
             return output_path
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"FFmpeg merge with volumes failed: {e.stderr}")
+        except Exception as e:
+            raise Exception(f"FFmpeg merge with volumes failed: {e}") from e
 
     @staticmethod
     def has_audio_stream(file_path: Path) -> bool:
@@ -198,27 +175,20 @@ class AudioMerger:
         Returns:
             True if the file has an audio stream, False otherwise
         """
-        from ..utils.ffmpeg_utils import find_ffprobe
-        ffprobe_path = find_ffprobe()
-
-        if not ffprobe_path:
+        runner = get_ffmpeg_runner()
+        if not runner.ffprobe_path:
             return False
 
-        cmd = [
-            ffprobe_path,
-            "-v", "quiet",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=codec_type",
-            "-of", "csv=p=0",
-            str(file_path)
-        ]
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
+            result = runner.run_ffprobe(
+                [
+                    "-v", "quiet",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=codec_type",
+                    "-of", "csv=p=0",
+                    str(file_path),
+                ],
+                check=True,
             )
             return result.stdout.strip() == "audio"
         except Exception:
@@ -254,46 +224,32 @@ class AudioMerger:
         if not track2_path.exists():
             raise FileNotFoundError(f"Track 2 not found: {track2_path}")
 
-        # Check if track1 has audio
         if not AudioMerger.has_audio_stream(track1_path):
-            # If track1 has no audio, just copy track2 with volume adjustment
             import shutil
             shutil.copy2(track2_path, output_path)
             return output_path
 
-        # Find ffmpeg
-        from ..utils.ffmpeg_utils import find_ffmpeg
-        ffmpeg_path = find_ffmpeg()
-
-        if not ffmpeg_path:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             raise Exception("FFmpeg not found")
 
-        # Build filter complex
-        # [0:a]volume=X[a1];[1:a]volume=Y[a2];[a1][a2]amix=inputs=2:duration=longest
         filter_complex = (
             f"[0:a]volume={track1_volume}[a1];"
             f"[1:a]volume={track2_volume}[a2];"
             f"[a1][a2]amix=inputs=2:duration=longest"
         )
 
-        cmd = [
-            ffmpeg_path,
-            "-i", str(track1_path),
-            "-i", str(track2_path),
-            "-filter_complex", filter_complex,
-            "-y",
-            str(output_path)
-        ]
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
+            runner.run(
+                [
+                    "-i", str(track1_path),
+                    "-i", str(track2_path),
+                    "-filter_complex", filter_complex,
+                    "-y",
+                    str(output_path),
+                ],
+                check=True,
             )
-
             return output_path
-
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"FFmpeg mix failed: {e.stderr}")
+        except Exception as e:
+            raise Exception(f"FFmpeg mix failed: {e}") from e

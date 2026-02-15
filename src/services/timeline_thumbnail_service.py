@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import collections
 import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtGui import QImage
 
-from src.utils.ffmpeg_utils import find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 class ThumbnailRunnable(QRunnable):
@@ -29,8 +28,8 @@ class ThumbnailRunnable(QRunnable):
         self.signals = self.Signals()
 
     def run(self) -> None:
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
             return
 
         # Double-SS for fast seeking
@@ -38,32 +37,25 @@ class ThumbnailRunnable(QRunnable):
         input_seek = max(0.0, target_sec - 1.0)
         output_seek = target_sec - input_seek
 
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = subprocess.CREATE_NO_WINDOW
-
-        # Output dimensions: keep aspect ratio, fixed height
-        scale_filter = f"scale=-1:{self.height}"
-
-        cmd = [
-            ffmpeg,
+        args = [
             "-ss", f"{input_seek:.3f}",
             "-i", self.source_path,
             "-ss", f"{output_seek:.3f}",
-            "-vf", scale_filter,
+            "-vf", f"scale=-1:{self.height}",
             "-frames:v", "1",
             "-f", "image2pipe",
             "-vcodec", "mjpeg",
-            "-q:v", "5",  # Reasonable quality
+            "-q:v", "5",
             "-",
         ]
 
         try:
-            proc = subprocess.run(
-                cmd,
+            proc = runner.run(
+                args,
+                capture_output=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                creationflags=creation_flags,
+                text=False,
                 timeout=5,
             )
             if proc.returncode == 0 and proc.stdout:
@@ -139,5 +131,9 @@ class TimelineThumbnailService(QObject):
 
     def cancel_all_requests(self) -> None:
         self._pending_requests.clear()
-        # QThreadPool.clear() removes queued tasks that haven't started yet
         self._thread_pool.clear()
+
+    def wait_for_done(self, msecs: int = 10000) -> bool:
+        """앱 종료 전 실행 중인 썸네일 작업이 끝날 때까지 대기.
+        QThread가 실행 중 파괴되는 크래시 방지."""
+        return self._thread_pool.waitForDone(msecs)

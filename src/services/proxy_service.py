@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import logging
-import subprocess
-import sys
 import hashlib
 from pathlib import Path
 
-from src.utils.config import find_ffmpeg
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 logger = logging.getLogger(__name__)
 
@@ -47,33 +45,27 @@ def generate_proxy(video_path: Path, proxy_path: Path, force: bool = False) -> b
         logger.info(f"Proxy already exists: {proxy_path}")
         return True
 
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
+    runner = get_ffmpeg_runner()
+    if not runner.is_available():
         logger.error("FFmpeg not found for proxy generation.")
         return False
 
     logger.info(f"Generating proxy for {video_path} -> {proxy_path}")
-    
-    # Proxy settings: 720p, H.264, low bitrate, fast preset
-    cmd = [
-        ffmpeg,
+
+    args = [
         "-y",
         "-i", str(video_path),
-        "-vf", "scale=-2:720", # Height 720, width auto (even)
+        "-vf", "scale=-2:720",
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-crf", "30",          # Lower quality
+        "-crf", "30",
         "-c:a", "aac",
         "-b:a", "128k",
-        str(proxy_path)
+        str(proxy_path),
     ]
 
-    kwargs = dict(capture_output=True, text=True)
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
     try:
-        result = subprocess.run(cmd, **kwargs)
+        result = runner.run(args)
         if result.returncode != 0:
             logger.error(f"Proxy generation failed:\n{result.stderr[:500]}")
             return False

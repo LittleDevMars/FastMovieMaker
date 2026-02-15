@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -50,10 +51,13 @@ def transcribe(
     Returns:
         SubtitleTrack with transcribed segments. Returns partial track if cancelled.
     """
+    # chunk_length=10: 10초 단위 청크로 세그먼트가 자주 나와 취소 체크가 빨라짐
+    # (batch_size는 BatchedInferencePipeline 전용이라 WhisperModel에는 넘기지 않음)
     segments_iter, info = model.transcribe(
         str(audio_path),
         language=language,
         vad_filter=True,
+        chunk_length=10,
     )
 
     # faster-whisper returns an iterator

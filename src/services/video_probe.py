@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.utils.ffmpeg_utils import find_ffprobe
+from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
 @dataclass
@@ -25,31 +24,22 @@ def probe_video(video_path: Path | str) -> VideoInfo:
 
     Returns *VideoInfo* with defaults (0 / False) on any failure.
     """
-    ffprobe = find_ffprobe()
-    if not ffprobe:
+    runner = get_ffmpeg_runner()
+    if not runner.ffprobe_path:
         return VideoInfo()
 
     try:
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
-
-        # Single ffprobe call returning JSON with stream + format info
-        result = subprocess.run(
+        result = runner.run_ffprobe(
             [
-                ffprobe, "-v", "error",
+                "-v", "error",
                 "-show_entries", "stream=codec_type,width,height",
                 "-show_entries", "format=duration",
                 "-of", "json",
                 str(video_path),
             ],
-            capture_output=True,
-            text=True,
             timeout=15,
-            creationflags=creation_flags,
         )
 
-        import json
         data = json.loads(result.stdout)
 
         width = height = 0
