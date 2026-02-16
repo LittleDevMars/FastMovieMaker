@@ -41,7 +41,9 @@ class MediaController(QObject):
         self._frame_cache_thread: QThread | None = None
         self._frame_cache_worker: FrameCacheWorker | None = None
         # 프록시
-        self._proxy_threads: list[QThread] = []
+        self._proxy_workers: dict[str, tuple[QThread, object]] = {}
+    proxy_ready = Signal(str)  # source_path
+    proxy_started = Signal(str)  # source_path
 
     # ---- 비디오 로드 ----
 
@@ -284,6 +286,11 @@ class MediaController(QObject):
         from src.services.proxy_service import ProxyService
         ctx = self.ctx
         proxy_svc = ProxyService()
+        
+        # 이미 진행 중이면 스킵
+        if str(source_path) in self._proxy_workers:
+            return
+            
         if proxy_svc.has_proxy(str(source_path)):
             ctx.proxy_map[str(source_path)] = proxy_svc.get_proxy_path(str(source_path))
             return
@@ -291,16 +298,46 @@ class MediaController(QObject):
         worker = proxy_svc.create_worker(str(source_path))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+
+        self.proxy_started.emit(str(source_path))
+        
+        # Progress update
+        worker.progress.connect(
+            lambda pct: self.ctx.status_bar().showMessage(f"Generating proxy: {source_path.name} ({pct}%)")
+        )
+        
+        # Error handling
+        worker.error.connect(
+            lambda msg: self.ctx.status_bar().showMessage(f"Warning: {msg}", 5000)
+        )
+        
         worker.finished.connect(lambda p: self._on_proxy_finished(str(source_path), p))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda: self._cleanup_proxy_worker(str(source_path)))
         worker.finished.connect(thread.deleteLater)
-        self._proxy_threads.append(thread)
+        
+        self._proxy_workers[str(source_path)] = (thread, worker)
         thread.start()
 
     def _on_proxy_finished(self, source_path: str, proxy_path: str) -> None:
         if proxy_path:
             self.ctx.proxy_map[source_path] = proxy_path
+            self.ctx.status_bar().showMessage(f"{tr('Proxy generated')}: {Path(source_path).name}", 5000)
+            self.proxy_ready.emit(source_path)
+
+    def _cleanup_proxy_worker(self, source_path: str) -> None:
+        if source_path in self._proxy_workers:
+            del self._proxy_workers[source_path]
+
+    def cancel_all_proxies(self) -> None:
+        """Cancel all running proxy generations."""
+        for source_path, (thread, worker) in list(self._proxy_workers.items()):
+            worker.cancel()
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
+        self._proxy_workers.clear()
 
     # ---- 웨이브폼 생성 ----
 
@@ -402,24 +439,27 @@ class MediaController(QObject):
 
     # ---- BGM ----
 
-    def on_audio_file_dropped(self, file_path: str, position_ms: int) -> None:
+    def on_audio_file_dropped(self, file_paths: list[str], position_ms: int) -> None:
         ctx = self.ctx
-        path = Path(file_path)
-        if not path.is_file():
-            return
-        from src.models.audio import AudioClip, AudioTrack
-        duration_ms = self._get_audio_duration_ms(path)
-        if duration_ms <= 0:
-            duration_ms = 5000
-        clip = AudioClip(source_path=path, start_ms=position_ms, duration_ms=duration_ms)
-        if not ctx.project.bgm_tracks:
-            ctx.project.bgm_tracks = [AudioTrack()]
-        from src.ui.commands import AddAudioClipCommand
-        cmd = AddAudioClipCommand(ctx.project, 0, clip)
-        ctx.undo_stack.push(cmd)
+        current_pos = position_ms
+        for file_path in file_paths:
+            path = Path(file_path)
+            if not path.is_file():
+                continue
+            from src.models.audio import AudioClip, AudioTrack
+            duration_ms = self._get_audio_duration_ms(path)
+            if duration_ms <= 0:
+                duration_ms = 5000
+            clip = AudioClip(source_path=path, start_ms=current_pos, duration_ms=duration_ms)
+            if not ctx.project.bgm_tracks:
+                ctx.project.bgm_tracks = [AudioTrack()]
+            from src.ui.commands import AddAudioClipCommand
+            cmd = AddAudioClipCommand(ctx.project, 0, clip)
+            ctx.undo_stack.push(cmd)
+            current_pos += duration_ms # Sequential placement for audio
         ctx.refresh_all()
         ctx.project_ctrl.on_document_edited()
-        ctx.status_bar().showMessage(tr("BGM added: {}").format(path.name))
+        ctx.status_bar().showMessage(f"{len(file_paths)} BGM clips added")
 
     def on_bgm_clip_selected(self, track_idx: int, clip_idx: int) -> None:
         pass
@@ -499,4 +539,5 @@ class MediaController(QObject):
         self.stop_frame_cache_generation()
         if self.ctx.frame_cache_service:
             self.ctx.frame_cache_service.cleanup()
+        self.cancel_all_proxies()
         self._cleanup_temp_video()

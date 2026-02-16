@@ -172,6 +172,7 @@ STRINGS: dict[str, str] = {
     "Audio Options": "오디오 옵션",
     "Include TTS audio": "TTS 오디오 포함",
     "(No TTS audio in this track)": "(이 트랙에 TTS 오디오 없음)",
+    "Mix with original audio": "원본 오디오와 믹싱",
     "Background volume:": "배경 볼륨:",
     "TTS volume:": "TTS 볼륨:",
     "Apply per-segment volumes": "세그먼트별 볼륨 적용",
@@ -485,6 +486,18 @@ STRINGS: dict[str, str] = {
     # ── Multi-video ──
     "Could not read video duration.": "영상 길이를 읽을 수 없습니다.",
     "Added video clip": "영상 클립 추가됨",
+    "Add Video Track": "비디오 트랙 추가",
+    "Remove Video Track": "비디오 트랙 삭제",
+    "Rename Track": "트랙 이름 변경",
+    "Hold Alt to move linked subtitles/overlays": "Alt 키를 누르면 자막/오버레이가 함께 이동합니다",
+    "Deselect All": "모든 선택 해제",
+    "Playback Speed": "재생 속도",
+    "Edit Clip Properties": "클립 속성 편집",
+    "Proxy generated": "프록시 생성 완료",
+    "Generate Proxy": "프록시 생성",
+    "Generating...": "생성 중...",
+    "Clip copied": "클립 복사됨",
+    "Clip pasted": "클립 붙여넣기됨",
 
     # ── Common ──
     "Ok": "확인",

@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 18 완료 (2026-02-15)
+**현재 상태:** Day 19 완료 (2026-02-16)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -32,6 +32,7 @@
 | **i18n 다국어 지원** — tr() 기반 번역 시스템, 한국어/영어 전환, 환경설정 언어 선택, ~200+ 번역 키 (15개 UI 파일) | **완료 (Day 16)** |
 | **Phase T13: BGM 트랙 및 오디오 믹싱** — AudioClip/Track 모델, 타임라인 전용 영역, 드래그&트림, 자석 스냅, Undo/Redo | **완료 (Day 18)** |
 | **AI 자막 번역 및 GPU 가속** — Google/GPT 연동, NVENC/QSV/AMF 하드웨어 가속 내보내기 | **완료 (Day 17)** |
+| **Phase T2/T3: 프록시 워크플로우 & 고급 편집** — 프록시 생성/관리, 미디어 라이브러리 개선, 클립 복사/붙여넣기/복제 | **완료 (Day 19)** |
 
 ---
 
@@ -1333,6 +1334,31 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 ### 수정 파일
 - **신규:** `src/models/audio.py`
 - **수정:** `src/ui/timeline_widget.py`, `src/ui/main_window.py`, `src/ui/commands.py`, `src/models/project.py`, `src/services/video_exporter.py`
+
+---
+
+## 2026-02-16 (Day 19) 작업 요약
+
+**프록시 워크플로우, 미디어 라이브러리 고도화, 클립 편집 편의성 향상**
+
+### 1. 프록시 워크플로우 (Proxy Workflow)
+- **서비스/워커:** `ProxyService`, `ProxyWorker` 구현 (FFmpeg 비동기 생성, 진행률/취소 지원)
+- **UI 연동:** 미디어 라이브러리 썸네일에 상태 뱃지 표시 ("Generating..." → "PROXY")
+- **관리:** 미디어 아이템 우클릭 "Generate Proxy" 메뉴, 앱 시작 시 기존 프록시 자동 감지
+
+### 2. 미디어 라이브러리 개선
+- **다중 선택:** `Ctrl+Click`으로 여러 항목 선택 가능
+- **Drag & Drop:** 다중 파일을 타임라인으로 한 번에 드래그하여 순차 삽입
+- **동작 변경:** 이미지 더블 클릭 시 타임라인 삽입 (비디오는 미리보기 재생 유지)
+
+### 3. 클립 편집 편의성 (Advanced Editing)
+- **복사/붙여넣기:** 타임라인 클립 선택 후 `Ctrl+C` / `Ctrl+V` (플레이헤드 위치 삽입, 기존 클립 자동 분할)
+- **클립 복제:** `Alt+Drag`로 클립 복제 (기존 이동은 `Ctrl+Drag`로 변경하여 충돌 방지)
+- **다중 파일 드롭:** 외부 파일 탐색기에서 여러 비디오/오디오/이미지를 타임라인에 드롭 시 순차 배치
+
+### 수정 파일
+- **신규:** `src/services/proxy_service.py`, `src/workers/proxy_worker.py`, `tests/test_proxy.py`, `tests/test_media_library_proxy.py`
+- **수정:** `media_library_panel.py`, `media_controller.py`, `clip_controller.py`, `timeline_widget.py`, `timeline_drag.py`, `commands.py`, `main_window.py`, `models/media_item.py`, `utils/lang/ko.py`
 
 ---
 

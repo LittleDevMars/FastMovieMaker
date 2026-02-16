@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
+from src.utils.i18n import tr
 
 if TYPE_CHECKING:
     from src.ui.timeline_widget import TimelineWidget
@@ -39,6 +40,8 @@ class DragMode(Enum):
     IMAGE_RESIZE_RIGHT = auto()
     CLIP_TRIM_LEFT = auto()
     CLIP_TRIM_RIGHT = auto()
+    CLIP_MOVE = auto()
+    CLIP_DUPLICATE = auto()
     TEXT_MOVE = auto()
     TEXT_RESIZE_LEFT = auto()
     TEXT_RESIZE_RIGHT = auto()
@@ -58,6 +61,7 @@ class TimelineDragManager:
         self.mode = DragMode.NONE
         self.seg_index: int = -1
         self.start_x: float = 0.0
+        self.start_y: float = 0.0
         self.orig_start_ms: int = 0
         self.orig_end_ms: int = 0
 
@@ -75,6 +79,9 @@ class TimelineDragManager:
         self.clip_index: int = -1
         self.orig_source_in: int = 0
         self.orig_source_out: int = 0
+        # For CLIP_MOVE
+        self.dest_track_index: int = -1
+        self.dest_insert_index: int = -1
 
         # BGM
         self.bgm_track_index: int = -1
@@ -112,18 +119,29 @@ class TimelineDragManager:
         else:
             tw.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
-    def start_clip(self, mode: DragMode, track_idx: int, clip_idx: int, x: float) -> None:
-        """비디오 클립 트림 시작."""
+    def start_clip(self, mode: DragMode, track_idx: int, clip_idx: int, x: float, y: float = 0.0) -> None:
+        """비디오 클립 트림/이동 시작."""
         tw = self.tw
         self.mode = mode
         self.clip_track_index = track_idx
         self.clip_index = clip_idx
         self.start_x = x
+        self.start_y = y
         if tw._clip_track and 0 <= clip_idx < len(tw._clip_track.clips):
             clip = tw._clip_track.clips[clip_idx]
             self.orig_source_in = clip.source_in_ms
             self.orig_source_out = clip.source_out_ms
-        tw.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+        
+        if mode == DragMode.CLIP_MOVE:
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier:
+                self.mode = DragMode.CLIP_DUPLICATE
+                tw.setCursor(QCursor(Qt.CursorShape.DragCopyCursor))
+                tw.status_message_requested.emit(tr("Duplicating clip..."), 0)
+            else:
+                tw.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+                tw.status_message_requested.emit(tr("Hold Alt to duplicate clip"), 0)
+        else:
+            tw.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
     def start_audio(self, mode: DragMode, x: float) -> None:
         """오디오 트랙 드래그 시작."""
@@ -232,8 +250,8 @@ class TimelineDragManager:
             self._handle_image_drag(x)
         elif m in (DragMode.TEXT_MOVE, DragMode.TEXT_RESIZE_LEFT, DragMode.TEXT_RESIZE_RIGHT):
             self._handle_text_drag(x)
-        elif m in (DragMode.CLIP_TRIM_LEFT, DragMode.CLIP_TRIM_RIGHT):
-            self._handle_clip_drag(x)
+        elif m in (DragMode.CLIP_TRIM_LEFT, DragMode.CLIP_TRIM_RIGHT, DragMode.CLIP_MOVE, DragMode.CLIP_DUPLICATE):
+            self._handle_clip_drag(x, y)
         elif m == DragMode.VOLUME_POINT_MOVE:
             self._handle_volume_point_drag(x, y)
         elif m in (DragMode.BGM_MOVE, DragMode.BGM_RESIZE_LEFT, DragMode.BGM_RESIZE_RIGHT):
@@ -247,6 +265,7 @@ class TimelineDragManager:
     def on_release(self) -> None:
         """드래그 종료 — 시그널 발행 후 상태 초기화."""
         tw = self.tw
+        tw.status_message_requested.emit("", 0)  # Clear status message
         m = self.mode
 
         if m in (DragMode.MOVE, DragMode.RESIZE_LEFT, DragMode.RESIZE_RIGHT):
@@ -275,20 +294,31 @@ class TimelineDragManager:
                     tw.text_overlay_moved.emit(self.text_index, ov.start_ms, ov.end_ms)
             self.text_index = -1
 
-        elif m in (DragMode.CLIP_TRIM_LEFT, DragMode.CLIP_TRIM_RIGHT):
+        elif m in (DragMode.CLIP_TRIM_LEFT, DragMode.CLIP_TRIM_RIGHT, DragMode.CLIP_MOVE, DragMode.CLIP_DUPLICATE):
             if tw._project and 0 <= self.clip_track_index < len(tw._project.video_tracks):
                 vt = tw._project.video_tracks[self.clip_track_index]
                 if 0 <= self.clip_index < len(vt.clips):
-                    clip = vt.clips[self.clip_index]
-                    new_in = clip.source_in_ms
-                    new_out = clip.source_out_ms
-                    if new_in != self.orig_source_in or new_out != self.orig_source_out:
-                        # Undo를 위해 원래 값으로 복원
-                        clip.source_in_ms = self.orig_source_in
-                        clip.source_out_ms = self.orig_source_out
-                        tw.clip_trimmed.emit(self.clip_index, new_in, new_out)
+                    if m == DragMode.CLIP_DUPLICATE:
+                        if self.dest_track_index >= 0 and self.dest_insert_index >= 0:
+                            tw.clip_duplicated.emit(self.clip_track_index, self.clip_index,
+                                                    self.dest_track_index, self.dest_insert_index)
+                    elif m == DragMode.CLIP_MOVE:
+                        if self.dest_track_index >= 0 and self.dest_insert_index >= 0:
+                            tw.clip_moved.emit(self.clip_track_index, self.clip_index, 
+                                               self.dest_track_index, self.dest_insert_index)
+                    else:
+                        clip = vt.clips[self.clip_index]
+                        new_in = clip.source_in_ms
+                        new_out = clip.source_out_ms
+                        if new_in != self.orig_source_in or new_out != self.orig_source_out:
+                            # Undo를 위해 원래 값으로 복원
+                            clip.source_in_ms = self.orig_source_in
+                            clip.source_out_ms = self.orig_source_out
+                            tw.clip_trimmed.emit(self.clip_index, new_in, new_out)
             self.clip_index = -1
             self.clip_track_index = -1
+            self.dest_track_index = -1
+            self.dest_insert_index = -1
 
         elif m == DragMode.VOLUME_POINT_MOVE:
             if self.clip_ref:
@@ -753,8 +783,8 @@ class TimelineDragManager:
 
     # ---- 비디오 클립 드래그 ----
 
-    def _handle_clip_drag(self, x: float) -> None:
-        """비디오 클립 트림 처리."""
+    def _handle_clip_drag(self, x: float, y: float = 0.0) -> None:
+        """비디오 클립 트림/이동 처리."""
         tw = self.tw
         if not tw._project or self.clip_track_index < 0:
             return
@@ -764,6 +794,37 @@ class TimelineDragManager:
 
         dx_ms = int((x - self.start_x) / tw._px_per_ms) if tw._px_per_ms > 0 else 0
         clip = vt.clips[self.clip_index]
+
+        if self.mode in (DragMode.CLIP_MOVE, DragMode.CLIP_DUPLICATE):
+            # Determine target track
+            from src.ui.timeline_widget import _CLIP_H
+            target_track = -1
+            for i in range(len(tw._project.video_tracks)):
+                ty = tw._video_track_y(i)
+                if ty <= y < ty + _CLIP_H:
+                    target_track = i
+                    break
+            
+            self.dest_track_index = target_track
+            self.dest_insert_index = -1
+            
+            if target_track >= 0:
+                # Determine insertion index
+                target_vt = tw._project.video_tracks[target_track]
+                cursor_ms = tw._x_to_ms(x)
+                
+                # Find insertion point based on time
+                insert_idx = 0
+                current_time = 0
+                for c in target_vt.clips:
+                    mid_point = current_time + (c.duration_ms / 2)
+                    if cursor_ms > mid_point:
+                        insert_idx += 1
+                    current_time += c.duration_ms
+                self.dest_insert_index = insert_idx
+            
+            tw.update() # Trigger repaint for drag feedback
+            return
 
         boundaries = vt.clip_boundaries_ms()
         if self.clip_index >= len(boundaries):

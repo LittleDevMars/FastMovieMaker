@@ -163,6 +163,9 @@ def export_video(
     video_tracks: list[VideoClipTrack] | None = None,
     text_overlays: list[TextOverlay] | None = None,
     use_gpu: bool = False,
+    mix_with_original_audio: bool = False,
+    video_volume: float = 1.0,
+    audio_volume: float = 1.0,
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -181,6 +184,9 @@ def export_video(
         image_overlays: Optional list of ImageOverlay objects.
         video_tracks: Optional list of video tracks to composite.
         text_overlays: Optional list of TextOverlay objects to render.
+        mix_with_original_audio: If True, mix audio_path with video audio instead of replacing it.
+        video_volume: Volume multiplier for the original video audio (0.0-1.0+).
+        audio_volume: Volume multiplier for the external audio_path (0.0-1.0+).
     """
     runner = get_ffmpeg_runner()
     if not runner.is_available():
@@ -221,8 +227,6 @@ def export_video(
             audio_codec_flags = ["-c:a", "libvorbis", "-b:a", "128k"]
         else:
             # Determine encoder and flags based on GPU preference
-            from src.utils.hw_accel import get_hw_encoder
-            
             if use_gpu:
                 hw_encoder, hw_flags = get_hw_encoder(codec)
                 video_encoder = hw_encoder
@@ -237,9 +241,15 @@ def export_video(
                 elif "nvenc" in hw_encoder:
                     # NVENC supports -cq and -preset
                     encoder_flags = ["-preset", "p4", "-cq", str(crf)]
-                elif "vaapi" in hw_encoder or "amf" in hw_encoder:
-                    # Standard HW flags from get_hw_encoder
-                    pass
+                elif "qsv" in hw_encoder:
+                    # QSV supports -global_quality for ICQ (Intelligent Constant Quality)
+                    encoder_flags = ["-global_quality", str(crf), "-look_ahead", "1"]
+                elif "amf" in hw_encoder:
+                    # AMF CQP mode
+                    encoder_flags = ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
+                elif "vaapi" in hw_encoder:
+                    # VAAPI CQP mode
+                    encoder_flags = ["-rc_mode", "CQP", "-global_quality", str(crf)]
             else:
                 if codec == "h264":
                     video_encoder = "libx264"
@@ -279,7 +289,7 @@ def export_video(
                         multi_source = True
                         break
         
-        use_filter_complex = use_overlay or bool(valid_image_overlays) or multi_track
+        use_filter_complex = use_overlay or bool(valid_image_overlays) or multi_track or bool(text_overlays) or (audio_path and mix_with_original_audio)
         
         # NOTE: If we use filter_complex, we add subtitles at the end of the chain.
         # If simple -vf, we just use subs_filter.
@@ -379,8 +389,8 @@ def export_video(
             # 3. Mix audio tracks
             if len(track_a_labels) > 1:
                 amix_in = "".join(track_a_labels)
-                fc_parts.append(f"{amix_in}amix=inputs={len(track_a_labels)}[outa]")
-                final_a_label = "[outa]"
+                fc_parts.append(f"{amix_in}amix=inputs={len(track_a_labels)}[track_outa]")
+                final_a_label = "[track_outa]"
             else:
                 final_a_label = track_a_labels[0]
 
@@ -499,6 +509,20 @@ def export_video(
                     fc_parts.append(f"{current}{drawtext_filter}[{text_label}]")
                     current = f"[{text_label}]"
 
+            # Mix with external audio if present
+            if audio_idx >= 0:
+                # Apply volume to external audio
+                fc_parts.append(f"[{audio_idx}:a]volume={audio_volume:.2f}[ext_a]")
+                
+                if mix_with_original_audio and final_a_label:
+                    # Apply volume to video audio
+                    fc_parts.append(f"{final_a_label}volume={video_volume:.2f}[vid_a]")
+                    # Mix: normalize=0 prevents auto-attenuation, respecting user volumes
+                    fc_parts.append(f"[vid_a][ext_a]amix=inputs=2:duration=first:normalize=0[outa]")
+                    final_a_label = "[outa]"
+                else:
+                    final_a_label = "[ext_a]"
+
             # Final output
             fc_parts.append(f"{current}copy[out]")
             filter_complex = ";".join(fc_parts)
@@ -508,14 +532,7 @@ def export_video(
                    "-filter_complex", filter_complex,
                    "-map", "[out]"]
 
-            if audio_idx >= 0:
-                # Mixing with external audio might need amix or just replacement
-                # For now let's assume external audio overrides all track audio 
-                # (consistent with previous behavior for simplification)
-                args.extend(["-map", f"{audio_idx}:a",
-                            "-c:v", video_encoder, *encoder_flags,
-                            *audio_codec_flags])
-            elif final_a_label:
+            if final_a_label:
                 args.extend(["-map", final_a_label,
                             "-c:v", video_encoder, *encoder_flags,
                             *audio_codec_flags])

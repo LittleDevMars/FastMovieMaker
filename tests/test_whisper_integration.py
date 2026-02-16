@@ -56,6 +56,7 @@ class TestChunkLengthCompatibility:
             wf.setframerate(sr)
             wf.writeframes(samples.tobytes())
 
+        model = None
         try:
             model = WhisperModel("tiny", device="cpu", compute_type="int8")
             # chunk_length=10 포함 호출 — TypeError 나면 테스트 실패
@@ -71,7 +72,8 @@ class TestChunkLengthCompatibility:
             print(f"  segments: {len(segments)}, duration: {info.duration:.1f}s")
         finally:
             wav_path.unlink(missing_ok=True)
-            del model
+            if model is not None:
+                del model
 
 
 class TestCancelWithRealModel:

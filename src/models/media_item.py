@@ -20,6 +20,8 @@ class MediaItem:
     height: int = 0
     file_size: int = 0      # Bytes
     favorite: bool = False
+    has_proxy: bool = False
+    is_proxy_generating: bool = False  # Runtime only
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +36,7 @@ class MediaItem:
             "height": self.height,
             "file_size": self.file_size,
             "favorite": self.favorite,
+            "has_proxy": self.has_proxy,
         }
 
     @classmethod
@@ -50,4 +53,6 @@ class MediaItem:
             height=data.get("height", 0),
             file_size=data.get("file_size", 0),
             favorite=data.get("favorite", False),
+            has_proxy=data.get("has_proxy", False),
+            is_proxy_generating=False,
         )

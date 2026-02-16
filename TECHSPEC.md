@@ -1,6 +1,6 @@
 # FastMovieMaker Technical Specification
 
-**Version:** 0.3.0
+**Version:** 0.4.0
 **Platform:** Windows (primary), macOS (Apple Silicon 지원)
 **Python:** 3.13+ (3.14 테스트 완료)
 **Framework:** PySide6 (Qt 6)
@@ -39,6 +39,9 @@ src/
   services/       Application: Business logic, uses infrastructure (no Qt widgets)
   workers/        QObject-based background thread classes
   ui/             Presentation: PySide6 widgets, dialogs, commands
+    main_window_ui.py   UI 레이아웃 구성 (build_main_window_ui)
+    main_window_menu.py 메뉴 구성 (build_main_window_menu)
+    timeline_hit_test.py 타임라인 (x,y) 히트 테스트 (TimelineHitTester)
   utils/          Configuration, i18n, time conversion
 ```
 
@@ -65,7 +68,7 @@ Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker
 **Thread safety notes:**
 - `_cleanup_thread()`는 반드시 `quit()` → `wait()` 순서로 호출 (이벤트 루프 미종료 방지)
 - Python 3.14에서 `import torch`는 QThread의 작은 C 스택(~512KB)에서 오버플로우 — 메인 스레드에서 사전 임포트 필수
-- Whisper 취소: ctranslate2 C 연산은 중단 불가 → Cancel = 즉시 다이얼로그 닫기 + 스레드 백그라운드 자연 종료
+- Whisper 취소: ctranslate2 C 연산은 중단 불가 → Cancel = 즉시 다이얼로그 닫기 + 스레드 백그라운드 자연 종료. `chunk_length=5`로 약 5초 단위 세그먼트 경계에서 취소 검사.
 - 앱 종료 시 `QThreadPool.globalInstance().waitForDone()` 호출로 스레드 파괴 크래시 방지
 
 ### 2.3 Undo/Redo System
@@ -617,6 +620,7 @@ FastMovieMaker/
 ## 13. Testing
 
 - **Framework:** pytest + pytest-qt
-- **Test count:** 414 cases across 29 modules
+- **Test count:** 414+ cases across 29+ modules
 - **Coverage:** Models, services, UI integration, export pipeline, i18n, Whisper cancel/crash
-- **Run:** `python -m pytest tests/ -v`
+- **Controller tests:** `tests/test_controllers.py` — AppContext 및 PlaybackController를 mock AppContext로 단위 테스트 (Qt 부담 최소)
+- **Run:** `python -m pytest tests/ -v` (GUI 의존 테스트는 플랫폼별로 제한될 수 있음)

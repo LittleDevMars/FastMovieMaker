@@ -39,6 +39,9 @@ class ExportWorker(QObject):
         scale_width: int = 0,
         scale_height: int = 0,
         use_gpu: bool = False,
+        mix_with_original_audio: bool = False,
+        video_volume: float = 1.0,
+        audio_volume: float = 1.0,
     ):
         super().__init__()
         self._video_path = video_path
@@ -55,6 +58,9 @@ class ExportWorker(QObject):
         self._scale_width = scale_width
         self._scale_height = scale_height
         self._use_gpu = use_gpu
+        self._mix_with_original_audio = mix_with_original_audio
+        self._video_volume = video_volume
+        self._audio_volume = audio_volume
 
     def run(self) -> None:
         try:
@@ -73,6 +79,9 @@ class ExportWorker(QObject):
                 crf=self._crf,
                 scale_width=self._scale_width,
                 scale_height=self._scale_height,
+                mix_with_original_audio=self._mix_with_original_audio,
+                video_volume=self._video_volume,
+                audio_volume=self._audio_volume,
             )
             self.finished.emit(str(self._output_path))
         except Exception as e:

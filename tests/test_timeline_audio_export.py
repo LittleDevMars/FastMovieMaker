@@ -28,6 +28,27 @@ def test_build_audio_concat_filter_speed_volume():
     assert "atempo=2.000" in filters[0]
     assert "volume=0.500" in filters[0]
 
+def test_build_audio_concat_filter_atempo_chaining():
+    """Test that extreme speeds use chained atempo filters (FFmpeg limit 0.5-2.0)."""
+    # Speed 4.0 -> atempo=2.0,atempo=2.0
+    clip = VideoClip(source_path=Path("test.mp4"), source_in_ms=0, source_out_ms=1000)
+    clip.speed = 4.0
+    filters = _build_audio_concat_filter([clip])
+    # Check if atempo appears multiple times
+    assert filters[0].count("atempo=") >= 2
+    
+    # Speed 0.25 -> atempo=0.5,atempo=0.5
+    clip.speed = 0.25
+    filters = _build_audio_concat_filter([clip])
+    assert filters[0].count("atempo=") >= 2
+
+def test_build_audio_concat_filter_no_atempo_normal_speed():
+    """Test that normal speed (1.0) does not add atempo filter."""
+    clip = VideoClip(source_path=Path("test.mp4"), source_in_ms=0, source_out_ms=1000)
+    clip.speed = 1.0
+    filters = _build_audio_concat_filter([clip])
+    assert "atempo" not in filters[0]
+
 @patch("src.services.timeline_audio_exporter.find_ffmpeg")
 @patch("subprocess.run")
 def test_export_timeline_audio_calls_ffmpeg(mock_run, mock_find):

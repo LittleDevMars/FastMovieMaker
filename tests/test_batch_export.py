@@ -144,3 +144,86 @@ class TestBatchExportWorkerSignature:
         worker = BatchExportWorker(Path("/tmp/test.mp4"), track, [])
         assert worker._overlay_path is None
         assert worker._image_overlays is None
+
+    def test_worker_accepts_text_overlays(self):
+        """Verify BatchExportWorker accepts text_overlays parameter."""
+        from src.workers.batch_export_worker import BatchExportWorker
+        from src.models.subtitle import SubtitleTrack
+        
+        track = SubtitleTrack(segments=[])
+        worker = BatchExportWorker(
+            Path("/tmp/test.mp4"),
+            track,
+            [],
+            text_overlays=[MagicMock()],
+        )
+        assert len(worker._text_overlays) == 1
+
+    def test_worker_accepts_mix_audio_param(self):
+        """Verify BatchExportWorker accepts mix_with_original_audio parameter."""
+        from src.workers.batch_export_worker import BatchExportWorker
+        import inspect
+        sig = inspect.signature(BatchExportWorker.__init__)
+        assert "mix_with_original_audio" in sig.parameters
+
+
+class TestBatchExportDialogAudioOptions:
+    """Test audio options in BatchExportDialog."""
+
+    def test_mix_audio_checkbox_state(self, qtbot):
+        from src.ui.dialogs.batch_export_dialog import BatchExportDialog
+        from src.models.subtitle import SubtitleTrack, SubtitleSegment
+        
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "test", audio_file="test.mp3")])
+        dialog = BatchExportDialog(Path("video.mp4"), track, video_has_audio=True)
+        qtbot.addWidget(dialog)
+        
+        assert dialog._mix_audio_checkbox.isEnabled()
+        assert dialog._mix_audio_checkbox.isChecked()
+        assert dialog._bg_slider.isEnabled()
+
+    def test_mix_audio_checkbox_no_video_audio(self, qtbot):
+        from src.ui.dialogs.batch_export_dialog import BatchExportDialog
+        from src.models.subtitle import SubtitleTrack, SubtitleSegment
+        
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "test", audio_file="test.mp3")])
+        dialog = BatchExportDialog(Path("video.mp4"), track, video_has_audio=False)
+        qtbot.addWidget(dialog)
+        
+        assert not dialog._mix_audio_checkbox.isEnabled()
+        assert not dialog._mix_audio_checkbox.isChecked()
+        assert not dialog._bg_slider.isEnabled()
+
+    def test_mix_audio_toggled(self, qtbot):
+        from src.ui.dialogs.batch_export_dialog import BatchExportDialog
+        from src.models.subtitle import SubtitleTrack, SubtitleSegment
+        
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "test", audio_file="test.mp3")])
+        dialog = BatchExportDialog(Path("video.mp4"), track, video_has_audio=True)
+        qtbot.addWidget(dialog)
+        
+        # Uncheck mix
+        dialog._mix_audio_checkbox.setChecked(False)
+        assert not dialog._bg_slider.isEnabled()
+        
+        # Check mix
+        dialog._mix_audio_checkbox.setChecked(True)
+        assert dialog._bg_slider.isEnabled()
+
+    def test_tts_toggled_affects_mix_and_bg(self, qtbot):
+        from src.ui.dialogs.batch_export_dialog import BatchExportDialog
+        from src.models.subtitle import SubtitleTrack, SubtitleSegment
+        
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "test", audio_file="test.mp3")])
+        dialog = BatchExportDialog(Path("video.mp4"), track, video_has_audio=True)
+        qtbot.addWidget(dialog)
+        
+        # Disable TTS
+        dialog._tts_checkbox.setChecked(False)
+        assert not dialog._mix_audio_checkbox.isEnabled()
+        assert not dialog._bg_slider.isEnabled()
+        
+        # Enable TTS
+        dialog._tts_checkbox.setChecked(True)
+        assert dialog._mix_audio_checkbox.isEnabled()
+        assert dialog._bg_slider.isEnabled()

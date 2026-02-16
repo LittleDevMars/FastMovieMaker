@@ -233,6 +233,7 @@ class VideoClipTrack:
     locked: bool = False
     muted: bool = False
     hidden: bool = False
+    name: str = ""
 
     def _build_prefix(self) -> list[int]:
         """접두사 합 배열을 구축한다. O(n).

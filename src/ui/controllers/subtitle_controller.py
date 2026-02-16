@@ -648,6 +648,19 @@ class SubtitleController:
         if 0 <= index < len(ctx.project.subtitle_tracks):
             ctx.project.subtitle_tracks[index].name = name
             ctx.refresh_track_selector()
+            # Refresh track header to show new name
+            if ctx.track_header:
+                ctx.track_header.update()
+
+    def on_rename_active_track(self) -> None:
+        """Rename the currently active subtitle track via dialog."""
+        ctx = self.ctx
+        track = ctx.project.subtitle_track
+        if not track:
+            return
+        name, ok = QInputDialog.getText(ctx.window, tr("Rename Track"), tr("New name:"), text=track.name)
+        if ok:
+            self.on_track_renamed(ctx.project.active_track_index, name.strip())
 
     # ---- 유틸리티 ----
 

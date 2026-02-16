@@ -107,6 +107,13 @@ class TestExportWorker:
         )
         assert worker._audio_path is None
 
+    def test_worker_accepts_mix_audio_param(self):
+        """Verify ExportWorker accepts mix_with_original_audio parameter."""
+        from src.workers.export_worker import ExportWorker
+        import inspect
+        sig = inspect.signature(ExportWorker.__init__)
+        assert "mix_with_original_audio" in sig.parameters
+
 
 # --- AudioRegenerator segment volume tests ---
 
@@ -245,3 +252,225 @@ class TestMultiSourceConcatFilter:
         assert a_label == "[concata]"
         assert "[concatv]" in "".join(parts)
         assert "[concata]" in "".join(parts)
+
+    def test_build_concat_filter_speed_atempo(self):
+        """Test that speed changes apply atempo filter to audio."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        clip = VideoClip(0, 1000)
+        clip.speed = 2.0
+        parts, _, _ = _build_concat_filter([clip])
+        filter_str = "".join(parts)
+        
+        # Audio filter should contain atempo
+        assert "atempo=2.0" in filter_str
+
+    def test_build_concat_filter_atempo_chaining(self):
+        """Test that extreme speeds use chained atempo filters (FFmpeg limit 0.5-2.0)."""
+        from src.services.video_exporter import _build_concat_filter
+        from src.models.video_clip import VideoClip
+
+        # Speed 4.0 -> atempo=2.0,atempo=2.0
+        clip = VideoClip(0, 1000)
+        clip.speed = 4.0
+        parts, _, _ = _build_concat_filter([clip])
+        filter_str = "".join(parts)
+        # Check if atempo appears multiple times
+        assert filter_str.count("atempo=2.0") >= 2
+        
+        # Speed 0.25 -> atempo=0.5,atempo=0.5
+        clip = VideoClip(0, 1000)
+        clip.speed = 0.25
+        parts, _, _ = _build_concat_filter([clip])
+        filter_str = "".join(parts)
+        assert filter_str.count("atempo=0.5") >= 2
+
+
+class TestExportVideoOptions:
+    """Tests for export_video options."""
+
+    def setup_method(self):
+        self.process_mock = MagicMock()
+        self.process_mock.stdout = iter([])
+        self.process_mock.stderr = iter([])
+        self.process_mock.returncode = 0
+        self.process_mock.wait.return_value = None
+
+    @patch("src.utils.hw_accel.get_hw_encoder")
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_with_gpu(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_hw):
+        from src.services.video_exporter import export_video
+        
+        mock_popen.return_value = self.process_mock
+        mock_get_hw.return_value = ("h264_nvenc", ["-preset", "p4"])
+
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
+        export_video(
+            Path("test.mp4"), track, Path("out.mp4"),
+            use_gpu=True, codec="h264"
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "-c:v" in cmd
+        idx = cmd.index("-c:v")
+        assert cmd[idx + 1] == "h264_nvenc"
+
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_scaling(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find):
+        from src.services.video_exporter import export_video
+        
+        mock_popen.return_value = self.process_mock
+
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
+        export_video(
+            Path("test.mp4"), track, Path("out.mp4"),
+            scale_width=1280, scale_height=720
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        # Should use -vf with scale
+        assert "-vf" in cmd
+        vf_arg = cmd[cmd.index("-vf") + 1]
+        assert "scale=1280:720" in vf_arg
+
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_with_text_overlay(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find):
+        from src.services.video_exporter import export_video
+        from src.models.text_overlay import TextOverlay
+        
+        mock_popen.return_value = self.process_mock
+
+        track = SubtitleTrack(segments=[])
+        text_overlays = [TextOverlay(0, 1000, "OverlayText")]
+        
+        export_video(
+            Path("test.mp4"), track, Path("out.mp4"),
+            text_overlays=text_overlays
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        # Should use -filter_complex
+        assert "-filter_complex" in cmd
+        fc_arg = cmd[cmd.index("-filter_complex") + 1]
+        assert "drawtext=" in fc_arg
+        assert "OverlayText" in fc_arg
+
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_complex_with_audio_replacement(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, tmp_path):
+        """Test that audio_path replaces track audio in filter_complex mode."""
+        from src.services.video_exporter import export_video
+        from src.models.text_overlay import TextOverlay
+        
+        mock_popen.return_value = self.process_mock
+        
+        # Create dummy audio file
+        audio_path = tmp_path / "external_audio.mp3"
+        audio_path.touch()
+
+        # Trigger filter_complex with text overlay
+        text_overlays = [TextOverlay(0, 1000, "Overlay")]
+        track = SubtitleTrack(segments=[])
+        
+        export_video(
+            Path("test.mp4"), track, Path("out.mp4"),
+            text_overlays=text_overlays,
+            audio_path=audio_path
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        
+        # Check inputs: video (0) and audio (1)
+        input_indices = [i for i, x in enumerate(cmd) if x == "-i"]
+        assert len(input_indices) >= 2
+        assert str(audio_path) in cmd
+        
+        # Check mapping: should map external audio input (1:a)
+        map_indices = [i for i, x in enumerate(cmd) if x == "-map"]
+        audio_map_found = False
+        for idx in map_indices:
+            if idx + 1 < len(cmd) and cmd[idx+1] == "1:a":
+                audio_map_found = True
+                break
+        assert audio_map_found, f"Command should map external audio input (1:a). Cmd: {cmd}"
+
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_with_audio_mixing(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, tmp_path):
+        """Test that mix_with_original_audio=True uses amix filter."""
+        from src.services.video_exporter import export_video
+        
+        mock_popen.return_value = self.process_mock
+        
+        audio_path = tmp_path / "external.mp3"
+        audio_path.touch()
+        track = SubtitleTrack(segments=[])
+        
+        export_video(
+            Path("test.mp4"), track, Path("out.mp4"),
+            audio_path=audio_path,
+            mix_with_original_audio=True,
+            video_volume=0.5,
+            audio_volume=1.2
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "-filter_complex" in cmd
+        fc_arg = cmd[cmd.index("-filter_complex") + 1]
+        # Should contain amix
+        assert "amix=inputs=2" in fc_arg
+        # Should contain volume filters
+        assert "volume=0.50" in fc_arg
+        assert "volume=1.20" in fc_arg
+        # Should use normalize=0 to respect volumes
+        assert "normalize=0" in fc_arg
+
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.video_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_export_multi_track_layering(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find):
+        """Test that multiple video tracks are layered correctly using overlay filter."""
+        from src.services.video_exporter import export_video
+        from src.models.video_clip import VideoClip, VideoClipTrack
+        
+        mock_popen.return_value = self.process_mock
+        
+        # Track 0 (Bottom layer)
+        track0 = VideoClipTrack(clips=[VideoClip(0, 1000)])
+        # Track 1 (Top layer)
+        track1 = VideoClipTrack(clips=[VideoClip(0, 1000)])
+        
+        export_video(
+            Path("base.mp4"), SubtitleTrack(), Path("out.mp4"),
+            video_tracks=[track0, track1]
+        )
+        
+        cmd = mock_popen.call_args[0][0]
+        assert "-filter_complex" in cmd
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        
+        # Check that track 0 is overlaid by track 1
+        # Implementation uses labels [t0v] and [t1v]
+        # Expected pattern: [t0v][t1v]overlay=format=auto
+        assert "[t0v][t1v]overlay=format=auto" in fc

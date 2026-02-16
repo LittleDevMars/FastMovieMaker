@@ -2,7 +2,9 @@
 
 from PySide6.QtCore import Qt, Signal, QRect
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QMouseEvent
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QMenu
+from src.utils.i18n import tr
+
 
 class TrackHeaderPanel(QWidget):
     """Left-side panel for timeline tracks.
@@ -13,6 +15,10 @@ class TrackHeaderPanel(QWidget):
     
     # Signals for state changes
     state_changed = Signal()
+    track_add_requested = Signal()
+    track_remove_requested = Signal(int)
+    track_rename_requested = Signal(int)
+    subtitle_rename_requested = Signal()
     
     # Constants matching TimelineWidget
     _RULER_H = 14
@@ -53,18 +59,22 @@ class TrackHeaderPanel(QWidget):
         # Video tracks
         num_v = len(self._project.video_tracks)
         for i in range(num_v):
+            t_name = self._project.video_tracks[i].name or f"Video {i+1}"
             tracks.append({
                 "y": y, "h": self._CLIP_H, 
-                "name": f"Video {i+1}" if num_v > 1 else "Video",
+                "name": t_name,
                 "controls": "LMH", "track_type": "video", "index": i
             })
             y += self._CLIP_H
         
         y += 4
         # Subtitle track (Simplified: only active track shown or grouped)
+        sub_name = "Subtitles"
+        if self._project and self._project.subtitle_track:
+            sub_name = self._project.subtitle_track.name or "Subtitles"
         tracks.append({
             "y": y, "h": self._SEG_H, 
-            "name": "Subtitles", "controls": "LMH", "track_type": "subtitle"
+            "name": sub_name, "controls": "LMH", "track_type": "subtitle"
         })
         y += self._SEG_H + 4
         
@@ -165,6 +175,10 @@ class TrackHeaderPanel(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         if not self._project:
             return
+
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event)
+            return
             
         x, y = event.position().x(), event.position().y()
         
@@ -187,6 +201,47 @@ class TrackHeaderPanel(QWidget):
                 if QRect(ctrl_x, ctrl_y, 20, 20).contains(int(x), int(y)):
                     self._toggle_state(info, "hidden")
                     return
+
+    def _show_context_menu(self, event):
+        menu = QMenu(self)
+        add_act = menu.addAction(tr("Add Video Track"))
+        
+        y = event.position().y()
+        clicked_index = -1
+        
+        for info in self._get_tracks_layout():
+            if info["track_type"] == "video":
+                ty = info["y"]
+                th = info["h"]
+                if ty <= y < ty + th:
+                    clicked_index = info["index"]
+                    break
+        
+        remove_act = None
+        if clicked_index >= 0 and len(self._project.video_tracks) > 1:
+            remove_act = menu.addAction(tr("Remove Video Track"))
+            
+        action = menu.exec(event.globalPos())
+        if action == add_act:
+            self.track_add_requested.emit()
+        elif remove_act and action == remove_act:
+            self.track_remove_requested.emit(clicked_index)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if not self._project:
+            return
+            
+        y = event.position().y()
+        for info in self._get_tracks_layout():
+            ty = info["y"]
+            th = info["h"]
+            if ty <= y < ty + th:
+                if info["track_type"] == "video":
+                    self.track_rename_requested.emit(info["index"])
+                elif info["track_type"] in ("subtitle", "audio"):
+                    # Audio track in header currently represents TTS audio of the subtitle track
+                    self.subtitle_rename_requested.emit()
+                return
 
     def _toggle_state(self, info, field):
         if not self._project: return

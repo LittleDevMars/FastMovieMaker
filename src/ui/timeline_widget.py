@@ -27,13 +27,9 @@ from src.services.waveform_service import WaveformData
 from src.services.timeline_waveform_service import TimelineWaveformService
 from src.ui.timeline_painter import TimelinePainter
 from src.ui.timeline_drag import DragMode, TimelineDragManager
-from src.utils.config import TIMELINE_HEIGHT
+from src.ui.timeline_hit_test import TimelineHitTester
+from src.utils.config import TIMELINE_HEIGHT, VIDEO_EXTENSIONS
 
-
-# 세그먼트 가장자리에서 리사이즈로 인식하는 픽셀 거리
-_EDGE_PX = 6
-# 플레이헤드 드래그로 인식하는 픽셀 거리 (클릭 쉽게 넓게)
-_PLAYHEAD_HIT_PX = 20
 
 # ---- Track Y-positions ----
 _RULER_H = 14
@@ -43,6 +39,7 @@ _SEG_H = 40
 _AUDIO_H = 34
 _WAVEFORM_H = 45
 _BGM_H = 34
+_TRACK_GAP = 4
 
 # Helper methods for dynamic Y (to be placed in TimelineWidget)
 
@@ -61,9 +58,9 @@ class TimelineWidget(QWidget):
     text_overlay_moved = Signal(int, int, int)  # (index, new_start_ms, new_end_ms)
     insert_image_requested = Signal(int)  # 이미지 삽입 위치(ms)
     insert_text_requested = Signal(int)  # 텍스트 오버레이 삽입 위치(ms)
-    image_file_dropped = Signal(str, int)  # (file_path, position_ms)
-    video_file_dropped = Signal(str, int)  # (file_path, position_ms)
-    audio_file_dropped = Signal(str, int)  # (file_path, position_ms)
+    image_files_dropped = Signal(list, int)  # (file_paths, position_ms)
+    video_files_dropped = Signal(list, int, int)  # (file_paths, position_ms, track_index)
+    audio_files_dropped = Signal(list, int)  # (file_paths, position_ms)
     clip_selected = Signal(int, int)            # (track_index, clip_index)
     clip_split_requested = Signal(int)          # (timeline_ms) - No track index needed usually as it splits all or current? 
                                                 # Actually better to track-specific: 
@@ -71,18 +68,20 @@ class TimelineWidget(QWidget):
     clip_deleted = Signal(int, int)             # (track_index, clip_index)
     clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
     clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
+    clip_moved = Signal(int, int, int, int)     # (src_track, src_index, dst_track, dst_index)
+    clip_duplicated = Signal(int, int, int, int) # (src_track, src_index, dst_track, dst_index)
+    clip_double_clicked = Signal(int, int)      # (track_index, clip_index)
     transition_requested = Signal(int, int)     # (track_index, clip_index)
     bgm_clip_selected = Signal(int, int)        # (track_index, clip_index)
     bgm_clip_moved = Signal(int, int, int)      # (track_index, clip_index, new_start_ms)
     bgm_clip_trimmed = Signal(int, int, int, int) # (track_index, clip_index, new_start_ms, new_dur_ms)
     bgm_clip_delete_requested = Signal(int, int) # (track_index, clip_index)
     
-    # Text overlay signals
-    text_overlay_selected = Signal(int)  # overlay index
     text_overlay_edit_requested = Signal(int)  # overlay index
     text_overlay_delete_requested = Signal(int)  # overlay index
     text_overlay_moved = Signal(int, int, int)  # (index, old_start_ms, new_start_ms)
 
+    status_message_requested = Signal(str, int)  # (message, timeout_ms)
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
 
     # ---- 색상 상수는 TimelinePainter로 이동됨 (src/ui/timeline_painter.py) ----
@@ -184,11 +183,14 @@ class TimelineWidget(QWidget):
 
         # 드롭 표시
         self._drop_indicator_x: float = -1
+        self._drop_target_track_index: int = -1
 
         # 페인터 (렌더링 로직 위임)
         self._painter = TimelinePainter(self)
         # 드래그 매니저 (드래그 로직 위임)
         self._drag_mgr = TimelineDragManager(self)
+        # 히트 테스트 (위임)
+        self._hit_tester = TimelineHitTester(self)
 
     def _get_thumbnail_interval(self) -> int:
         """Get thumbnail interval based on current zoom level (LOD)."""
@@ -218,54 +220,39 @@ class TimelineWidget(QWidget):
 
     def _subtitle_track_y(self) -> int:
         num_v = len(self._project.video_tracks) if self._project else 1
-        return _CLIP_Y + (num_v * _CLIP_H) + 4
+        return _CLIP_Y + (num_v * _CLIP_H) + _TRACK_GAP
 
     def _audio_track_y(self) -> int:
-        return self._subtitle_track_y() + _SEG_H + 4
+        return self._subtitle_track_y() + _SEG_H + _TRACK_GAP
 
     def _img_overlay_base_y(self) -> int:
-        return self._audio_track_y() + _AUDIO_H + 4
+        return self._audio_track_y() + _AUDIO_H + _TRACK_GAP
 
-    def _compute_overlay_rows(self) -> list[int]:
-        """이미지 오버레이의 행 배치 계산 (겹치는 오버레이를 다른 행에 배치).
-
-        Greedy interval packing: 각 오버레이를 겹치지 않는 첫 번째 행에 배치.
-        """
-        if not self._image_overlay_track:
-            return []
-        rows: list[int] = []
-        row_ends: list[int] = []  # 각 행에서 마지막 오버레이의 end_ms
-        for ov in self._image_overlay_track:
-            placed = False
-            for r in range(len(row_ends)):
-                if ov.start_ms >= row_ends[r]:
-                    rows.append(r)
-                    row_ends[r] = ov.end_ms
-                    placed = True
-                    break
-            if not placed:
-                rows.append(len(row_ends))
-                row_ends.append(ov.end_ms)
-        return rows
-
-    def _compute_text_overlay_rows(self) -> list[int]:
-        """텍스트 오버레이의 행 배치 계산 (겹치는 오버레이를 다른 행에 배치)."""
-        if not self._text_overlay_track or len(self._text_overlay_track) == 0:
+    def _pack_intervals(self, items) -> list[int]:
+        """Greedy interval packing algorithm to assign rows to overlapping items."""
+        if not items:
             return []
         rows: list[int] = []
         row_ends: list[int] = []
-        for overlay in self._text_overlay_track.overlays:
+        for item in items:
             placed = False
             for r in range(len(row_ends)):
-                if overlay.start_ms >= row_ends[r]:
+                if item.start_ms >= row_ends[r]:
                     rows.append(r)
-                    row_ends[r] = overlay.end_ms
+                    row_ends[r] = item.end_ms
                     placed = True
                     break
             if not placed:
                 rows.append(len(row_ends))
-                row_ends.append(overlay.end_ms)
+                row_ends.append(item.end_ms)
         return rows
+
+    def _compute_overlay_rows(self) -> list[int]:
+        return self._pack_intervals(self._image_overlay_track)
+
+    def _compute_text_overlay_rows(self) -> list[int]:
+        items = self._text_overlay_track.overlays if self._text_overlay_track else []
+        return self._pack_intervals(items)
 
     def _img_overlay_total_h(self, rows: list[int]) -> int:
         """이미지 오버레이 영역의 총 높이 (행 수 기반)."""
@@ -278,20 +265,20 @@ class TimelineWidget(QWidget):
         """텍스트 오버레이 영역의 Y 시작 위치."""
         img_rows = self._compute_overlay_rows()
         img_total_h = self._img_overlay_total_h(img_rows)
-        gap = 4 if img_total_h > 0 else 0
+        gap = _TRACK_GAP if img_total_h > 0 else 0
         return self._img_overlay_base_y() + img_total_h + gap
 
     def _waveform_y(self) -> int:
         """Calculate Y position for waveform display."""
         num_v = len(self._project.video_tracks) if self._project else 1
-        return _CLIP_Y + (num_v * _CLIP_H) + 4
+        return _CLIP_Y + (num_v * _CLIP_H) + _TRACK_GAP
 
     def _bgm_track_base_y(self) -> int:
         num_text_rows = self._get_num_text_rows() if hasattr(self, "_get_num_text_rows") else 1
-        return self._text_overlay_base_y() + num_text_rows * (self._TEXT_ROW_H + self._TEXT_ROW_GAP) + 8
+        return self._text_overlay_base_y() + num_text_rows * (self._TEXT_ROW_H + self._TEXT_ROW_GAP) + (_TRACK_GAP * 2)
 
     def _bgm_track_y(self, track_index: int) -> int:
-        return self._bgm_track_base_y() + track_index * (_BGM_H + 4)
+        return self._bgm_track_base_y() + track_index * (_BGM_H + _TRACK_GAP)
 
     # -------------------------------------------------------- 공개 API
 
@@ -482,6 +469,24 @@ class TimelineWidget(QWidget):
         self.zoom_changed.emit(self.get_zoom_percent())
         self.update()
 
+    def set_zoom_percent(self, percent: int) -> None:
+        """Set zoom level by percentage (100 = fit)."""
+        if self._duration_ms <= 0 or percent <= 0:
+            return
+
+        # percent = (duration / visible) * 100
+        # visible = duration * 100 / percent
+        new_range = float(self._duration_ms) * 100.0 / float(percent)
+
+        # Keep zoom centered on playhead
+        center_ms = self._playhead_ms
+        self._visible_start_ms = max(0.0, center_ms - new_range / 2.0)
+        self._px_per_ms = self.width() / new_range
+        self._clamp_visible_start(new_range)
+        self._invalidate_static_cache()
+        self.zoom_changed.emit(self.get_zoom_percent())
+        self.update()
+
     def get_zoom_percent(self) -> int:
         """현재 줌 레벨을 퍼센트로 반환 (100% = 전체 맞춤)."""
         if self._duration_ms <= 0:
@@ -531,6 +536,59 @@ class TimelineWidget(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         self._painter.paint()
+        
+        # Draw drag feedback for clip move
+        if self._drag_mgr.mode in (DragMode.CLIP_MOVE, DragMode.CLIP_DUPLICATE):
+            dst_track = self._drag_mgr.dest_track_index
+            dst_idx = self._drag_mgr.dest_insert_index
+            if dst_track >= 0 and dst_idx >= 0 and self._project:
+                from PySide6.QtGui import QPainter, QPen, QColor
+                painter = QPainter(self)
+                y = self._video_track_y(dst_track)
+                
+                # Calculate X position for insertion marker
+                vt = self._project.video_tracks[dst_track]
+                target_ms = 0
+                for i in range(dst_idx):
+                    if i < len(vt.clips):
+                        target_ms += vt.clips[i].duration_ms
+                
+                x = self._ms_to_x(target_ms)
+                
+                painter.setPen(QPen(QColor(255, 255, 0), 3))
+                painter.drawLine(int(x), y, int(x), y + _CLIP_H)
+                
+                if self._drag_mgr.mode == DragMode.CLIP_DUPLICATE:
+                    painter.setPen(QPen(QColor(0, 255, 0), 3))  # Green for copy
+                    painter.drawLine(int(x), y, int(x), y + _CLIP_H)
+
+                painter.drawLine(int(x)-4, y, int(x)+4, y)
+                painter.drawLine(int(x)-4, y+_CLIP_H, int(x)+4, y+_CLIP_H)
+                painter.end()
+
+    def get_selected_item(self) -> tuple[str, int, int]:
+        """Return (type, track_index, item_index) of the currently selected item."""
+        if self._selected_clip_index >= 0:
+            return "clip", self._selected_clip_track_index, self._selected_clip_index
+        if self._selected_overlay_index >= 0:
+            return "image", 0, self._selected_overlay_index
+        if self._selected_text_overlay_index >= 0:
+            return "text", 0, self._selected_text_overlay_index
+        if self._selected_bgm_clip_index >= 0:
+            return "bgm", self._selected_bgm_track_index, self._selected_bgm_clip_index
+        if self._selected_index >= 0:
+            return "subtitle", 0, self._selected_index
+        return "none", -1, -1
+
+    def _clear_selection(self) -> None:
+        self._selected_index = -1
+        self._audio_selected = False
+        self._selected_overlay_index = -1
+        self._selected_text_overlay_index = -1
+        self._selected_clip_index = -1
+        self._selected_clip_track_index = -1
+        self._selected_bgm_clip_index = -1
+        self._selected_bgm_track_index = -1
 
     def clip_timeline_start_ms(self, clip: VideoClip) -> int:
         """Find timeline start position of a clip."""
@@ -572,6 +630,7 @@ class TimelineWidget(QWidget):
             if vt and vt.locked:
                 return
             if hit == "volume_point":
+                self._clear_selection()
                 self._selected_clip_track_index = v_idx
                 self._selected_clip_index = seg_idx
                 dm.start_volume_point(seg_idx, v_idx)
@@ -579,16 +638,15 @@ class TimelineWidget(QWidget):
                 self.update()
                 return
             if hit == "clip_body":
+                self._clear_selection()
                 self._selected_clip_track_index = v_idx
                 self._selected_clip_index = seg_idx
-                self._selected_index = -1
-                self._selected_overlay_index = -1
+                dm.start_clip(DragMode.CLIP_MOVE, v_idx, seg_idx, x, y)
                 self.clip_selected.emit(v_idx, seg_idx)
             elif hit == "clip_right_edge":
+                self._clear_selection()
                 self._selected_clip_track_index = v_idx
                 self._selected_clip_index = seg_idx
-                self._selected_index = -1
-                self._selected_overlay_index = -1
                 dm.start_clip(DragMode.CLIP_TRIM_RIGHT, v_idx, seg_idx, x)
                 self.clip_selected.emit(v_idx, seg_idx)
             self.update()
@@ -601,9 +659,9 @@ class TimelineWidget(QWidget):
             audio_mode_map = {"body": DragMode.AUDIO_MOVE, "left_edge": DragMode.AUDIO_RESIZE_LEFT,
                               "right_edge": DragMode.AUDIO_RESIZE_RIGHT}
             if hit in audio_mode_map:
+                self._clear_selection()
                 self._audio_selected = True
                 self._selected_index = seg_idx
-                self._selected_overlay_index = -1
                 dm.start_audio(audio_mode_map[hit], x)
                 self.segment_selected.emit(seg_idx)
             self.update()
@@ -617,8 +675,8 @@ class TimelineWidget(QWidget):
                             "img_right_edge": DragMode.IMAGE_RESIZE_RIGHT,
                             "img_body": DragMode.IMAGE_MOVE}
             if hit in img_mode_map:
+                self._clear_selection()
                 self._selected_overlay_index = seg_idx
-                self._selected_index = -1
                 dm.start_image(img_mode_map[hit], seg_idx, x)
                 self.image_overlay_selected.emit(seg_idx)
             return
@@ -630,9 +688,8 @@ class TimelineWidget(QWidget):
                                  "text_right_edge": DragMode.TEXT_RESIZE_RIGHT,
                                  "text_body": DragMode.TEXT_MOVE}
                 if hit in text_mode_map:
+                    self._clear_selection()
                     self._selected_text_overlay_index = seg_idx
-                    self._selected_index = -1
-                    self._selected_overlay_index = -1
                     dm.start_text(text_mode_map[hit], seg_idx, x)
                     self.text_overlay_selected.emit(seg_idx)
             return
@@ -643,11 +700,9 @@ class TimelineWidget(QWidget):
                 track = self._bgm_tracks[v_idx]
                 if track.locked:
                     return
+                self._clear_selection()
                 self._selected_bgm_track_index = v_idx
                 self._selected_bgm_clip_index = seg_idx
-                self._selected_index = -1
-                self._selected_overlay_index = -1
-                self._selected_text_overlay_index = -1
                 bgm_mode_map = {"bgm_left_edge": DragMode.BGM_RESIZE_LEFT,
                                 "bgm_right_edge": DragMode.BGM_RESIZE_RIGHT,
                                 "bgm_body": DragMode.BGM_MOVE}
@@ -663,17 +718,14 @@ class TimelineWidget(QWidget):
             seg_mode_map = {"left_edge": DragMode.RESIZE_LEFT,
                             "right_edge": DragMode.RESIZE_RIGHT,
                             "body": DragMode.MOVE}
-            self._audio_selected = False
-            self._selected_overlay_index = -1
+            self._clear_selection()
             if hit == "body":
                 self._selected_index = seg_idx
                 self.segment_selected.emit(seg_idx)
             dm.start_subtitle(seg_mode_map[hit], seg_idx, x)
             return
         else:
-            self._audio_selected = False
-            self._selected_index = -1
-            self._selected_overlay_index = -1
+            self._clear_selection()
             dm.start_seek(x)
 
         self.update()
@@ -690,6 +742,10 @@ class TimelineWidget(QWidget):
 
         if hit.startswith("text_"):
             self.text_overlay_edit_requested.emit(seg_idx)
+            return
+        
+        if hit.startswith("clip_"):
+            self.clip_double_clicked.emit(v_idx, seg_idx)
             return
 
         super().mouseDoubleClickEvent(event)
@@ -737,9 +793,12 @@ class TimelineWidget(QWidget):
             
             trans_act = None
             if vt and seg_idx < len(vt.clips) - 1:
-                trans_act = menu.addAction(tr("Add Transition..."))
+                clip = vt.clips[seg_idx]
+                label = tr("Edit Transition...") if hasattr(clip, "transition_out") and clip.transition_out else tr("Add Transition...")
+                trans_act = menu.addAction(label)
             
             volume_act = menu.addAction(tr("Adjust Volume..."))
+            speed_act = menu.addAction(tr("Change Speed..."))
                 
             action = menu.exec(event.globalPos())
             if action == split_act:
@@ -750,6 +809,8 @@ class TimelineWidget(QWidget):
                 self.transition_requested.emit(v_idx, seg_idx)
             elif action == volume_act:
                 self.clip_volume_requested.emit(v_idx, seg_idx)
+            elif action == speed_act:
+                self.clip_speed_requested.emit(v_idx, seg_idx)
             return
 
         if hit.startswith("img_"):
@@ -802,6 +863,9 @@ class TimelineWidget(QWidget):
         
         insert_image_action = menu.addAction(tr("Insert Image Overlay"))
         insert_text_action = menu.addAction(tr("Insert Text Overlay"))
+        menu.addSeparator()
+        deselect_action = menu.addAction(tr("Deselect All"))
+
         action = menu.exec(event.globalPos())
         if action == insert_image_action:
             ms = int(max(0, min(int(self._duration_ms), int(self._x_to_ms(x)))))
@@ -809,6 +873,9 @@ class TimelineWidget(QWidget):
         elif action == insert_text_action:
             ms = int(max(0, min(int(self._duration_ms), int(self._x_to_ms(x)))))
             self.insert_text_requested.emit(ms)
+        elif action == deselect_action:
+            self._clear_selection()
+            self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """휠: 줌, Ctrl+휠: 스크롤."""
@@ -835,122 +902,7 @@ class TimelineWidget(QWidget):
 
     def _hit_test(self, x: float, y: float) -> tuple[int, str, int]:
         """(x,y)에 해당하는 (인덱스, 히트 영역, 트랙 인덱스) 반환. 없으면 (-1, '', -1)."""
-        playhead_x = self._ms_to_x(self._playhead_ms)
-        if abs(x - playhead_x) <= _PLAYHEAD_HIT_PX:
-            return -3, "playhead", -1
-
-        # Video tracks
-        if self._project:
-            for v_idx, vt in enumerate(self._project.video_tracks):
-                track_y = self._video_track_y(v_idx)
-                if track_y <= y < track_y + _CLIP_H:
-                    offset = 0
-                    for i, clip in enumerate(vt.clips):
-                        x1 = self._ms_to_x(offset)
-                        x2 = self._ms_to_x(offset + clip.duration_ms)
-                        offset += clip.duration_ms
-                        if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                            continue
-                        if abs(x - x1) <= _EDGE_PX and i > 0:
-                            return i, "clip_left_edge", v_idx
-                        if abs(x - x2) <= _EDGE_PX and i < len(vt.clips) - 1:
-                            return i, "clip_right_edge", v_idx
-                        if x1 <= x <= x2:
-                            # --- Check for volume point hits ---
-                            if hasattr(clip, "volume_points") and clip.volume_points:
-                                rect_y = track_y
-                                rect_h = _CLIP_H
-                                margin = 4
-                                # Helper to map volume to y (same logic as drawing)
-                                def vol_to_y(vol):
-                                    norm = (2.0 - vol) / 2.0
-                                    return rect_y + margin + norm * (rect_h - 2 * margin)
-                                
-                                for p_idx, p in enumerate(clip.volume_points):
-                                    px = x1 + p.offset_ms * self._px_per_ms
-                                    py = vol_to_y(p.volume)
-                                    if abs(x - px) <= self._VOLUME_POINT_RADIUS + 2 and abs(y - py) <= self._VOLUME_POINT_RADIUS + 2:
-                                        # Use a special string or tuple for volume point hit
-                                        self._drag_mgr.clip_ref = clip
-                                        return p_idx, "volume_point", v_idx
-                            
-                            return i, "clip_body", v_idx
-
-        # Subtitle tracks
-        seg_y = self._subtitle_track_y()
-        if seg_y <= y < seg_y + _SEG_H:
-             if self._track:
-                 for i, seg in enumerate(self._track):
-                     x1 = self._ms_to_x(seg.start_ms)
-                     x2 = self._ms_to_x(seg.end_ms)
-                     if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
-                     if abs(x - x1) <= _EDGE_PX: return i, "left_edge", 0
-                     if abs(x - x2) <= _EDGE_PX: return i, "right_edge", 0
-                     if x1 <= x <= x2: return i, "body", 0
-
-        # Audio tracks
-        audio_y = self._audio_track_y()
-        if audio_y <= y < audio_y + _AUDIO_H:
-             if self._track:
-                 for i, seg in enumerate(self._track):
-                     if not seg.audio_file: continue
-                     x1 = self._ms_to_x(seg.start_ms)
-                     x2 = self._ms_to_x(seg.end_ms)
-                     if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
-                     if abs(x - x1) <= _EDGE_PX: return i, "left_edge", 0
-                     if abs(x - x2) <= _EDGE_PX: return i, "right_edge", 0
-                     if x1 <= x <= x2: return i, "body", 0
-
-        # Overlays
-        if self._image_overlay_track:
-            img_base_y = self._img_overlay_base_y()
-            rows = self._compute_overlay_rows()
-            total_h = self._img_overlay_total_h(rows)
-            if img_base_y <= y <= img_base_y + total_h:
-                for i, ov in enumerate(self._image_overlay_track):
-                    row = rows[i]
-                    ov_y = img_base_y + row * (self._IMG_ROW_H + self._IMG_ROW_GAP)
-                    if not (ov_y <= y <= ov_y + self._IMG_ROW_H): continue
-                    x1 = self._ms_to_x(ov.start_ms)
-                    x2 = self._ms_to_x(ov.end_ms)
-                    if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
-                    if abs(x - x1) <= _EDGE_PX: return i, "img_left_edge", 0
-                    if abs(x - x2) <= _EDGE_PX: return i, "img_right_edge", 0
-                    if x1 <= x <= x2: return i, "img_body", 0
-
-        # Text Overlays
-        if self._text_overlay_track:
-            text_base_y = self._text_overlay_base_y()
-            rows = self._compute_text_overlay_rows()
-            for i, overlay in enumerate(self._text_overlay_track.overlays):
-                row = rows[i]
-                ov_y = text_base_y + row * (self._TEXT_ROW_H + self._TEXT_ROW_GAP)
-                if not (ov_y <= y <= ov_y + self._TEXT_ROW_H): continue
-                x1 = self._ms_to_x(overlay.start_ms)
-                x2 = self._ms_to_x(overlay.end_ms)
-                if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX: continue
-                if abs(x - x1) <= _EDGE_PX: return i, "text_left_edge", 0
-                if abs(x - x2) <= _EDGE_PX: return i, "text_right_edge", 0
-                if x1 <= x <= x2: return i, "text_body", 0
-
-        # BGM tracks
-        if hasattr(self, "_bgm_tracks"):
-            for track_idx, track in enumerate(self._bgm_tracks):
-                ty = self._bgm_track_y(track_idx)
-                if ty <= y < ty + _BGM_H:
-                    for i, clip in enumerate(track.clips):
-                        x1 = self._ms_to_x(clip.start_ms)
-                        x2 = self._ms_to_x(clip.start_ms + clip.duration_ms)
-                        if x < x1 - _EDGE_PX or x > x2 + _EDGE_PX:
-                            continue
-                        if abs(x - x1) <= _EDGE_PX:
-                            return i, "bgm_left_edge", track_idx
-                        if abs(x - x2) <= _EDGE_PX:
-                            return i, "bgm_right_edge", track_idx
-                        if x1 <= x <= x2:
-                            return i, "bgm_body", track_idx
-
-        return -1, "", -1
+        return self._hit_tester.hit_test(x, y)
 
     # ----------------------------------------------------------- 유틸
 
@@ -1008,6 +960,35 @@ class TimelineWidget(QWidget):
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if self._is_valid_media_drop(event):
             self._drop_indicator_x = event.position().x()
+            
+            # Determine target track for video files
+            self._drop_target_track_index = -1
+            is_video = False
+            mime = event.mimeData()
+            
+            # Check internal drag type
+            if mime.hasFormat("application/x-fmm-media-type"):
+                media_type = bytes(mime.data("application/x-fmm-media-type")).decode("utf-8", errors="ignore")
+                if media_type == "video":
+                    is_video = True
+            
+            # Check file extension for external drag
+            if not is_video and mime.hasUrls():
+                url = mime.urls()[0]
+                path = url.toLocalFile()
+                if path:
+                    from pathlib import Path
+                    if Path(path).suffix.lower() in VIDEO_EXTENSIONS:
+                        is_video = True
+            
+            if is_video and self._project:
+                y = event.position().y()
+                for i in range(len(self._project.video_tracks)):
+                    ty = self._video_track_y(i)
+                    if ty <= y < ty + _CLIP_H:
+                        self._drop_target_track_index = i
+                        break
+
             self.update()
             event.acceptProposedAction()
         else:
@@ -1015,10 +996,13 @@ class TimelineWidget(QWidget):
 
     def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
         self._drop_indicator_x = -1
+        self._drop_target_track_index = -1
         self.update()
 
     def dropEvent(self, event: QDropEvent) -> None:
+        target_track = self._drop_target_track_index
         self._drop_indicator_x = -1
+        self._drop_target_track_index = -1
         mime = event.mimeData()
         if not mime.hasUrls() or not mime.urls():
             event.ignore()
@@ -1039,16 +1023,30 @@ class TimelineWidget(QWidget):
         else:
             position_ms = 0
 
-        if suffix in IMAGE_EXTENSIONS:
-            self.image_file_dropped.emit(file_path, position_ms)
-            event.acceptProposedAction()
-        elif suffix in VIDEO_EXTENSIONS:
-            self.video_file_dropped.emit(file_path, position_ms)
-            event.acceptProposedAction()
-        elif suffix in AUDIO_EXTENSIONS:
-            self.audio_file_dropped.emit(file_path, position_ms)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        # Group files by type
+        images = []
+        videos = []
+        audios = []
+        
+        for url in mime.urls():
+            path = url.toLocalFile()
+            if not path: continue
+            p = Path(path)
+            s = p.suffix.lower()
+            if s in IMAGE_EXTENSIONS:
+                images.append(str(p))
+            elif s in VIDEO_EXTENSIONS:
+                videos.append(str(p))
+            elif s in AUDIO_EXTENSIONS:
+                audios.append(str(p))
+
+        if images:
+            self.image_files_dropped.emit(images, position_ms)
+        if videos:
+            self.video_files_dropped.emit(videos, position_ms, target_track)
+        if audios:
+            self.audio_files_dropped.emit(audios, position_ms)
+            
+        event.acceptProposedAction()
 
         self.update()

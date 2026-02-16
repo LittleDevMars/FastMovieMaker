@@ -26,6 +26,9 @@ pytest tests/test_models.py -v
 
 # Run a specific test
 pytest tests/test_models.py::TestSubtitleTrack::test_segment_at -v
+
+# Controller unit tests (mock AppContext, no GUI)
+pytest tests/test_controllers.py -v
 ```
 
 ## External Dependencies
@@ -57,10 +60,13 @@ src/
     │   ├── clip_controller.py
     │   ├── overlay_controller.py
     │   └── project_controller.py
-    ├── main_window.py       # Thin shell (event binding only)
-    ├── timeline_widget.py   # Layout + event handlers
+    ├── main_window.py       # Thin shell (~460 lines: init + signal wiring)
+    ├── main_window_ui.py    # UI layout (build_main_window_ui)
+    ├── main_window_menu.py # Menu bar (build_main_window_menu)
+    ├── timeline_widget.py   # Layout + event handlers (~940 lines)
     ├── timeline_painter.py  # NumPy-vectorized rendering
     ├── timeline_drag.py     # Drag handling with bisect snap
+    ├── timeline_hit_test.py # (x,y) hit test (TimelineHitTester)
     └── dialogs/
 ```
 
@@ -94,6 +100,8 @@ Models and services are intentionally Qt-free for testability. Workers wrap serv
    - Transcribe → returns `SubtitleTrack`
 3. `SubtitleTrack` is passed to `VideoPlayerWidget`, `TimelineWidget`, and `SubtitlePanel`
 4. On `positionChanged`, `VideoPlayerWidget` queries `SubtitleTrack.segment_at(position_ms)` for current subtitle (O(log n) binary search)
+
+**Whisper cancel:** Cancel closes the dialog immediately; transcription stops at the next segment boundary (~5s chunks via `chunk_length=5`).
 
 ### Time Units
 

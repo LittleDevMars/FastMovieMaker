@@ -9,21 +9,12 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QTimer, Qt, Slot
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut, QUndoStack
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QUndoStack
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
-    QHBoxLayout,
-    QLabel,
     QMainWindow,
-    QMenu,
     QMessageBox,
-    QPushButton,
-    QSplitter,
-    QStatusBar,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
 )
 
 from src.models.project import ProjectState
@@ -36,14 +27,6 @@ from src.ui.controllers.playback_controller import PlaybackController
 from src.ui.controllers.project_controller import ProjectController
 from src.ui.controllers.subtitle_controller import SubtitleController
 from src.ui.dialogs.preferences_dialog import PreferencesDialog
-from src.ui.media_library_panel import MediaLibraryPanel
-from src.ui.templates_panel import TemplatesPanel
-from src.ui.playback_controls import PlaybackControls
-from src.ui.subtitle_panel import SubtitlePanel
-from src.ui.timeline_widget import TimelineWidget
-from src.ui.track_header_panel import TrackHeaderPanel
-from src.ui.track_selector import TrackSelector
-from src.ui.video_player_widget import VideoPlayerWidget
 from src.utils.config import APP_NAME, APP_VERSION, find_ffmpeg
 from src.utils.i18n import tr
 
@@ -158,311 +141,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(tr("Warning: FFmpeg not found – subtitle generation won't work"))
         else:
             self.statusBar().showMessage(tr("Ready"))
+            
+        # Check proxies for media library items
+        self._media_panel.check_proxies()
 
     # ------------------------------------------------------------------ UI
 
     def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-
-        # Video player
-        self._video_widget = VideoPlayerWidget(self._player)
-
-        # Track selector + subtitle panel (right side)
-        self._track_selector = TrackSelector()
-        self._subtitle_panel = SubtitlePanel()
-
-        # Subtitles tab
-        subtitle_tab = QWidget()
-        subtitle_layout = QVBoxLayout(subtitle_tab)
-        subtitle_layout.setContentsMargins(0, 0, 0, 0)
-        subtitle_layout.setSpacing(0)
-        subtitle_layout.addWidget(self._track_selector)
-        subtitle_layout.addWidget(self._subtitle_panel, 1)
-
-        # Media library tab
-        self._media_panel = MediaLibraryPanel()
-
-        # Templates tab
-        self._templates_panel = TemplatesPanel()
-
-        # Overlay state
-        self._overlay_template = None  # OverlayTemplate | None
-
-        # Right tabs
-        self._right_tabs = QTabWidget()
-        self._right_tabs.addTab(subtitle_tab, tr("Subtitles"))
-        self._right_tabs.addTab(self._media_panel, tr("Media"))
-        self._right_tabs.addTab(self._templates_panel, tr("Templates"))
-
-        # Top splitter: video | right tabs
-        self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._top_splitter.addWidget(self._video_widget)
-        self._top_splitter.addWidget(self._right_tabs)
-        self._top_splitter.setStretchFactor(0, 3)
-        self._top_splitter.setStretchFactor(1, 1)
-        self._top_splitter.setSizes([1050, 390])
-
-        # Playback controls
-        self._controls = PlaybackControls(self._player, self._audio_output)
-        self._controls.set_tts_audio_output(self._tts_audio_output)
-
-        # Timeline
-        self._timeline = TimelineWidget()
-        self._timeline.set_waveform_service(self._waveform_service)
-        self._track_headers = TrackHeaderPanel()
-        self._track_headers.state_changed.connect(self._on_track_state_changed)
-
-        # Timeline container
-        self._timeline_container = QWidget()
-        timeline_outer_layout = QHBoxLayout(self._timeline_container)
-        timeline_outer_layout.setContentsMargins(0, 0, 0, 0)
-        timeline_outer_layout.setSpacing(0)
-        timeline_outer_layout.addWidget(self._track_headers)
-        timeline_outer_layout.addWidget(self._timeline, 1)
-
-        # Timeline zoom toolbar
-        self._zoom_toolbar = QWidget()
-        self._zoom_toolbar.setFixedHeight(28)
-        self._zoom_toolbar.setStyleSheet("background-color: rgb(40, 40, 40); border-top: 1px solid rgb(60, 60, 60);")
-        zoom_layout = QHBoxLayout(self._zoom_toolbar)
-        zoom_layout.setContentsMargins(6, 2, 6, 2)
-        zoom_layout.setSpacing(4)
-
-        btn_style = """
-            QPushButton { background: rgb(60,60,60); color: white; border: 1px solid rgb(80,80,80); border-radius: 3px; padding: 1px 8px; font-size: 12px; }
-            QPushButton:hover { background: rgb(80,80,80); }
-            QPushButton:checked { background: rgb(60, 100, 180); border: 1px solid rgb(100, 160, 240); }
-        """
-
-        self._snap_toggle_btn = QPushButton(tr("Snap"))
-        self._snap_toggle_btn.setCheckable(True)
-        self._snap_toggle_btn.setChecked(True)
-        self._snap_toggle_btn.setFixedWidth(50)
-        self._snap_toggle_btn.setStyleSheet(btn_style)
-        self._snap_toggle_btn.setToolTip(tr("Toggle Magnetic Snap (S)"))
-        self._snap_toggle_btn.clicked.connect(self._toggle_magnetic_snap)
-
-        self._zoom_fit_btn = QPushButton(tr("Fit"))
-        self._zoom_fit_btn.setFixedWidth(36)
-        self._zoom_fit_btn.setStyleSheet(btn_style)
-        self._zoom_fit_btn.setToolTip(tr("Fit entire timeline (Ctrl+0)"))
-        self._zoom_fit_btn.clicked.connect(self._timeline.zoom_fit)
-
-        self._ripple_toggle_btn = QPushButton("Ripple")
-        self._ripple_toggle_btn.setCheckable(True)
-        self._ripple_toggle_btn.setChecked(False)
-        self._ripple_toggle_btn.setFixedWidth(50)
-        self._ripple_toggle_btn.setStyleSheet(btn_style)
-        self._ripple_toggle_btn.setToolTip(tr("Toggle Ripple Edit Mode (R)"))
-        self._ripple_toggle_btn.clicked.connect(self._toggle_ripple_mode)
-
-        self._zoom_out_btn = QPushButton("-")
-        self._zoom_out_btn.setFixedWidth(28)
-        self._zoom_out_btn.setStyleSheet(btn_style)
-        self._zoom_out_btn.setToolTip(tr("Zoom out (Ctrl+-)"))
-        self._zoom_out_btn.clicked.connect(self._timeline.zoom_out)
-
-        self._zoom_label = QLabel("100%")
-        self._zoom_label.setFixedWidth(50)
-        self._zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._zoom_label.setStyleSheet("color: rgb(180,180,180); font-size: 11px; border: none;")
-
-        self._zoom_in_btn = QPushButton("+")
-        self._zoom_in_btn.setFixedWidth(28)
-        self._zoom_in_btn.setStyleSheet(btn_style)
-        self._zoom_in_btn.setToolTip(tr("Zoom in (Ctrl++)"))
-        self._zoom_in_btn.clicked.connect(self._timeline.zoom_in)
-
-        zoom_layout.addWidget(self._zoom_fit_btn)
-        zoom_layout.addWidget(self._zoom_out_btn)
-        zoom_layout.addWidget(self._zoom_label)
-        zoom_layout.addWidget(self._zoom_in_btn)
-        zoom_layout.addStretch()
-
-        self._timeline.zoom_changed.connect(lambda pct: self._zoom_label.setText(f"{pct}%"))
-
-        # Main layout
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        main_layout.addWidget(self._top_splitter, 1)
-        main_layout.addWidget(self._controls)
-        main_layout.addWidget(self._zoom_toolbar)
-        main_layout.addWidget(self._timeline_container)
-
-        # Status bar
-        self.setStatusBar(QStatusBar())
-
-    # ------------------------------------------------------------------ Menu
+        from src.ui.main_window_ui import build_main_window_ui
+        build_main_window_ui(
+            self,
+            self._player,
+            self._audio_output,
+            self._tts_audio_output,
+            self._waveform_service,
+        )
 
     def _build_menu(self) -> None:
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu(tr("&File"))
-
-        open_action = QAction(tr("&Open Video..."), self)
-        open_action.setShortcut(QKeySequence("Ctrl+O"))
-        open_action.triggered.connect(self._media.on_open_video)
-        file_menu.addAction(open_action)
-
-        import_srt_action = QAction(tr("&Import SRT..."), self)
-        import_srt_action.setShortcut(QKeySequence("Ctrl+I"))
-        import_srt_action.triggered.connect(self._subtitle_ctrl.on_import_srt)
-        file_menu.addAction(import_srt_action)
-
-        import_srt_track_action = QAction(tr("Import SRT to &New Track..."), self)
-        import_srt_track_action.triggered.connect(self._subtitle_ctrl.on_import_srt_new_track)
-        file_menu.addAction(import_srt_track_action)
-
-        file_menu.addSeparator()
-
-        export_action = QAction(tr("&Export SRT..."), self)
-        export_action.setShortcut(QKeySequence("Ctrl+E"))
-        export_action.triggered.connect(self._subtitle_ctrl.on_export_srt)
-        file_menu.addAction(export_action)
-
-        export_video_action = QAction(tr("Export &Video..."), self)
-        export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
-        export_video_action.triggered.connect(self._project_ctrl.on_export_video)
-        file_menu.addAction(export_video_action)
-
-        batch_export_action = QAction(tr("&Batch Export..."), self)
-        batch_export_action.triggered.connect(self._project_ctrl.on_batch_export)
-        file_menu.addAction(batch_export_action)
-
-        file_menu.addSeparator()
-
-        save_action = QAction(tr("&Save Project..."), self)
-        save_action.setShortcut(QKeySequence("Ctrl+S"))
-        save_action.triggered.connect(self._project_ctrl.on_save_project)
-        file_menu.addAction(save_action)
-
-        load_action = QAction(tr("&Load Project..."), self)
-        load_action.setShortcut(QKeySequence("Ctrl+L"))
-        load_action.triggered.connect(self._project_ctrl.on_load_project)
-        file_menu.addAction(load_action)
-
-        self._recent_menu = QMenu(tr("Recent &Projects"), self)
-        file_menu.addMenu(self._recent_menu)
-        self._project_ctrl.update_recent_menu()
-
-        file_menu.addSeparator()
-
-        quit_action = QAction(tr("&Quit"), self)
-        quit_action.setShortcut(QKeySequence("Ctrl+Q"))
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
-
-        # Edit menu
-        edit_menu = menubar.addMenu(tr("&Edit"))
-        undo_action = self._undo_stack.createUndoAction(self, tr("&Undo"))
-        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
-        edit_menu.addAction(undo_action)
-        redo_action = self._undo_stack.createRedoAction(self, tr("&Redo"))
-        redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
-        edit_menu.addAction(redo_action)
-        edit_menu.addSeparator()
-
-        split_action = QAction(tr("S&plit Subtitle"), self)
-        split_action.triggered.connect(self._subtitle_ctrl.on_split_subtitle)
-        edit_menu.addAction(split_action)
-        merge_action = QAction(tr("&Merge Subtitles"), self)
-        merge_action.triggered.connect(self._subtitle_ctrl.on_merge_subtitles)
-        edit_menu.addAction(merge_action)
-        edit_menu.addSeparator()
-
-        add_text_overlay_action = QAction(tr("Add &Text Overlay"), self)
-        add_text_overlay_action.setShortcut(QKeySequence("Ctrl+Shift+T"))
-        add_text_overlay_action.triggered.connect(self._overlay.on_add_text_overlay)
-        edit_menu.addAction(add_text_overlay_action)
-        edit_menu.addSeparator()
-
-        batch_shift_action = QAction(tr("&Batch Shift Timing..."), self)
-        batch_shift_action.triggered.connect(self._subtitle_ctrl.on_batch_shift)
-        edit_menu.addAction(batch_shift_action)
-        edit_menu.addSeparator()
-
-        jump_frame_action = QAction(tr("&Jump to Frame..."), self)
-        jump_frame_action.setShortcut(QKeySequence("Ctrl+J"))
-        jump_frame_action.triggered.connect(self._playback.on_jump_to_frame)
-        edit_menu.addAction(jump_frame_action)
-        edit_menu.addSeparator()
-
-        preferences_action = QAction(tr("&Preferences..."), self)
-        preferences_action.setShortcut(QKeySequence("Ctrl+,"))
-        preferences_action.triggered.connect(self._on_preferences)
-        edit_menu.addAction(preferences_action)
-
-        # Subtitles menu
-        sub_menu = menubar.addMenu(tr("&Subtitles"))
-
-        gen_action = QAction(tr("&Generate (Whisper)..."), self)
-        gen_action.setShortcut(QKeySequence("Ctrl+G"))
-        gen_action.triggered.connect(self._subtitle_ctrl.on_generate_subtitles)
-        sub_menu.addAction(gen_action)
-
-        gen_timeline_action = QAction(tr("Generate from &Edited Timeline..."), self)
-        gen_timeline_action.setShortcut(QKeySequence("Ctrl+Shift+G"))
-        gen_timeline_action.triggered.connect(self._subtitle_ctrl.on_generate_subtitles_from_timeline)
-        sub_menu.addAction(gen_timeline_action)
-
-        tts_action = QAction(tr("Generate &Speech (TTS)..."), self)
-        tts_action.setShortcut(QKeySequence("Ctrl+T"))
-        tts_action.triggered.connect(self._subtitle_ctrl.on_generate_tts)
-        sub_menu.addAction(tts_action)
-
-        play_tts_action = QAction(tr("&Play TTS Audio"), self)
-        play_tts_action.setShortcut(QKeySequence("Ctrl+P"))
-        play_tts_action.triggered.connect(self._subtitle_ctrl.on_play_tts_audio)
-        sub_menu.addAction(play_tts_action)
-
-        regen_audio_action = QAction(tr("&Regenerate Audio from Timeline"), self)
-        regen_audio_action.setShortcut(QKeySequence("Ctrl+R"))
-        regen_audio_action.triggered.connect(self._subtitle_ctrl.on_regenerate_audio)
-        sub_menu.addAction(regen_audio_action)
-
-        clear_action = QAction(tr("&Clear Subtitles"), self)
-        clear_action.triggered.connect(self._subtitle_ctrl.on_clear_subtitles)
-        sub_menu.addAction(clear_action)
-        sub_menu.addSeparator()
-
-        translate_action = QAction(tr("&Translate Track..."), self)
-        translate_action.triggered.connect(self._subtitle_ctrl.on_translate_track)
-        sub_menu.addAction(translate_action)
-        sub_menu.addSeparator()
-
-        style_action = QAction(tr("Default &Style..."), self)
-        style_action.triggered.connect(self._subtitle_ctrl.on_edit_default_style)
-        sub_menu.addAction(style_action)
-        sub_menu.addSeparator()
-
-        edit_position_action = QAction(tr("Edit Subtitle &Position"), self)
-        edit_position_action.setCheckable(True)
-        edit_position_action.setShortcut(QKeySequence("Ctrl+E"))
-        edit_position_action.triggered.connect(self._subtitle_ctrl.on_toggle_position_edit)
-        sub_menu.addAction(edit_position_action)
-        self._edit_position_action = edit_position_action
-
-        # View menu
-        view_menu = menubar.addMenu(tr("&View"))
-        self._proxy_action = QAction(tr("Use &Proxy Media"), self)
-        self._proxy_action.setCheckable(True)
-        self._proxy_action.setChecked(False)
-        self._proxy_action.triggered.connect(self._media.toggle_proxies)
-        view_menu.addAction(self._proxy_action)
-
-        # Help menu
-        help_menu = menubar.addMenu(tr("&Help"))
-        screenshot_action = QAction(tr("Take &Screenshot"), self)
-        screenshot_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        screenshot_action.triggered.connect(self._on_take_screenshot)
-        help_menu.addAction(screenshot_action)
-        help_menu.addSeparator()
-        about_action = QAction(tr("&About"), self)
-        about_action.triggered.connect(self._on_about)
-        help_menu.addAction(about_action)
+        from src.ui.main_window_menu import build_main_window_menu
+        build_main_window_menu(self)
 
     # ---------------------------------------------------------------- Shortcuts
 
@@ -481,7 +178,13 @@ class MainWindow(QMainWindow):
         sc_frame_right.activated.connect(lambda: self._playback.seek_frame_relative(1))
 
         sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
-        sc_del.activated.connect(self._subtitle_ctrl.on_delete_selected)
+        sc_del.activated.connect(self._on_delete_pressed)
+
+        sc_copy = QShortcut(QKeySequence.Copy, self)
+        sc_copy.activated.connect(self._on_copy)
+
+        sc_paste = QShortcut(QKeySequence.Paste, self)
+        sc_paste.activated.connect(self._on_paste)
 
         sc_split = QShortcut(QKeySequence("Ctrl+B"), self)
         sc_split.activated.connect(lambda: self._clip.on_split_clip(self._timeline._playhead_ms))
@@ -497,6 +200,36 @@ class MainWindow(QMainWindow):
 
         sc_snap = QShortcut(QKeySequence(Qt.Key.Key_S), self)
         sc_snap.activated.connect(self._toggle_magnetic_snap)
+
+    def _on_delete_pressed(self) -> None:
+        """Handle delete key press: delete selected item from timeline or subtitle panel."""
+        item_type, track_idx, item_idx = self._timeline.get_selected_item()
+        
+        if item_type == "clip":
+            self._clip.on_delete_clip(track_idx, item_idx)
+        elif item_type == "image":
+            self._overlay.on_delete_image_overlay(item_idx)
+        elif item_type == "text":
+            self._overlay.on_text_overlay_delete_requested(item_idx)
+        elif item_type == "bgm":
+            self._media.on_bgm_clip_delete_requested(track_idx, item_idx)
+        elif item_type == "subtitle":
+            self._subtitle_ctrl.on_segment_delete(item_idx)
+        else:
+            self._subtitle_ctrl.on_delete_selected()
+
+    def _on_copy(self) -> None:
+        item_type, _, _ = self._timeline.get_selected_item()
+        if item_type == "clip":
+            self._clip.copy_selected_clip()
+        # Future: handle other types
+
+    def _on_paste(self) -> None:
+        # Check clipboard content type
+        from PySide6.QtWidgets import QApplication
+        mime = QApplication.clipboard().mimeData()
+        if mime.hasFormat("application/x-fmm-clip"):
+            self._clip.paste_clip()
 
     # ------------------------------------------------------------ Signal wiring
 
@@ -553,8 +286,15 @@ class MainWindow(QMainWindow):
         self._timeline.clip_deleted.connect(self._clip.on_delete_clip)
         self._timeline.clip_trimmed.connect(self._clip.on_clip_trimmed)
         self._timeline.clip_speed_requested.connect(self._clip.on_edit_clip_speed)
+        self._timeline.clip_moved.connect(self._clip.on_clip_moved)
         self._timeline.transition_requested.connect(self._clip.on_transition_requested)
-        self._timeline.clip_volume_requested.connect(self._clip.on_clip_volume_requested)
+        self._timeline.clip_volume_requested.connect(self._clip.on_edit_clip_properties)
+        self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
+        self._track_headers.track_add_requested.connect(self._clip.on_add_video_track)
+        self._track_headers.track_remove_requested.connect(self._clip.on_remove_video_track)
+        self._track_headers.track_rename_requested.connect(self._clip.on_rename_video_track)
+        self._track_headers.subtitle_rename_requested.connect(self._subtitle_ctrl.on_rename_active_track)
+        self._timeline.status_message_requested.connect(lambda msg, t=0: self.statusBar().showMessage(msg, t))
 
         # PIP / text overlay drag → OverlayController
         self._video_widget.pip_position_changed.connect(self._overlay.on_pip_position_changed)
@@ -572,11 +312,16 @@ class MainWindow(QMainWindow):
         )
         self._media_panel.image_insert_to_timeline.connect(self._overlay.on_media_image_insert_to_timeline)
         self._media_panel.subtitle_imported.connect(self._subtitle_ctrl.on_import_subtitle)
+        self._media.proxy_ready.connect(self._media_panel.on_proxy_ready)
+        self._media.proxy_started.connect(self._media_panel.on_proxy_started)
+        self._media_panel.proxy_generation_requested.connect(
+            lambda path: self._media.start_proxy_generation(Path(path))
+        )
 
         # Timeline drag-and-drop
-        self._timeline.image_file_dropped.connect(self._overlay.on_image_file_dropped)
-        self._timeline.video_file_dropped.connect(self._clip.on_video_file_dropped)
-        self._timeline.audio_file_dropped.connect(self._media.on_audio_file_dropped)
+        self._timeline.image_files_dropped.connect(self._overlay.on_image_file_dropped)
+        self._timeline.video_files_dropped.connect(self._clip.on_video_file_dropped)
+        self._timeline.audio_files_dropped.connect(self._media.on_audio_file_dropped)
         self._timeline.bgm_clip_selected.connect(self._media.on_bgm_clip_selected)
         self._timeline.bgm_clip_moved.connect(self._media.on_bgm_clip_moved)
         self._timeline.bgm_clip_trimmed.connect(self._media.on_bgm_clip_trimmed)

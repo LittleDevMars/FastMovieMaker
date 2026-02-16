@@ -12,7 +12,7 @@ class ClipPropertiesDialog(QDialog):
 
     def __init__(self, parent=None, initial_volume: float = 1.0, 
                  initial_brightness: float = 1.0, initial_contrast: float = 1.0, 
-                 initial_saturation: float = 1.0):
+                 initial_saturation: float = 1.0, initial_speed: float = 1.0):
         super().__init__(parent)
         self.setWindowTitle(tr("Clip Properties"))
         self.setMinimumWidth(350)
@@ -37,7 +37,18 @@ class ClipPropertiesDialog(QDialog):
         vol_layout.addLayout(h_layout)
         layout.addWidget(vol_group)
 
-        # 2. Visual Filters Section
+        # 2. Speed Section
+        speed_group = QGroupBox(tr("Playback Speed"))
+        speed_layout = QVBoxLayout(speed_group)
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.25, 4.0)
+        self.speed_spin.setSingleStep(0.1)
+        self.speed_spin.setValue(initial_speed)
+        self.speed_spin.setSuffix("x")
+        speed_layout.addWidget(self.speed_spin)
+        layout.addWidget(speed_group)
+
+        # 3. Visual Filters Section
         filter_group = QGroupBox(tr("Visual Filters"))
         filter_layout = QVBoxLayout(filter_group)
 
@@ -82,4 +93,5 @@ class ClipPropertiesDialog(QDialog):
             "brightness": self.bright_spin.value(),
             "contrast": self.cont_spin.value(),
             "saturation": self.sat_spin.value(),
+            "speed": self.speed_spin.value(),
         }

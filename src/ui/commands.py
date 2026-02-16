@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from src.models.style import SubtitleStyle
     from src.models.subtitle import SubtitleSegment, SubtitleTrack
     from src.models.video_clip import VideoClip, VideoClipTrack
+    from src.models.video_clip import VideoClipTrack  # Runtime import for AddVideoTrackCommand
     from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
     from src.models.text_overlay import TextOverlay, TextOverlayTrack
     from src.models.audio import AudioClip, AudioTrack
@@ -743,6 +744,13 @@ class EditSpeedCommand(QUndoCommand):
                 seg.start_ms += delta
                 seg.end_ms += delta
         
+        # Shift overlays
+        if self._overlay_track:
+            for ov in self._overlay_track.overlays:
+                if ov.start_ms >= threshold:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+        
         # Shift Audio (TTS)
         if self._sub_track.audio_start_ms >= threshold:
              self._sub_track.audio_start_ms += delta
@@ -827,6 +835,254 @@ class EditClipPropertiesCommand(QUndoCommand):
         self._clip.brightness = values.get("brightness", self._clip.brightness)
         self._clip.contrast = values.get("contrast", self._clip.contrast)
         self._clip.saturation = values.get("saturation", self._clip.saturation)
+
+
+class AddVideoTrackCommand(QUndoCommand):
+    """Add a new video track."""
+
+    def __init__(self, project: ProjectState):
+        super().__init__(tr("Add Video Track"))
+        self._project = project
+        # Import here to avoid circular imports if any, or ensure it's available
+        from src.models.video_clip import VideoClipTrack
+        self._track = VideoClipTrack()
+
+    def redo(self) -> None:
+        self._project.video_tracks.append(self._track)
+
+    def undo(self) -> None:
+        if self._project.video_tracks:
+            self._project.video_tracks.pop()
+
+
+class RemoveVideoTrackCommand(QUndoCommand):
+    """Remove a video track."""
+
+    def __init__(self, project: ProjectState, index: int):
+        super().__init__(tr("Remove Video Track"))
+        self._project = project
+        self._index = index
+        self._track = project.video_tracks[index]
+
+    def redo(self) -> None:
+        if 0 <= self._index < len(self._project.video_tracks):
+            self._project.video_tracks.pop(self._index)
+
+    def undo(self) -> None:
+        self._project.video_tracks.insert(self._index, self._track)
+
+
+class MoveVideoClipCommand(QUndoCommand):
+    """Move a video clip from one track/position to another."""
+
+    def __init__(self, project: ProjectState,
+                 src_track_idx: int, src_clip_idx: int,
+                 dst_track_idx: int, dst_insert_idx: int,
+                 subtitle_track: SubtitleTrack | None = None,
+                 image_overlay_track: ImageOverlayTrack | None = None,
+                 move_linked: bool = False):
+        super().__init__(tr("Move Video Clip"))
+        self._project = project
+        self._src_track_idx = src_track_idx
+        self._src_clip_idx = src_clip_idx
+        self._dst_track_idx = dst_track_idx
+        self._dst_insert_idx = dst_insert_idx
+        self._sub_track = subtitle_track
+        self._overlay_track = image_overlay_track
+        self._move_linked = move_linked
+
+        # Calculate original start time for linked move
+        src_track = project.video_tracks[src_track_idx]
+        self._old_start_ms = src_track.clip_timeline_start(src_clip_idx)
+        self._clip_duration = src_track.clips[src_clip_idx].duration_ms
+
+    def redo(self) -> None:
+        src_track = self._project.video_tracks[self._src_track_idx]
+        dst_track = self._project.video_tracks[self._dst_track_idx]
+        
+        clip = src_track.clips.pop(self._src_clip_idx)
+        
+        # Adjust insertion index if moving within the same track
+        insert_idx = self._dst_insert_idx
+        if self._src_track_idx == self._dst_track_idx and self._src_clip_idx < self._dst_insert_idx:
+            insert_idx -= 1
+            
+        dst_track.clips.insert(insert_idx, clip)
+        
+        # Handle linked items
+        if self._move_linked:
+            # Calculate new start time
+            new_start_ms = dst_track.clip_timeline_start(insert_idx)
+            delta = new_start_ms - self._old_start_ms
+            self._shift_linked_items(delta)
+
+    def undo(self) -> None:
+        # To undo, move it back. We need to calculate the new index of the clip.
+        # However, since we know where we inserted it, we can just reverse the operation.
+        # But wait, if same track, indices shifted.
+        # Let's just use the inverse logic.
+        
+        # Current location:
+        curr_track_idx = self._dst_track_idx
+        curr_clip_idx = self._dst_insert_idx
+        if self._src_track_idx == self._dst_track_idx and self._src_clip_idx < self._dst_insert_idx:
+            curr_clip_idx -= 1
+            
+        # Target location (original):
+        target_track_idx = self._src_track_idx
+        target_insert_idx = self._src_clip_idx
+        
+        src_track = self._project.video_tracks[curr_track_idx]
+        dst_track = self._project.video_tracks[target_track_idx]
+        
+        clip = src_track.clips.pop(curr_clip_idx)
+        dst_track.clips.insert(target_insert_idx, clip)
+        
+        if self._move_linked:
+            # Reverse shift
+            # We know the delta from redo, but we can re-calculate or store it.
+            # The clip is now back at _old_start_ms.
+            # The position it was at before undo was... we need to calculate it or store delta.
+            # Let's calculate delta again based on where it was.
+            # Actually, simpler: we know we moved it back to _old_start_ms.
+            # So we just need to find where it WAS.
+            # But wait, we just moved it.
+            # Let's just store delta in redo.
+            # Or re-calculate:
+            # The clip was at `src_track.clip_timeline_start(curr_clip_idx)` before pop.
+            # But we already popped it.
+            # Let's assume redo logic is deterministic.
+            # We can just shift items back by checking what overlaps the "new" position (which is now old).
+            # Actually, simpler:
+            # We moved items that were at [old_start, old_end]. They are now at [new_start, new_end].
+            # We want to move them back.
+            # But wait, if we use the same logic, we need to know the "source" range to find items.
+            # The items are currently at the "new" position.
+            # So we find items at [new_start, new_end] and shift by -delta.
+            
+            # However, calculating new_start here is tricky because we just modified the track.
+            # Let's store delta in self.
+            pass
+            
+        # Re-implementing linked move undo properly requires storing the delta from redo
+        # Since QUndoCommand doesn't persist state easily between redo/undo calls unless we store it in self.
+        # Let's modify redo to store self._applied_delta
+
+    def _shift_linked_items(self, delta: int):
+        if delta == 0:
+            return
+            
+        # Define the source range.
+        # If we are in redo(), we are moving FROM old_start.
+        # If we are in undo(), we are moving FROM new_start (which is old_start + delta).
+        # Wait, undo() calls this? No, I need to handle undo explicitly.
+        
+        # Let's refine:
+        # Items to move are those that were within [self._old_start_ms, self._old_start_ms + self._clip_duration]
+        # But wait, if we already moved them in redo, they are now at [new_start, ...].
+        # So in undo, we should look at [new_start, ...] and move back.
+        
+        # Actually, simpler approach:
+        # Identify items based on the *original* range (before move).
+        # But we don't have persistent IDs for subtitles.
+        # So we must rely on current positions.
+        
+        # In Redo:
+        # Find items in [old_start, old_end]. Shift by delta.
+        # In Undo:
+        # Find items in [old_start + delta, old_end + delta]. Shift by -delta.
+        
+        pass 
+        
+        # Real implementation in redo/undo below
+        
+    def redo(self) -> None:
+        src_track = self._project.video_tracks[self._src_track_idx]
+        dst_track = self._project.video_tracks[self._dst_track_idx]
+        
+        clip = src_track.clips.pop(self._src_clip_idx)
+        
+        insert_idx = self._dst_insert_idx
+        if self._src_track_idx == self._dst_track_idx and self._src_clip_idx < self._dst_insert_idx:
+            insert_idx -= 1
+            
+        dst_track.clips.insert(insert_idx, clip)
+        
+        if self._move_linked:
+            new_start_ms = dst_track.clip_timeline_start(insert_idx)
+            self._delta = new_start_ms - self._old_start_ms
+            if self._delta != 0:
+                self._apply_shift(self._old_start_ms, self._old_start_ms + self._clip_duration, self._delta)
+
+    def undo(self) -> None:
+        curr_track_idx = self._dst_track_idx
+        curr_clip_idx = self._dst_insert_idx
+        if self._src_track_idx == self._dst_track_idx and self._src_clip_idx < self._dst_insert_idx:
+            curr_clip_idx -= 1
+            
+        target_track_idx = self._src_track_idx
+        target_insert_idx = self._src_clip_idx
+        
+        src_track = self._project.video_tracks[curr_track_idx]
+        dst_track = self._project.video_tracks[target_track_idx]
+        
+        clip = src_track.clips.pop(curr_clip_idx)
+        dst_track.clips.insert(target_insert_idx, clip)
+        
+        if self._move_linked and hasattr(self, '_delta') and self._delta != 0:
+            # Shift back items that are currently at the new position
+            new_start = self._old_start_ms + self._delta
+            new_end = new_start + self._clip_duration
+            self._apply_shift(new_start, new_end, -self._delta)
+
+    def _apply_shift(self, start_range: int, end_range: int, delta: int) -> None:
+        # Shift subtitles that start within the range
+        if self._sub_track:
+            for seg in self._sub_track.segments:
+                # Check if segment starts within the clip's range
+                # Using a slight tolerance or strict containment?
+                # Let's use strict start time containment.
+                if start_range <= seg.start_ms < end_range:
+                    seg.start_ms += delta
+                    seg.end_ms += delta
+                    if seg.audio_file:
+                        seg.audio_start_ms += delta
+        
+        # Shift overlays
+        if self._overlay_track:
+            for ov in self._overlay_track.overlays:
+                if start_range <= ov.start_ms < end_range:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+
+class DuplicateVideoClipCommand(QUndoCommand):
+    """Duplicate a video clip to another track/position."""
+
+    def __init__(self, project: ProjectState,
+                 src_track_idx: int, src_clip_idx: int,
+                 dst_track_idx: int, dst_insert_idx: int):
+        super().__init__(tr("Duplicate Video Clip"))
+        self._project = project
+        self._src_track_idx = src_track_idx
+        self._src_clip_idx = src_clip_idx
+        self._dst_track_idx = dst_track_idx
+        self._dst_insert_idx = dst_insert_idx
+        self._new_clip = None
+
+    def redo(self) -> None:
+        src_track = self._project.video_tracks[self._src_track_idx]
+        dst_track = self._project.video_tracks[self._dst_track_idx]
+        
+        if self._new_clip is None:
+            original = src_track.clips[self._src_clip_idx]
+            self._new_clip = original.clone()
+            
+        dst_track.clips.insert(self._dst_insert_idx, self._new_clip)
+
+    def undo(self) -> None:
+        dst_track = self._project.video_tracks[self._dst_track_idx]
+        dst_track.clips.pop(self._dst_insert_idx)
 
 
 # ============================================================================

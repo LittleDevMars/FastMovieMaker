@@ -194,6 +194,7 @@ class TimelinePainter:
         painter.drawPixmap(0, 0, tw._static_cache)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._draw_playhead(painter, h)
+        self._draw_track_highlight(painter, w)
         self._draw_snap_indicator(painter, h)
         self._draw_drop_indicator(painter, h)
         painter.end()
@@ -245,6 +246,17 @@ class TimelinePainter:
         painter.setPen(pen)
         x = int(self.tw._drop_indicator_x)
         painter.drawLine(x, 0, x, h)
+
+    def _draw_track_highlight(self, painter: QPainter, w: int) -> None:
+        """드래그 앤 드롭 시 타겟 트랙 하이라이트."""
+        idx = self.tw._drop_target_track_index
+        if idx >= 0:
+            y = self.tw._video_track_y(idx)
+            h = _CLIP_H
+            # Light blue overlay
+            painter.fillRect(0, y, w, h, QColor(100, 220, 255, 30))
+            painter.setPen(QPen(QColor(100, 220, 255), 2))
+            painter.drawRect(0, y, w, h)
 
     # ---- Video Audio / Waveform ----
 

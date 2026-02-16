@@ -106,6 +106,7 @@ def save_project(project: ProjectState, path: Path) -> None:
             "locked": vt.locked,
             "muted": vt.muted,
             "hidden": vt.hidden,
+            "name": vt.name,
             "items": [c.to_dict() for c in vt.clips]
         })
 
@@ -200,6 +201,7 @@ def load_project(path: Path) -> ProjectState:
             vt.locked = vt_data.get("locked", False)
             vt.muted = vt_data.get("muted", False)
             vt.hidden = vt_data.get("hidden", False)
+            vt.name = vt_data.get("name", "")
             vt.clips = [VideoClip.from_dict(c) for c in vt_data.get("items", [])]
             video_tracks.append(vt)
     else:

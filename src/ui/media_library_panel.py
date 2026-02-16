@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QCursor, QDrag, QMouseEvent, QPainter, QPen, QPixmap
+from PySide6.QtCore import QMimeData, QPoint, QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 from src.models.media_item import MediaItem
@@ -35,9 +36,10 @@ class _ThumbnailWidget(QWidget):
 
     THUMB_SIZE = 140
 
-    def __init__(self, item: MediaItem, parent=None):
+    def __init__(self, item: MediaItem, owner: MediaLibraryPanel, parent=None):
         super().__init__(parent)
         self._item = item
+        self._owner = owner
         self._selected = False
         self.setFixedSize(self.THUMB_SIZE + 10, self.THUMB_SIZE + 30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -96,6 +98,28 @@ class _ThumbnailWidget(QWidget):
         pen = QPen(QColor("#00bcd4"), 2)
         painter.setPen(pen)
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+
+        # Proxy badge
+        if self._item.is_proxy_generating:
+            painter.setBrush(QColor(255, 165, 0))  # Orange background
+            painter.setPen(Qt.PenStyle.NoPen)
+            # Top-right corner
+            rect = QRectF(self.THUMB_SIZE - 75, 4, 71, 14)
+            painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QColor("black"))
+            painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("Generating..."))
+
+        elif getattr(self._item, "has_proxy", False):
+            painter.setBrush(QColor(0, 180, 0))    # Green background
+            painter.setPen(Qt.PenStyle.NoPen)
+            # Top-right corner of thumbnail
+            rect = QRectF(self.THUMB_SIZE - 42, 4, 38, 14)
+            painter.drawRoundedRect(rect, 3, 3)
+            painter.setPen(QColor("white"))
+            painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "PROXY")
+
         painter.end()
 
     def _load_thumbnail(self) -> QPixmap | None:
@@ -115,10 +139,22 @@ class _ThumbnailWidget(QWidget):
             return
         if (event.pos() - self._drag_start_pos).manhattanLength() < 20:
             return
+            
+        # Ensure current item is selected if not already (unless Ctrl is held)
+        if self._item.item_id not in self._owner.get_selected_ids():
+             self._owner.select_single(self._item.item_id)
+
         # Start drag
         drag = QDrag(self)
         mime = QMimeData()
-        mime.setUrls([QUrl.fromLocalFile(self._item.file_path)])
+        
+        urls = []
+        for item_id in self._owner.get_selected_ids():
+            item = self._owner.get_item(item_id)
+            if item:
+                urls.append(QUrl.fromLocalFile(item.file_path))
+        
+        mime.setUrls(urls)
         mime.setData("application/x-fmm-media-type", self._item.media_type.encode())
         drag.setMimeData(mime)
         # Use thumbnail as drag pixmap
@@ -152,6 +188,7 @@ class MediaLibraryPanel(QWidget):
     image_selected = Signal(str)
     image_insert_to_timeline = Signal(str)  # file_path
     subtitle_imported = Signal(str)  # file_path
+    proxy_generation_requested = Signal(str)  # file_path
 
     GRID_COLUMNS = 2
 
@@ -159,7 +196,7 @@ class MediaLibraryPanel(QWidget):
         super().__init__(parent)
         self._service = MediaLibraryService()
         self._filter: str | None = None  # None = all, "video", "image"
-        self._selected_id: str | None = None
+        self._selected_ids: set[str] = set()
         self._thumb_widgets: dict[str, _ThumbnailWidget] = {}
         self._build_ui()
         self._refresh()
@@ -260,17 +297,37 @@ class MediaLibraryPanel(QWidget):
         self._refresh()
 
     def _on_item_clicked(self, item_id: str) -> None:
-        # Deselect previous
-        if self._selected_id and self._selected_id in self._thumb_widgets:
-            self._thumb_widgets[self._selected_id].set_selected(False)
-        # Select new
-        self._selected_id = item_id
-        if item_id in self._thumb_widgets:
-            self._thumb_widgets[item_id].set_selected(True)
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            # Toggle selection
+            if item_id in self._selected_ids:
+                self._selected_ids.remove(item_id)
+                if item_id in self._thumb_widgets:
+                    self._thumb_widgets[item_id].set_selected(False)
+            else:
+                self._selected_ids.add(item_id)
+                if item_id in self._thumb_widgets:
+                    self._thumb_widgets[item_id].set_selected(True)
+        else:
+            # Single selection
+            self.select_single(item_id)
 
         item = self._service.get_item(item_id)
         if item and item.media_type == "image":
             self.image_selected.emit(item.file_path)
+
+    def select_single(self, item_id: str) -> None:
+        """Select a single item and deselect others."""
+        for old_id in list(self._selected_ids):
+            if old_id in self._thumb_widgets:
+                self._thumb_widgets[old_id].set_selected(False)
+        self._selected_ids.clear()
+        self._selected_ids.add(item_id)
+        if item_id in self._thumb_widgets:
+            self._thumb_widgets[item_id].set_selected(True)
+            
+    def get_selected_ids(self) -> set[str]:
+        return self._selected_ids
 
     def _on_item_double_clicked(self, item_id: str) -> None:
         item = self._service.get_item(item_id)
@@ -279,7 +336,7 @@ class MediaLibraryPanel(QWidget):
         if item.media_type == "video":
             self.video_open_requested.emit(item.file_path)
         elif item.media_type == "image":
-            self.image_selected.emit(item.file_path)
+            self.image_insert_to_timeline.emit(item.file_path)
 
     def _on_context_menu(self, item_id: str, pos) -> None:
         item = self._service.get_item(item_id)
@@ -292,6 +349,11 @@ class MediaLibraryPanel(QWidget):
             open_action = menu.addAction(tr("Open Video"))
             open_action.triggered.connect(
                 lambda: self.video_open_requested.emit(item.file_path)
+            )
+            
+            proxy_action = menu.addAction(tr("Generate Proxy"))
+            proxy_action.triggered.connect(
+                lambda: self.proxy_generation_requested.emit(item.file_path)
             )
             menu.addSeparator()
 
@@ -373,12 +435,12 @@ class MediaLibraryPanel(QWidget):
         row = start_row
         col = 0
         for item in items:
-            thumb = _ThumbnailWidget(item)
+            thumb = _ThumbnailWidget(item, self)
             thumb.clicked.connect(self._on_item_clicked)
             thumb.double_clicked.connect(self._on_item_double_clicked)
             thumb.context_menu_requested.connect(self._on_context_menu)
             self._thumb_widgets[item.item_id] = thumb
-            if item.item_id == self._selected_id:
+            if item.item_id in self._selected_ids:
                 thumb.set_selected(True)
             self._grid_layout.addWidget(thumb, row, col)
             col += 1
@@ -388,3 +450,33 @@ class MediaLibraryPanel(QWidget):
         if col > 0:
             row += 1
         return row
+
+    def on_proxy_ready(self, source_path: str) -> None:
+        """Handle proxy generation finished signal."""
+        abs_path = str(Path(source_path).resolve())
+        for item in self._service.list_items():
+            if item.file_path == abs_path:
+                item.has_proxy = True
+                item.is_proxy_generating = False
+                if item.item_id in self._thumb_widgets:
+                    self._thumb_widgets[item.item_id].update()
+                break
+
+    def on_proxy_started(self, source_path: str) -> None:
+        """Handle proxy generation started signal."""
+        abs_path = str(Path(source_path).resolve())
+        for item in self._service.list_items():
+            if item.file_path == abs_path:
+                item.is_proxy_generating = True
+                if item.item_id in self._thumb_widgets:
+                    self._thumb_widgets[item.item_id].update()
+                break
+
+    def check_proxies(self) -> None:
+        """Check for existing proxies for all items."""
+        from src.services.proxy_service import ProxyService
+        proxy_svc = ProxyService()
+        for item in self._service.list_items():
+            if item.media_type == "video":
+                item.has_proxy = proxy_svc.has_proxy(item.file_path)
+        self._refresh()

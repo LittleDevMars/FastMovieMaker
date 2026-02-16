@@ -134,12 +134,19 @@ class BatchExportDialog(QDialog):
             hint.setStyleSheet("color: gray; font-size: 11px;")
             options_layout.addWidget(hint)
 
+        # Mix with original audio checkbox
+        self._mix_audio_checkbox = QCheckBox(tr("Mix with original audio"))
+        self._mix_audio_checkbox.setChecked(self._video_has_audio)
+        self._mix_audio_checkbox.setEnabled(self._has_tts and self._video_has_audio)
+        self._mix_audio_checkbox.toggled.connect(self._on_mix_audio_toggled)
+        options_layout.addWidget(self._mix_audio_checkbox)
+
         bg_row = QHBoxLayout()
         bg_row.addWidget(QLabel(tr("Background volume:")))
         self._bg_slider = QSlider(Qt.Orientation.Horizontal)
         self._bg_slider.setRange(0, 100)
         self._bg_slider.setValue(50)
-        self._bg_slider.setEnabled(self._has_tts)
+        self._bg_slider.setEnabled(self._has_tts and self._video_has_audio)
         bg_row.addWidget(self._bg_slider)
         self._bg_label = QLabel("50%")
         self._bg_label.setMinimumWidth(40)
@@ -233,9 +240,13 @@ class BatchExportDialog(QDialog):
             self._preset_table.removeRow(index.row())
 
     def _on_tts_toggled(self, checked: bool) -> None:
-        self._bg_slider.setEnabled(checked)
+        self._mix_audio_checkbox.setEnabled(checked and self._video_has_audio)
+        self._bg_slider.setEnabled(checked and self._mix_audio_checkbox.isChecked())
         self._tts_slider.setEnabled(checked)
         self._seg_vol_checkbox.setEnabled(checked)
+
+    def _on_mix_audio_toggled(self, checked: bool) -> None:
+        self._bg_slider.setEnabled(checked)
 
     # ------------------------------------------------------------------ Export
 
@@ -315,6 +326,9 @@ class BatchExportDialog(QDialog):
             overlay_path=self._overlay_path,
             image_overlays=self._image_overlays,
             text_overlays=self._text_overlays,
+            mix_with_original_audio=self._mix_audio_checkbox.isChecked(),
+            video_volume=self._bg_slider.value() / 100.0,
+            audio_volume=self._tts_slider.value() / 100.0,
         )
         self._worker.moveToThread(self._thread)
 
@@ -338,9 +352,8 @@ class BatchExportDialog(QDialog):
         temp_dir = Path(tempfile.mkdtemp(prefix="batch_export_audio_"))
         output_audio = temp_dir / f"batch_tts_{uuid.uuid4().hex[:8]}.mp3"
 
+        # We let VideoExporter handle the mixing via mix_with_original_audio param
         video_audio_path = None
-        if self._video_has_audio:
-            video_audio_path = self._video_path
 
         regenerated_path, _ = AudioRegenerator.regenerate_track_audio(
             track=self._track,

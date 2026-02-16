@@ -162,7 +162,7 @@ class WhisperDialog(QDialog):
         """취소 버튼: worker에 취소 신호 후 즉시 다이얼로그 닫기.
 
         faster_whisper(ctranslate2)는 C 레벨 연산이라 Python에서 즉시 중단 불가.
-        스레드는 백그라운드에서 다음 세그먼트 경계에서 자연 종료된다.
+        스레드는 백그라운드에서 다음 세그먼트 경계(약 5초 단위)에서 자연 종료된다.
         """
         if not self._worker or not self._thread:
             self.reject()
@@ -171,7 +171,7 @@ class WhisperDialog(QDialog):
             return
         self._cancelling = True
         self._worker.cancel()
-        # 즉시 닫기 (스레드는 백그라운드 자연 종료)
+        # 즉시 다이얼로그 닫기 (스레드는 백그라운드에서 곧 종료됨)
         self._on_force_close()
 
     def _show_force_close_if_needed(self) -> None:

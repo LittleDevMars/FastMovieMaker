@@ -242,20 +242,22 @@ class OverlayController:
 
     # ---- 드래그 앤 드롭 ----
 
-    def on_image_file_dropped(self, file_path: str, position_ms: int) -> None:
+    def on_image_file_dropped(self, file_paths: list[str], position_ms: int) -> None:
         ctx = self.ctx
         duration = 5000
-        end_ms = position_ms + duration
-        if ctx.project.duration_ms > 0:
-            end_ms = min(end_ms, ctx.project.duration_ms)
-        overlay = ImageOverlay(start_ms=position_ms, end_ms=end_ms, image_path=str(Path(file_path).resolve()))
-        ctx.project.image_overlay_track.add_overlay(overlay)
+        for file_path in file_paths:
+            end_ms = position_ms + duration
+            if ctx.project.duration_ms > 0:
+                end_ms = min(end_ms, ctx.project.duration_ms)
+            overlay = ImageOverlay(start_ms=position_ms, end_ms=end_ms, image_path=str(Path(file_path).resolve()))
+            ctx.project.image_overlay_track.add_overlay(overlay)
+            
         io_track = ctx.project.image_overlay_track
         ctx.ensure_timeline_duration()
         ctx.timeline.set_image_overlay_track(io_track)
         ctx.video_widget.set_image_overlay_track(io_track)
         ctx.autosave.notify_edit()
-        ctx.status_bar().showMessage(f"Image overlay dropped: {Path(file_path).name}")
+        ctx.status_bar().showMessage(f"{len(file_paths)} image overlays dropped")
 
     def on_media_image_insert_to_timeline(self, file_path: str) -> None:
         ctx = self.ctx
