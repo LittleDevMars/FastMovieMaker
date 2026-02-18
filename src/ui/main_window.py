@@ -21,6 +21,8 @@ from src.models.project import ProjectState
 from src.services.autosave import AutoSaveManager
 from src.ui.controllers.app_context import AppContext
 from src.ui.controllers.clip_controller import ClipController
+from src.services.frame_cache_service import FrameCacheService
+from src.services.video_frame_player import VideoFramePlayer
 from src.ui.controllers.media_controller import MediaController
 from src.ui.controllers.overlay_controller import OverlayController
 from src.ui.controllers.playback_controller import PlaybackController
@@ -77,6 +79,11 @@ class MainWindow(QMainWindow):
         from src.services.timeline_waveform_service import TimelineWaveformService
         self._waveform_service = TimelineWaveformService(self)
 
+        # ---- Frame-based Player Services ----
+        self._frame_cache = FrameCacheService()
+        self._frame_cache.initialize()
+        self._frame_player = VideoFramePlayer(self._frame_cache)
+
         # ---- Build UI first (controllers need widget refs) ----
         self._build_ui()
 
@@ -100,6 +107,8 @@ class MainWindow(QMainWindow):
         ctx.autosave = self._autosave
         ctx.pending_seek_timer = self._pending_seek_timer
         ctx.render_pause_timer = self._render_pause_timer
+        ctx.frame_cache = self._frame_cache
+        ctx.frame_player = self._frame_player
         # MainWindow 콜백 등록
         ctx.refresh_all = self._refresh_all_widgets
         ctx.ensure_timeline_duration = self._ensure_timeline_duration
@@ -129,6 +138,9 @@ class MainWindow(QMainWindow):
 
         # ---- Recovery check (UI 필요) ----
         self._project_ctrl.check_recovery()
+
+        # ---- Frame Player Signals ----
+        self._frame_player.frame_ready.connect(self._on_frame_player_frame_ready)
 
         self._build_menu()
         self._setup_shortcuts()
@@ -261,6 +273,7 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.segment_delete_requested.connect(self._subtitle_ctrl.on_segment_delete)
         self._subtitle_panel.style_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_style)
         self._subtitle_panel.volume_edited.connect(self._subtitle_ctrl.on_segment_volume_edited)
+        self._subtitle_panel.tts_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_tts)
 
         # Timeline subtitle
         self._timeline.segment_selected.connect(self._subtitle_ctrl.on_timeline_segment_selected)
@@ -314,8 +327,13 @@ class MainWindow(QMainWindow):
         self._media_panel.subtitle_imported.connect(self._subtitle_ctrl.on_import_subtitle)
         self._media.proxy_ready.connect(self._media_panel.on_proxy_ready)
         self._media.proxy_started.connect(self._media_panel.on_proxy_started)
+        self._media.proxy_progress.connect(self._media_panel.on_proxy_progress)
+        self._media.proxy_failed.connect(self._media_panel.on_proxy_failed)
         self._media_panel.proxy_generation_requested.connect(
-            lambda path: self._media.start_proxy_generation(Path(path))
+            self._on_proxy_generation_requested
+        )
+        self._media_panel.proxy_generation_cancelled.connect(
+            self._media.cancel_proxy_generation
         )
 
         # Timeline drag-and-drop
@@ -397,6 +415,11 @@ class MainWindow(QMainWindow):
         enabled = self._ripple_toggle_btn.isChecked()
         self._timeline.set_ripple_mode(enabled)
 
+    def _on_proxy_generation_requested(self, path: str) -> None:
+        """Handle proxy generation request from media panel."""
+        self.statusBar().showMessage(tr("Requesting proxy generation..."), 2000)
+        self._media.start_proxy_generation(Path(path))
+
     def _on_track_state_changed(self) -> None:
         self._timeline.update()
         if self._project.video_clip_track:
@@ -408,6 +431,15 @@ class MainWindow(QMainWindow):
             pos = self._player.position()
             self._video_widget._update_subtitle(pos)
             self._video_widget._update_image_overlays(pos)
+            self._video_widget._update_text_overlays(pos)
+        
+        # BGM Mute update
+        # Note: BGM mute state is checked during playback mixing or regeneration.
+        # For real-time preview, we might need to update audio output if we support separate BGM channels.
+        # Currently BGM is mixed via AudioMerger for export/regen. 
+        # If we have a separate QMediaPlayer for BGM preview, we would mute it here.
+        # For now, just updating UI state is enough as BGM preview might not be fully real-time separated yet.
+        
         self.statusBar().showMessage(tr("Track states updated"), 2000)
 
     def _on_template_applied(self, template) -> None:
@@ -419,6 +451,13 @@ class MainWindow(QMainWindow):
         self._overlay_template = None
         self._video_widget.clear_overlay()
         self.statusBar().showMessage(tr("Template cleared"))
+
+    def _on_frame_player_frame_ready(self, image) -> None:
+        """Handle frame updates from VideoFramePlayer."""
+        # VideoPlayerWidget에 set_image 메서드가 있다고 가정하거나
+        # QGraphicsPixmapItem을 업데이트하는 로직이 필요합니다.
+        if hasattr(self._video_widget, "set_image"):
+            self._video_widget.set_image(image)
 
     def _on_take_screenshot(self) -> None:
         try:
@@ -452,11 +491,24 @@ class MainWindow(QMainWindow):
             self.restoreState(state)
 
     def closeEvent(self, event) -> None:
+        if self._media.is_proxy_generating():
+            reply = QMessageBox.question(
+                self,
+                tr("Warning"),
+                tr("Proxy generation is in progress. Quitting will cancel it.\nAre you sure you want to quit?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+
         settings = QSettings()
         settings.setValue("window_geometry", self.saveGeometry())
         settings.setValue("window_state", self.saveState())
         self._player.stop()
         self._media.cleanup()
+        self._frame_cache.cleanup()
         thumb_svc = getattr(self._timeline, "_thumbnail_service", None)
         if thumb_svc:
             if hasattr(thumb_svc, "cancel_all_requests"):

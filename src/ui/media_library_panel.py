@@ -108,7 +108,9 @@ class _ThumbnailWidget(QWidget):
             painter.drawRoundedRect(rect, 3, 3)
             painter.setPen(QColor("black"))
             painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("Generating..."))
+            progress = getattr(self._item, "proxy_progress", 0)
+            text = f"Gen: {progress}%" if progress > 0 else tr("Generating...")
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
         elif getattr(self._item, "has_proxy", False):
             painter.setBrush(QColor(0, 180, 0))    # Green background
@@ -189,6 +191,7 @@ class MediaLibraryPanel(QWidget):
     image_insert_to_timeline = Signal(str)  # file_path
     subtitle_imported = Signal(str)  # file_path
     proxy_generation_requested = Signal(str)  # file_path
+    proxy_generation_cancelled = Signal(str)  # file_path
 
     GRID_COLUMNS = 2
 
@@ -329,6 +332,9 @@ class MediaLibraryPanel(QWidget):
     def get_selected_ids(self) -> set[str]:
         return self._selected_ids
 
+    def get_item(self, item_id: str) -> MediaItem | None:
+        return self._service.get_item(item_id)
+
     def _on_item_double_clicked(self, item_id: str) -> None:
         item = self._service.get_item(item_id)
         if not item:
@@ -348,13 +354,19 @@ class MediaLibraryPanel(QWidget):
         if item.media_type == "video":
             open_action = menu.addAction(tr("Open Video"))
             open_action.triggered.connect(
-                lambda: self.video_open_requested.emit(item.file_path)
+                lambda checked=False, path=item.file_path: self.video_open_requested.emit(path)
             )
             
-            proxy_action = menu.addAction(tr("Generate Proxy"))
-            proxy_action.triggered.connect(
-                lambda: self.proxy_generation_requested.emit(item.file_path)
-            )
+            if getattr(item, "is_proxy_generating", False):
+                cancel_proxy_action = menu.addAction(tr("Cancel Proxy Generation"))
+                cancel_proxy_action.triggered.connect(
+                    lambda checked=False, path=item.file_path: self.proxy_generation_cancelled.emit(path)
+                )
+            else:
+                proxy_action = menu.addAction(tr("Generate Proxy"))
+                proxy_action.triggered.connect(
+                    lambda checked=False, path=item.file_path: self.proxy_generation_requested.emit(path)
+                )
             menu.addSeparator()
 
         if item.media_type == "image":
@@ -462,12 +474,35 @@ class MediaLibraryPanel(QWidget):
                     self._thumb_widgets[item.item_id].update()
                 break
 
+    def on_proxy_progress(self, source_path: str, progress: int) -> None:
+        """Handle proxy generation progress signal."""
+        abs_path = str(Path(source_path).resolve())
+        for item in self._service.list_items():
+            if item.file_path == abs_path:
+                item.is_proxy_generating = True
+                item.proxy_progress = progress
+                if item.item_id in self._thumb_widgets:
+                    self._thumb_widgets[item.item_id].update()
+                break
+
+    def on_proxy_failed(self, source_path: str) -> None:
+        """Handle proxy generation failed/cancelled signal."""
+        abs_path = str(Path(source_path).resolve())
+        for item in self._service.list_items():
+            if item.file_path == abs_path:
+                item.is_proxy_generating = False
+                item.proxy_progress = 0
+                if item.item_id in self._thumb_widgets:
+                    self._thumb_widgets[item.item_id].update()
+                break
+
     def on_proxy_started(self, source_path: str) -> None:
         """Handle proxy generation started signal."""
         abs_path = str(Path(source_path).resolve())
         for item in self._service.list_items():
             if item.file_path == abs_path:
                 item.is_proxy_generating = True
+                item.proxy_progress = 0
                 if item.item_id in self._thumb_widgets:
                     self._thumb_widgets[item.item_id].update()
                 break

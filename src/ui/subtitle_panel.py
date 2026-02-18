@@ -201,6 +201,7 @@ class SubtitlePanel(QWidget):
     segment_add_requested = Signal(int, int)  # (start_ms, end_ms)
     segment_delete_requested = Signal(int)  # segment index
     style_edit_requested = Signal(int)  # segment index
+    tts_edit_requested = Signal(int)  # segment index
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -399,10 +400,12 @@ class SubtitlePanel(QWidget):
         add_action = menu.addAction(tr("Add Subtitle Here"))
         delete_action = None
         style_action = None
+        tts_action = None
         if self._track and 0 <= row < len(self._track):
             delete_action = menu.addAction(tr("Delete Subtitle"))
             menu.addSeparator()
             style_action = menu.addAction(tr("Edit Style..."))
+            tts_action = menu.addAction(tr("Edit TTS Settings..."))
 
         menu.addSeparator()
         search_action = menu.addAction(tr("Find in Subtitles..."))
@@ -411,6 +414,8 @@ class SubtitlePanel(QWidget):
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
         if action is not None and action == style_action:
             self.style_edit_requested.emit(row)
+        elif action is not None and action == tts_action:
+            self.tts_edit_requested.emit(row)
         elif action == add_action:
             if self._track and 0 <= row < len(self._track):
                 seg = self._track[row]

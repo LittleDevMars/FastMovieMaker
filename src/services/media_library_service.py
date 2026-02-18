@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.services.ffmpeg_logger import log_ffmpeg_command
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.models.media_item import MediaItem
 from src.utils.config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
@@ -143,6 +144,17 @@ class MediaLibraryService:
                     thumb = Path(item.thumbnail_path)
                     if thumb.exists():
                         thumb.unlink(missing_ok=True)
+
+                # Clean up proxy if exists
+                if item.media_type == "video":
+                    try:
+                        from src.services.proxy_service import get_proxy_path
+                        proxy_path = get_proxy_path(Path(item.file_path))
+                        if proxy_path.exists():
+                            proxy_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
                 self._items.pop(i)
                 self.save()
                 return True
@@ -156,6 +168,17 @@ class MediaLibraryService:
                 thumb = Path(item.thumbnail_path)
                 if thumb.exists():
                     thumb.unlink(missing_ok=True)
+            
+            # Clean up proxy if exists
+            if item.media_type == "video":
+                try:
+                    from src.services.proxy_service import get_proxy_path
+                    proxy_path = get_proxy_path(Path(item.file_path))
+                    if proxy_path.exists():
+                        proxy_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
         self._items.clear()
         self.save()
         return count
@@ -204,6 +227,7 @@ class MediaLibraryService:
             "-y",
             str(mp4_path),
         ]
+        log_ffmpeg_command(args)
         try:
             runner.run(args, timeout=60)
             if mp4_path.exists() and mp4_path.stat().st_size > 0:
@@ -242,6 +266,7 @@ class MediaLibraryService:
             "-y",
             str(thumb_path),
         ]
+        log_ffmpeg_command(args)
         try:
             runner.run(args, timeout=10)
             if thumb_path.exists() and thumb_path.stat().st_size > 0:
@@ -274,17 +299,16 @@ class MediaLibraryService:
             return 0, 0, 0
 
         try:
-            result = runner.run_ffprobe(
-                [
-                    "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "stream=width,height",
-                    "-show_entries", "format=duration",
-                    "-of", "json",
-                    str(video_path),
-                ],
-                timeout=10,
-            )
+            args = [
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                str(video_path),
+            ]
+            log_ffmpeg_command(["ffprobe"] + args)
+            result = runner.run_ffprobe(args, timeout=10)
             data = json.loads(result.stdout)
             width = 0
             height = 0

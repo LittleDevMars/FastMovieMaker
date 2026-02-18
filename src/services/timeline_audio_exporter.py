@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Callable
 
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
+from src.services.ffmpeg_logger import log_ffmpeg_command
+from src.services.settings_manager import SettingsManager
 from src.models.video_clip import VideoClipTrack
 from src.utils.config import AUDIO_SAMPLE_RATE
 
@@ -93,6 +95,7 @@ def export_timeline_audio(
     if on_progress:
         on_progress(0)
 
+    log_ffmpeg_command(args)
     result = runner.run(args)
 
     if on_progress:
@@ -132,19 +135,26 @@ def _build_audio_concat_filter(
         al = f"a{i}"
 
         # 리스트 + join 패턴 (HPP Ch.11)
-        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}", "asetpts=PTS-STARTPTS"]
+        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}"]
 
         # Apply speed adjustment
+        settings = SettingsManager()
+        pitch_shift_enabled = settings.get_audio_speed_pitch_shift()
+
+        if not pitch_shift_enabled: # Pitch-preserving, so reset timestamps before atempo
+            a_chain.append("asetpts=PTS-STARTPTS")
         if hasattr(clip, "speed") and clip.speed != 1.0:
-            speed = clip.speed
-            # FFmpeg atempo only supports 0.5-2.0, so chain multiple if needed
-            while speed > 2.0:
-                a_chain.append("atempo=2.0")
-                speed /= 2.0
-            while speed < 0.5:
-                a_chain.append("atempo=0.5")
-                speed /= 0.5
-            a_chain.append(f"atempo={speed:.3f}")
+            if pitch_shift_enabled:
+                a_chain.append(f"asetpts=PTS/{clip.speed:.3f}") # Change audio timing and pitch
+            else: # Pitch-preserving
+                speed = clip.speed
+                while speed > 2.0:
+                    a_chain.append("atempo=2.0")
+                    speed /= 2.0
+                while speed < 0.5:
+                    a_chain.append("atempo=0.5")
+                    speed /= 0.5
+                a_chain.append(f"atempo={speed:.3f}")
 
         # Apply volume adjustment
         if hasattr(clip, "volume") and clip.volume != 1.0:

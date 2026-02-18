@@ -19,6 +19,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygon,
+    QPolygonF,
 )
 
 import numpy as np
@@ -706,20 +707,8 @@ class TimelinePainter:
                                 painter.drawImage(target_rect.toRect(), thumb)
                     painter.restore()
 
-            # 트랜지션 마커
-            if hasattr(clip, "transition_out") and clip.transition_out:
-                dur_px = tw._px_per_ms * clip.transition_out.duration_ms
-                marker_w = min(rect.width() / 2, dur_px)
-                marker_rect = QRectF(x2 - marker_w, y, marker_w, h)
-                painter.setBrush(QBrush(self._TRANSITION_MARKER_COLOR))
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawRect(marker_rect)
-                if marker_w > 15:
-                    painter.setPen(Qt.GlobalColor.black)
-                    painter.setFont(QFont("Arial", 7, QFont.Weight.Bold))
-                    indicator = clip.transition_out.type[0].upper() if clip.transition_out.type else "T"
-                    painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, indicator)
-
+            # 트랜지션 마커 그리기
+            self._draw_transition_marker(painter, clip, rect)
             # 클립 라벨
             if clip.source_path:
                 from pathlib import Path
@@ -740,8 +729,35 @@ class TimelinePainter:
             # 볼륨 엔벨로프
             if hasattr(clip, "volume_points") and clip.volume_points:
                 self._draw_volume_envelope(painter, rect, clip)
-            else:
                 self._draw_default_volume_line(painter, rect, clip)
+
+    def _draw_transition_marker(self, painter: QPainter, clip: VideoClip, rect: QRectF) -> None:
+        """트랜지션 마커 그리기."""
+        if not (hasattr(clip, "transition_out") and clip.transition_out):
+            return
+
+        painter.save()
+        try:
+            tw = self.tw
+            x2 = rect.right()
+            y = rect.top()
+            h = rect.height()
+
+            dur_px = tw._px_per_ms * clip.transition_out.duration_ms
+            marker_w = min(rect.width() / 2, dur_px)
+            marker_rect = QRectF(x2 - marker_w, y, marker_w, h)
+
+            painter.setBrush(QBrush(self._TRANSITION_MARKER_COLOR))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(marker_rect)
+
+            if marker_w > 15:
+                painter.setPen(Qt.GlobalColor.black)
+                painter.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+                indicator = clip.transition_out.type[0].upper() if clip.transition_out.type else "T"
+                painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, indicator)
+        finally:
+            painter.restore()
 
     # ---- Clip Waveform ----
 

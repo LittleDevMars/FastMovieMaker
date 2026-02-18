@@ -118,6 +118,8 @@ def generate_proxy(
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         process.kill()
+                    if proxy_path.exists():
+                        proxy_path.unlink(missing_ok=True)
                     return False
 
                 line = line.strip()
@@ -137,6 +139,8 @@ def generate_proxy(
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     process.kill()
+            if proxy_path.exists():
+                proxy_path.unlink(missing_ok=True)
             return False
 
         process.wait()
@@ -144,6 +148,8 @@ def generate_proxy(
 
         if process.returncode != 0:
             logger.error(f"Proxy generation failed with code {process.returncode}")
+            if proxy_path.exists():
+                proxy_path.unlink(missing_ok=True)
             return False
             
         if on_progress:

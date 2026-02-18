@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 19 완료 (2026-02-16)
+**현재 상태:** Day 22 완료 (2026-02-19)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -33,6 +33,9 @@
 | **Phase T13: BGM 트랙 및 오디오 믹싱** — AudioClip/Track 모델, 타임라인 전용 영역, 드래그&트림, 자석 스냅, Undo/Redo | **완료 (Day 18)** |
 | **AI 자막 번역 및 GPU 가속** — Google/GPT 연동, NVENC/QSV/AMF 하드웨어 가속 내보내기 | **완료 (Day 17)** |
 | **Phase T2/T3: 프록시 워크플로우 & 고급 편집** — 프록시 생성/관리, 미디어 라이브러리 개선, 클립 복사/붙여넣기/복제 | **완료 (Day 19)** |
+| **P1: TTS 향상** — 미리듣기, 세그먼트별 설정(목소리/속도), 오디오 재생성 통합 | **완료 (Day 20)** |
+| **프레임 버퍼링 및 성능 최적화** — VideoFramePlayer 구현, FFmpeg 실시간 로깅, 오디오 동기화 고도화 | **완료 (Day 21)** |
+| **코드 품질 개선** — MediaController 버그 수정 5종 (초기화 누락, 독스트링 오류, 로직 주석, UX 팝업 제거) | **완료 (Day 22)** |
 
 ---
 
@@ -41,8 +44,6 @@
 #### P1 — TTS 향상
 | 항목 | 설명 |
 |------|------|
-| 프리뷰 재생 | TTS 생성 전 샘플 음성 미리듣기 |
-| 세그먼트별 개별 TTS 설정 | 구간마다 다른 음성/속도 지정 |
 | 배경음악 자동 페이드 (ducking) | TTS 구간에서 배경음 자동 감소 |
 | TTS 설정 프리셋 저장/로드 | 자주 쓰는 TTS 설정 저장 |
 
@@ -113,6 +114,54 @@
 |------|------|
 | PyInstaller 패키징 | 단일 exe/폴더 배포 |
 | Windows 인스톨러 | NSIS/Inno Setup |
+
+---
+
+## 2026-02-19 (Day 22) 작업 요약
+
+**코드 품질 개선 — MediaController 버그 수정**
+
+### 1. `MediaController.__init__` 초기화 누락 수정
+- `_video_thread: QThread | None = None` 및 `_video_worker: VideoLoadWorker | None = None` 추가
+- `load_video()` 호출 전 접근 시 `AttributeError` 발생 가능 → 수정
+
+### 2. Pyright 타입 오류 수정 (`start_frame_cache_generation`)
+- `durations[sp] = info.duration_ms` → `durations[str(sp)]` (object → str 명시적 변환)
+- `clip_track.unique_source_paths()` 반환값 타입 추론 오류 해소
+
+### 3. `load_video()` 독스트링 정정
+- "MediaController는 QObject가 아니므로…" → 실제로는 QObject 상속 클래스
+- DirectConnection/QueuedConnection 동작 원리를 정확히 기술
+
+### 4. `on_media_status_changed()` 렌더-후-일시정지 패턴 주석 추가
+- `else` 분기에서 `play()` + `render_pause_timer.start()` 호출이 의도적임을 명시
+- "버그처럼 보이는 코드" → 주석으로 명확화
+
+### 5. `_on_proxy_finished()` QMessageBox 팝업 제거
+- 프록시 완료 시마다 표시되던 방해성 정보 팝업 제거
+- 상태바 메시지만으로 충분 (사용자 편집 흐름 방해 없음)
+
+### 수정 파일
+- **수정 (1):** `src/ui/controllers/media_controller.py`
+
+---
+
+## 2026-02-16 (Day 21) 작업 요약
+
+**프레임 버퍼링 시스템 구현 및 시스템 안정성 강화**
+
+### 1. 프레임 기반 재생기 (`VideoFramePlayer`) 구현
+- **정밀 타이머 재생**: QMediaPlayer의 지연을 해결하기 위해 `QTimer(PreciseTimer)` 기반의 프레임 송출 로직 구현.
+- **오디오 동기화**: QMediaPlayer를 마스터 클럭으로 삼아 비디오 프레임을 강제 동기화하는 `sync_with_audio` 로직 적용.
+- **품질 설정**: 환경설정에서 프레임 캐시의 JPEG 품질(저/중/고)을 선택할 수 있는 옵션 추가.
+
+### 2. FFmpeg 로깅 및 모니터링 시스템
+- **전역 로깅**: `FFmpegLogger`를 통해 모든 FFmpeg/FFprobe 명령과 출력을 `ffmpeg.log` 파일에 실시간 기록.
+- **실시간 진행률**: FFmpeg의 `-progress` 파이프를 파싱하여 프레임 추출 진행률을 상태바에 퍼센트로 표시.
+- **에러 핸들링**: 상세 에러 로그를 팝업으로 보여주고 클립보드에 복사할 수 있는 기능 추가.
+
+### 3. 클립 속도 및 오디오 피치 제어
+- **피치 보정**: 클립 속도 변경 시 `atempo` 필터를 사용하여 음높이를 유지하거나, 설정에 따라 피치를 변경하는 옵션 구현.
 
 ---
 
@@ -1359,6 +1408,31 @@ SubtitleTrack 생성 (오디오 길이 기반 타이밍)
 ### 수정 파일
 - **신규:** `src/services/proxy_service.py`, `src/workers/proxy_worker.py`, `tests/test_proxy.py`, `tests/test_media_library_proxy.py`
 - **수정:** `media_library_panel.py`, `media_controller.py`, `clip_controller.py`, `timeline_widget.py`, `timeline_drag.py`, `commands.py`, `main_window.py`, `models/media_item.py`, `utils/lang/ko.py`
+
+---
+
+## 2026-02-16 (Day 20) 작업 요약
+
+**TTS 기능 고도화 — 미리듣기 및 세그먼트별 설정**
+
+### 1. TTS 미리듣기 (Preview)
+- **기능:** TTS 생성 전 스크립트의 앞부분(100자)을 미리 들어볼 수 있는 기능
+- **구현:** `TTSDialog`에 Preview/Stop 버튼 추가, `TTSPreviewWorker`로 비동기 생성 및 재생
+- **UX:** 재생 중 버튼 텍스트 변경, 다이얼로그 닫을 때 자동 정지
+
+### 2. 세그먼트별 TTS 설정 (Per-segment Settings)
+- **모델:** `SubtitleSegment`에 `voice`, `speed` 필드 추가 (기본값 None)
+- **UI:** 자막 패널 우클릭 "Edit TTS Settings..." → 세그먼트 모드로 `TTSDialog` 실행
+- **로직:** 개별 세그먼트에 대해 TTS 오디오 재생성 및 `EditSegmentTTSCommand`로 Undo/Redo 지원
+- **통합:** `AudioRegenerator`에서 세그먼트별 볼륨뿐만 아니라 개별 오디오 파일 변경 사항 반영
+
+### 3. 테스트
+- **단위 테스트:** `tests/test_tts_preview.py`, `tests/test_segment_tts.py`
+- **통합 테스트:** `tests/test_audio_regenerator_integration.py` (세그먼트 볼륨 적용 확인)
+
+### 수정 파일
+- **신규:** `tests/test_tts_preview.py`, `tests/test_segment_tts.py`, `tests/test_audio_regenerator_integration.py`
+- **수정:** `src/ui/dialogs/tts_dialog.py`, `src/ui/controllers/subtitle_controller.py`, `src/models/subtitle.py`, `src/services/project_io.py`, `src/ui/commands.py`, `src/ui/subtitle_panel.py`, `src/utils/lang/ko.py`
 
 ---
 

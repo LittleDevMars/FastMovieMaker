@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import shutil
+import threading
 import tempfile
 from pathlib import Path
 
+from PySide6.QtGui import QImage
+from src.services.ffmpeg_logger import log_ffmpeg_command, log_ffmpeg_line
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
@@ -119,18 +122,42 @@ class FrameCacheService:
 
         return best
 
+    def get_frame(self, source_path: str, frame_index: int, fps: float) -> QImage | None:
+        """Retrieve the frame image for a specific frame index."""
+        if fps <= 0:
+            return None
+
+        # Calculate timestamp to match the naming convention in extract_frames
+        # We use the same integer interval logic to ensure filenames match
+        interval_ms = int(1000 / fps)
+        ms = frame_index * interval_ms
+
+        d = self.source_cache_dir(source_path)
+        # Try exact match first
+        img_path = d / f"frame_{ms:09d}.jpg"
+
+        if img_path.exists():
+            return QImage(str(img_path))
+        
+        return None
+
     @staticmethod
-    def extract_frame_at(source_path: str, ms: int, output_path: Path) -> bool:
+    def extract_frame_at(source_path: str, ms: int, output_path: Path, quality: int | None = None) -> bool:
         """Extract a single frame at specific timestamp using fast seek (Double-SS).
 
         Args:
             source_path: Video file path
             ms: Timestamp in milliseconds
             output_path: Destination path for the image
+            quality: JPEG quality (1-31, lower is better)
 
         Returns:
             True if successful, False otherwise
         """
+        if quality is None:
+            from src.services.settings_manager import SettingsManager
+            quality = SettingsManager().get_frame_cache_quality()
+
         runner = get_ffmpeg_runner()
         if not runner.is_available():
             return False
@@ -144,10 +171,12 @@ class FrameCacheService:
             "-i", source_path,
             "-ss", f"{output_seek:.3f}",
             "-frames:v", "1",
-            "-q:v", "5",
+            "-q:v", str(quality),
             "-y",
             str(output_path),
         ]
+
+        log_ffmpeg_command(args)
 
         try:
             runner.run(
@@ -161,6 +190,32 @@ class FrameCacheService:
         except Exception:
             return False
 
+    def extract_video_frames(
+        self,
+        source_path: str,
+        fps: float,
+        width: int = 640,
+        on_progress: object = None,
+        cancel_check: object = None,
+        quality: int | None = None,
+        duration_ms: int | None = None,
+    ) -> int:
+        """Extract all frames for video playback at the specified FPS."""
+        interval_ms = int(1000 / fps) if fps > 0 else 33
+        output_dir = self.source_cache_dir(source_path)
+        
+        if quality is None:
+            from src.services.settings_manager import SettingsManager
+            quality = SettingsManager().get_frame_cache_quality()
+
+        # Clean up existing cache for this source to avoid mixing framerates
+        # (Optional: sophisticated logic could check if existing cache is compatible)
+        # For now, we assume if we call this, we want fresh frames for this FPS.
+        # But we rely on extract_frames which appends. Let's just call extract_frames.
+        return self.extract_frames(source_path, output_dir, interval_ms, width,
+                                   duration_ms=duration_ms,
+                                   on_progress=on_progress, cancel_check=cancel_check, quality=quality)
+
     @staticmethod
     def extract_frames(
         source_path: str,
@@ -170,6 +225,7 @@ class FrameCacheService:
         duration_ms: int | None = None,
         on_progress: object = None,
         cancel_check: object = None,
+        quality: int = 5,
     ) -> int:
         """Extract frames from *source_path* at regular intervals via FFmpeg.
 
@@ -185,43 +241,82 @@ class FrameCacheService:
         args = [
             "-i", source_path,
             "-vf", f"fps={fps_value},scale={width}:-1",
-            "-q:v", "5",
+            "-q:v", str(quality),
             "-vsync", "vfr",
+            "-progress", "pipe:1",
             "-y",
             str(output_dir / "frame_%06d.jpg"),
         ]
+
+        log_ffmpeg_command(args)
 
         proc = runner.run_async(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
+        # Drain stderr in a background thread to log and prevent buffer overflow
+        stderr_buffer = []
+        def _drain_stderr():
+            try:
+                for line in proc.stderr:
+                    log_ffmpeg_line(line)
+                    stderr_buffer.append(line)
+                    if len(stderr_buffer) > 20:
+                        stderr_buffer.pop(0)
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
+        total_expected = (duration_ms // interval_ms + 1) if duration_ms else 0
+
         # Poll with cancel check
-        while proc.poll() is None:
+        while True:
+            line = proc.stdout.readline()
+            if not line and proc.poll() is not None:
+                break
+
             if cancel_check and cancel_check():
                 proc.kill()
                 proc.wait()
                 return 0
-            try:
-                proc.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
+
+            if line and on_progress and total_expected > 0:
+                line = line.strip()
+                if line.startswith("out_time_us="):
+                    try:
+                        us = int(line.split("=")[1])
+                        current_ms = us // 1000
+                        current_frame = current_ms // interval_ms
+                        # Extraction is phase 1 (0-90% of total work)
+                        on_progress(int(current_frame * 0.9), total_expected)
+                    except (ValueError, IndexError):
+                        pass
 
         if proc.returncode != 0:
-            stderr = proc.stderr.read().decode(errors="replace")
-            raise RuntimeError(f"FFmpeg frame extraction failed: {stderr[:300]}")
+            stderr = "".join(stderr_buffer).strip()
+            # 에러 원인은 보통 로그 마지막에 있으므로 마지막 500자를 가져옵니다.
+            log_snippet = stderr[-500:] if len(stderr) > 500 else stderr
+            raise RuntimeError(log_snippet or f"FFmpeg exit code {proc.returncode}")
 
         # Rename from FFmpeg 1-indexed sequential to ms-based naming
-        total_expected = (duration_ms // interval_ms + 1) if duration_ms else 0
         seq_frames = sorted(output_dir.glob("frame_*.jpg"))
+        num_frames = len(seq_frames)
         extracted = 0
         for i, frame_path in enumerate(seq_frames):
             ms = i * interval_ms
             new_name = output_dir / f"frame_{ms:09d}.jpg"
             frame_path.rename(new_name)
             extracted += 1
-            if on_progress and total_expected > 0:
-                on_progress(extracted, total_expected)
+            if on_progress and total_expected > 0 and num_frames > 0:
+                # Renaming is phase 2 (90-100% of total work)
+                progress_val = int(total_expected * 0.9 + (extracted / num_frames) * total_expected * 0.1)
+                on_progress(min(progress_val, total_expected), total_expected)
 
         return extracted

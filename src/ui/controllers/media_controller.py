@@ -7,9 +7,9 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QThread, QUrl, Qt, Slot
+from PySide6.QtCore import QObject, QThread, QUrl, Qt, Slot, Signal
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QMessageBox, QProgressDialog
+from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from src.models.video_clip import VideoClipTrack
 from src.services.frame_cache_service import FrameCacheService
@@ -42,8 +42,13 @@ class MediaController(QObject):
         self._frame_cache_worker: FrameCacheWorker | None = None
         # 프록시
         self._proxy_workers: dict[str, tuple[QThread, object]] = {}
+        # 비디오 로드
+        self._video_thread: QThread | None = None
+        self._video_worker: VideoLoadWorker | None = None
     proxy_ready = Signal(str)  # source_path
     proxy_started = Signal(str)  # source_path
+    proxy_progress = Signal(str, int)  # source_path, percent
+    proxy_failed = Signal(str)  # source_path
 
     # ---- 비디오 로드 ----
 
@@ -63,10 +68,10 @@ class MediaController(QObject):
     def load_video(self, path: Path) -> None:
         """비동기 비디오 로딩.
 
-        MediaController는 QObject가 아니므로 signal→slot 연결 시
-        QueuedConnection이 메인 스레드로 마샬링되지 않는다.
-        따라서 워커 결과를 변수에 저장(DirectConnection, GIL 보호)하고,
-        progress.exec() 반환 후 메인 스레드에서 GUI 작업을 수행한다.
+        _store_result/_store_error는 일반 함수이므로 DirectConnection으로 실행된다.
+        progress/thread 정리 슬롯(QObject)은 AutoConnection → QueuedConnection으로
+        메인 스레드 마샬링이 보장된다.
+        따라서 progress.exec() 반환 후 메인 스레드에서 안전하게 GUI 작업을 수행한다.
         """
         ctx = self.ctx
         self._cleanup_temp_video()
@@ -224,6 +229,7 @@ class MediaController(QObject):
             if auto_play:
                 ctx.player.play()
             else:
+                # play() 로 프레임 1장을 렌더링한 뒤 render_pause_timer가 즉시 pause() 호출
                 ctx.player.play()
                 ctx.render_pause_timer.start()
             if ctx.showing_cached_frame:
@@ -269,7 +275,7 @@ class MediaController(QObject):
         ctx = self.ctx
         ctx.pending_seek_ms = None
         ctx.pending_auto_play = False
-        ctx.status_bar().showMessage(f"{tr('Player error')}: {error_string}")
+        self._show_error_message(tr("Player error"), error_string)
 
     # ---- 프록시 ----
 
@@ -279,8 +285,27 @@ class MediaController(QObject):
         ctx.status_bar().showMessage(
             tr("Using Proxy Media") if checked else tr("Using Original Media")
         )
+
+        # Start generation (or check existing) BEFORE trying to switch
         if checked and ctx.project.has_video:
             self.start_proxy_generation(ctx.project.video_path)
+        
+        # Switch current playback source if needed
+        if ctx.project.has_video:
+            current_source = None
+            clip_track = ctx.project.video_clip_track
+            if clip_track and 0 <= ctx.current_clip_index < len(clip_track.clips):
+                clip = clip_track.clips[ctx.current_clip_index]
+                current_source = clip.source_path or str(ctx.project.video_path)
+            elif ctx.project.video_path:
+                current_source = str(ctx.project.video_path)
+            
+            if current_source:
+                new_path = self.resolve_playback_path(current_source)
+                if new_path != ctx.current_playback_source:
+                    pos = ctx.player.position()
+                    is_playing = ctx.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                    self.switch_player_source(new_path, pos, auto_play=is_playing)
 
     def start_proxy_generation(self, source_path: Path) -> None:
         from src.services.proxy_service import ProxyService
@@ -303,28 +328,58 @@ class MediaController(QObject):
         
         # Progress update
         worker.progress.connect(
-            lambda pct: self.ctx.status_bar().showMessage(f"Generating proxy: {source_path.name} ({pct}%)")
+            lambda pct: self._on_proxy_progress(str(source_path), pct), Qt.QueuedConnection
         )
         
         # Error handling
         worker.error.connect(
-            lambda msg: self.ctx.status_bar().showMessage(f"Warning: {msg}", 5000)
+            lambda msg: self.ctx.status_bar().showMessage(f"Warning: {msg}", 5000), Qt.QueuedConnection
         )
         
-        worker.finished.connect(lambda p: self._on_proxy_finished(str(source_path), p))
+        worker.finished.connect(lambda p: self._on_proxy_finished(str(source_path), p), Qt.QueuedConnection)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(lambda: self._cleanup_proxy_worker(str(source_path)))
+        worker.finished.connect(lambda: self._cleanup_proxy_worker(str(source_path)), Qt.QueuedConnection)
         worker.finished.connect(thread.deleteLater)
         
         self._proxy_workers[str(source_path)] = (thread, worker)
         thread.start()
+
+    def _on_proxy_progress(self, source_path: str, pct: int) -> None:
+        self.ctx.status_bar().showMessage(f"Generating proxy: {Path(source_path).name} ({pct}%)")
+        self.proxy_progress.emit(source_path, pct)
+
+    def cancel_proxy_generation(self, source_path: str) -> None:
+        """Cancel proxy generation for a specific file."""
+        if source_path in self._proxy_workers:
+            thread, worker = self._proxy_workers[source_path]
+            worker.cancel()
+            self.ctx.status_bar().showMessage(f"{tr('Proxy generation canceled')}: {Path(source_path).name}", 3000)
 
     def _on_proxy_finished(self, source_path: str, proxy_path: str) -> None:
         if proxy_path:
             self.ctx.proxy_map[source_path] = proxy_path
             self.ctx.status_bar().showMessage(f"{tr('Proxy generated')}: {Path(source_path).name}", 5000)
             self.proxy_ready.emit(source_path)
+            
+            # If using proxies and currently playing this source, switch immediately
+            if self.ctx.use_proxies:
+                current_source = None
+                clip_track = self.ctx.project.video_clip_track
+                if clip_track and 0 <= self.ctx.current_clip_index < len(clip_track.clips):
+                    clip = clip_track.clips[self.ctx.current_clip_index]
+                    current_source = clip.source_path or str(self.ctx.project.video_path)
+                elif self.ctx.project.video_path:
+                    current_source = str(self.ctx.project.video_path)
+
+                if current_source and Path(current_source).resolve() == Path(source_path).resolve():
+                    new_path = self.resolve_playback_path(current_source)
+                    if new_path != self.ctx.current_playback_source:
+                        pos = self.ctx.player.position()
+                        is_playing = self.ctx.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                        self.switch_player_source(new_path, pos, auto_play=is_playing)
+        else:
+            self.proxy_failed.emit(source_path)
 
     def _cleanup_proxy_worker(self, source_path: str) -> None:
         if source_path in self._proxy_workers:
@@ -338,6 +393,10 @@ class MediaController(QObject):
                 thread.quit()
                 thread.wait(2000)
         self._proxy_workers.clear()
+
+    def is_proxy_generating(self) -> bool:
+        """Check if any proxy generation is currently running."""
+        return bool(self._proxy_workers)
 
     # ---- 웨이브폼 생성 ----
 
@@ -394,7 +453,7 @@ class MediaController(QObject):
                     source_paths.append(sp)
                     from src.services.video_probe import probe_video
                     info = probe_video(sp)
-                    durations[sp] = info.duration_ms
+                    durations[str(sp)] = info.duration_ms
         if not source_paths:
             return
         if ctx.frame_cache_service is None:
@@ -408,19 +467,27 @@ class MediaController(QObject):
         self._frame_cache_worker = FrameCacheWorker(uncached, durations, ctx.frame_cache_service)
         self._frame_cache_worker.moveToThread(self._frame_cache_thread)
         self._frame_cache_thread.started.connect(self._frame_cache_worker.run)
+        self._frame_cache_worker.progress.connect(self._on_frame_cache_progress)
         self._frame_cache_worker.status_update.connect(self._on_worker_status)
         self._frame_cache_worker.finished.connect(self._on_frame_cache_finished)
         self._frame_cache_worker.error.connect(self._on_frame_cache_error)
         self._frame_cache_worker.finished.connect(self._cleanup_frame_cache_thread)
         self._frame_cache_worker.error.connect(self._cleanup_frame_cache_thread)
         self._frame_cache_thread.start()
+        ctx.status_bar().showMessage(tr("Extracting frames for preview..."))
 
     def _on_frame_cache_finished(self, cache_service) -> None:
         self.ctx.status_bar().showMessage(tr("Frame cache ready"), 3000)
 
     def _on_frame_cache_error(self, message: str) -> None:
         print(f"Warning: Frame cache generation failed: {message}")
-        self.ctx.status_bar().showMessage(tr("Frame cache unavailable"), 3000)
+        self._show_error_message(tr("Frame cache unavailable"), message)
+
+    @Slot(int, int)
+    def _on_frame_cache_progress(self, current: int, total: int) -> None:
+        if total > 0:
+            pct = int(current * 100 / total)
+            self.ctx.status_bar().showMessage(f"{tr('Extracting frames for preview...')} ({pct}%)")
 
     def stop_frame_cache_generation(self) -> None:
         if self._frame_cache_worker:
@@ -530,6 +597,29 @@ class MediaController(QObject):
         except Exception as e:
             print(f"Error getting audio duration: {e}")
             return 0
+
+    def _show_error_message(self, title: str, message: str) -> None:
+        """에러 메시지 길이에 따라 상태바 또는 팝업창으로 표시."""
+        if len(message) > 100:
+            # 메시지가 길면 상태바에는 요약만 표시하고 팝업창을 띄움
+            self.ctx.status_bar().showMessage(title, 5000)
+            
+            msg_box = QMessageBox(self.ctx.window)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle(title)
+            msg_box.setText(message)
+            
+            copy_btn = msg_box.addButton(tr("Copy Log"), QMessageBox.ButtonRole.ActionRole)
+            msg_box.addButton(QMessageBox.StandardButton.Ok)
+            
+            msg_box.exec()
+            
+            if msg_box.clickedButton() == copy_btn:
+                QApplication.clipboard().setText(message)
+                self.ctx.status_bar().showMessage(tr("Log copied to clipboard"), 3000)
+        else:
+            # 짧으면 기존처럼 상태바에 결합하여 표시
+            self.ctx.status_bar().showMessage(f"{title}: {message}", 5000)
 
     # ---- closeEvent용 정리 ----
 

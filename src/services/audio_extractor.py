@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from src.services.ffmpeg_logger import log_ffmpeg_command
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.utils.config import AUDIO_SAMPLE_RATE
 
@@ -42,6 +43,7 @@ def extract_audio_to_wav(video_path: Path, output_path: Path | None = None) -> P
         str(output_path),
     ]
 
+    log_ffmpeg_command(args)
     result = runner.run(args)
 
     if result.returncode != 0:

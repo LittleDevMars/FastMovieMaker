@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF, QSizeF, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap, QResizeEvent, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPen, QPixmap, QResizeEvent, QWheelEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -511,6 +511,13 @@ class VideoPlayerWidget(QGraphicsView):
         self._frame_preview_item.setPos(x, y)
         self._frame_preview_item.setVisible(True)
 
+    def set_image(self, image: QImage) -> None:
+        """Render a QImage (usually from VideoFramePlayer) on the preview layer."""
+        if image.isNull():
+            return
+        pixmap = QPixmap.fromImage(image)
+        self.show_cached_frame(pixmap)
+
     def hide_cached_frame(self) -> None:
         """Hide the cached frame preview, showing live video again."""
         self._frame_preview_item.setVisible(False)
@@ -818,4 +825,3 @@ class VideoPlayerWidget(QGraphicsView):
         self._video_item.setVisible(not hidden)
         if hidden:
             self.hide_cached_frame()
-

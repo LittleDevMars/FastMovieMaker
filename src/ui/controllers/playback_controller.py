@@ -48,6 +48,7 @@ class PlaybackController:
                     if result is not None:
                         idx, clip = result
                         ctx.current_clip_index = idx
+                        self._apply_clip_speed(clip.speed)
                         clip_start = clip_track.clip_timeline_start(idx)
                         local_offset = timeline_ms - clip_start
                         source_ms = clip.source_in_ms + local_offset
@@ -177,6 +178,7 @@ class PlaybackController:
                 if result is not None:
                     idx, clip = result
                     ctx.current_clip_index = idx
+                    self._apply_clip_speed(clip.speed)
                     local_offset = position_ms - clip_track.clip_timeline_start(idx)
                     source_ms = clip.source_in_ms + local_offset
                     target_source_raw = clip.source_path or str(ctx.project.video_path)
@@ -222,6 +224,7 @@ class PlaybackController:
             result = clip_track.clip_at_timeline(position_ms)
             if result is not None:
                 idx, clip = result
+                self._apply_clip_speed(clip.speed)
                 ctx.current_clip_index = idx
                 local_offset = position_ms - clip_track.clip_timeline_start(idx)
                 source_ms = clip.source_in_ms + local_offset
@@ -249,6 +252,11 @@ class PlaybackController:
     def on_player_position_changed(self, position_ms: int) -> None:
         """Handle video player position change (source_ms from QMediaPlayer)."""
         ctx = self.ctx
+
+        # Sync VideoFramePlayer with QMediaPlayer (Audio Master)
+        if hasattr(ctx, "frame_player") and ctx.frame_player:
+            ctx.frame_player.sync_with_audio(position_ms)
+
         if not ctx.project.has_video:
             return
         if ctx.pending_seek_ms is not None:
@@ -270,6 +278,7 @@ class PlaybackController:
             return
 
         current_clip = clips[idx]
+        self._apply_clip_speed(current_clip.speed)
 
         in_range = current_clip.source_in_ms - 100 <= position_ms <= current_clip.source_out_ms + 100
         if in_range:
@@ -288,6 +297,7 @@ class PlaybackController:
                 if (c.source_path or str(ctx.project.video_path)) == ctx.current_playback_source:
                     if c.source_in_ms - 100 <= position_ms <= c.source_out_ms + 100:
                         ctx.current_clip_index = ci
+                        self._apply_clip_speed(c.speed)
                         cs = vt.clip_timeline_start(ci)
                         lo = (position_ms - c.source_in_ms) / c.speed
                         tms = int(cs + lo)
@@ -382,3 +392,14 @@ class PlaybackController:
         else:
             ctx.player.play()
             ctx.render_pause_timer.start()
+
+    def _apply_clip_speed(self, speed: float) -> None:
+        """현재 클립의 속도를 플레이어에 적용."""
+        ctx = self.ctx
+        # QMediaPlayer
+        if abs(ctx.player.playbackRate() - speed) > 0.01:
+            ctx.player.setPlaybackRate(speed)
+
+        # VideoFramePlayer
+        if hasattr(ctx, "frame_player") and ctx.frame_player:
+            ctx.frame_player.set_playback_rate(speed)

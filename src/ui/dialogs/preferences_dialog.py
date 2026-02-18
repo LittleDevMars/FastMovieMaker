@@ -154,6 +154,16 @@ class PreferencesDialog(QDialog):
         self._frame_fps.setSuffix(" fps")
         timeline_layout.addRow(tr("Frame Seek FPS:"), self._frame_fps)
 
+        # Audio speed settings
+        self._audio_pitch_shift = QCheckBox(tr("Audio speed changes pitch"))
+        timeline_layout.addRow(tr("Audio Speed:"), self._audio_pitch_shift)
+
+        self._frame_quality = QComboBox()
+        self._frame_quality.addItem(tr("Low"), 10)
+        self._frame_quality.addItem(tr("Medium"), 5)
+        self._frame_quality.addItem(tr("High"), 2)
+        timeline_layout.addRow(tr("Frame Cache Quality:"), self._frame_quality)
+
         layout.addWidget(timeline_group)
 
         layout.addStretch()
@@ -292,6 +302,12 @@ class PreferencesDialog(QDialog):
         self._default_duration.setValue(self._settings.get_default_subtitle_duration())
         self._snap_tolerance.setValue(self._settings.get_snap_tolerance())
         self._frame_fps.setValue(self._settings.get_frame_seek_fps())
+        self._audio_pitch_shift.setChecked(self._settings.get_audio_speed_pitch_shift())
+
+        quality = self._settings.get_frame_cache_quality()
+        idx = self._frame_quality.findData(quality)
+        if idx >= 0:
+            self._frame_quality.setCurrentIndex(idx)
 
         # Advanced
         ffmpeg_path = self._settings.get_ffmpeg_path()
@@ -319,6 +335,8 @@ class PreferencesDialog(QDialog):
         self._settings.set_default_subtitle_duration(self._default_duration.value())
         self._settings.set_snap_tolerance(self._snap_tolerance.value())
         self._settings.set_frame_seek_fps(self._frame_fps.value())
+        self._settings.set_audio_speed_pitch_shift(self._audio_pitch_shift.isChecked())
+        self._settings.set_frame_cache_quality(self._frame_quality.currentData())
 
         # Advanced
         ffmpeg_path = self._ffmpeg_path.text().strip()

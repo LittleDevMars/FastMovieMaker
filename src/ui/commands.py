@@ -216,6 +216,35 @@ class EditVolumeCommand(QUndoCommand):
         if 0 <= self._index < len(self._track):
             self._track[self._index].volume = self._old_volume
 
+class EditSegmentTTSCommand(QUndoCommand):
+    """Update TTS audio, voice, and speed for a segment."""
+
+    def __init__(self, track: SubtitleTrack, index: int, segment: SubtitleSegment, 
+                 new_audio_file: str | None, new_voice: str | None, new_speed: float | None):
+        super().__init__(f"Edit TTS (segment {index + 1})")
+        self._track = track
+        self._index = index
+        self._old_audio = segment.audio_file
+        self._old_voice = segment.voice
+        self._old_speed = segment.speed
+        self._new_audio = new_audio_file
+        self._new_voice = new_voice
+        self._new_speed = new_speed
+
+    def redo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            seg = self._track[self._index]
+            seg.audio_file = self._new_audio
+            seg.voice = self._new_voice
+            seg.speed = self._new_speed
+
+    def undo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            seg = self._track[self._index]
+            seg.audio_file = self._old_audio
+            seg.voice = self._old_voice
+            seg.speed = self._old_speed
+
 
 class UpdateSubtitleTrackCommand(QUndoCommand):
     """Replace the active subtitle track (e.g. after Whisper/TTS generation)."""

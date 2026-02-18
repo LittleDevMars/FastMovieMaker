@@ -63,7 +63,7 @@ def build_main_window_ui(window, player, audio_output, tts_audio_output, wavefor
 
     window._timeline = TimelineWidget()
     window._timeline.set_waveform_service(waveform_service)
-    window._track_headers = TrackHeaderPanel()
+    window._track_headers = TrackHeaderPanel(timeline=window._timeline)
     window._track_headers.state_changed.connect(window._on_track_state_changed)
 
     window._timeline_container = QWidget()

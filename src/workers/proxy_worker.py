@@ -1,4 +1,6 @@
-"""Worker for generating proxy media in background."""
+"""Worker for generating proxy media in a background thread."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -8,26 +10,46 @@ from src.services.proxy_service import generate_proxy, get_proxy_path
 
 
 class ProxyWorker(QObject):
-    """Generates a proxy file for a video."""
+    """Worker to run proxy generation."""
 
-    finished = Signal(str)  # proxy_path
-    progress = Signal(int)  # percentage
-    error = Signal(str)     # error message
+    progress = Signal(int)
+    finished = Signal(str)  # proxy_path or empty string if failed/cancelled
+    error = Signal(str)
 
     def __init__(self, source_path: str):
         super().__init__()
-        self._source_path = Path(source_path)
+        self._source_path = source_path
+        self._is_cancelled = False
 
     def run(self) -> None:
-        proxy_path = get_proxy_path(self._source_path)
-        success = generate_proxy(
-            self._source_path, 
-            proxy_path, 
-            on_progress=self.progress.emit,
-            cancel_check=lambda: self._cancelled
-        )
-        if success:
-            self.finished.emit(str(proxy_path))
-        else:
-            self.error.emit(f"Proxy generation failed for {self._source_path.name}")
+        """Run the proxy generation."""
+        try:
+            src = Path(self._source_path)
+            dst = get_proxy_path(src)
+
+            success = generate_proxy(
+                src,
+                dst,
+                on_progress=self.progress.emit,
+                cancel_check=self.check_cancelled
+            )
+
+            if self._is_cancelled:
+                self.finished.emit("")
+            elif success:
+                self.finished.emit(str(dst))
+            else:
+                self.finished.emit("")
+
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error.emit(str(e))
             self.finished.emit("")
+
+    def cancel(self) -> None:
+        """Request cancellation."""
+        self._is_cancelled = True
+
+    def check_cancelled(self) -> bool:
+        """Check if cancellation was requested."""
+        return self._is_cancelled

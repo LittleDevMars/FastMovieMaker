@@ -12,7 +12,9 @@ from src.models.subtitle import SubtitleTrack
 from src.models.style import SubtitleStyle
 from src.models.video_clip import VideoClipTrack
 from src.models.text_overlay import TextOverlay
+from src.services.settings_manager import SettingsManager
 from src.services.subtitle_exporter import export_srt
+from src.services.ffmpeg_logger import log_ffmpeg_command, log_ffmpeg_line
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
@@ -59,24 +61,32 @@ def _build_concat_filter(
             f_bri = clip.brightness - 1.0
             v_chain.append(f"eq=brightness={f_bri:.2f}:contrast={clip.contrast:.2f}:saturation={clip.saturation:.2f}")
 
+        settings = SettingsManager()
+        pitch_shift_enabled = settings.get_audio_speed_pitch_shift()
+
         if hasattr(clip, "speed") and clip.speed != 1.0:
-            v_chain.append(f"setpts=PTS/{clip.speed:.3f}")
+            v_chain.append(f"setpts=PTS/{clip.speed:.3f}") # Video speed always changes timing
         if need_scale:
             v_chain.append(f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease")
             v_chain.append(f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2")
             v_chain.append("format=yuv420p")
         parts.append(",".join(v_chain) + f"[{vl}]")
 
-        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}", "asetpts=PTS-STARTPTS"]
+        a_chain: list[str] = [f"[{idx}:a]atrim=start={start_s:.3f}:end={end_s:.3f}"]
+        if not pitch_shift_enabled: # Pitch-preserving, so reset timestamps before atempo
+            a_chain.append("asetpts=PTS-STARTPTS")
         if hasattr(clip, "speed") and clip.speed != 1.0:
-            speed = clip.speed
-            while speed > 2.0:
-                a_chain.append("atempo=2.0")
-                speed /= 2.0
-            while speed < 0.5:
-                a_chain.append("atempo=0.5")
-                speed /= 0.5
-            a_chain.append(f"atempo={speed:.3f}")
+            if pitch_shift_enabled:
+                a_chain.append(f"asetpts=PTS/{clip.speed:.3f}") # Change audio timing and pitch
+            else: # Pitch-preserving
+                speed = clip.speed
+                while speed > 2.0:
+                    a_chain.append("atempo=2.0")
+                    speed /= 2.0
+                while speed < 0.5:
+                    a_chain.append("atempo=0.5")
+                    speed /= 0.5
+                a_chain.append(f"atempo={speed:.3f}")
         
         if hasattr(clip, "volume_points") and clip.volume_points:
             pts = sorted(clip.volume_points, key=lambda p: p.offset_ms)
@@ -542,6 +552,8 @@ def export_video(
                             "-c:a", "copy"])
 
             args.extend(["-y", "-progress", "pipe:1", str(output_path)])
+            
+            log_ffmpeg_command(args)
 
         else:
             # simple -vf filter chain
@@ -581,6 +593,8 @@ def export_video(
                     str(output_path),
                 ]
 
+        log_ffmpeg_command(args)
+
         process = runner.run_async(
             args,
             stdout=subprocess.PIPE,
@@ -596,6 +610,7 @@ def export_video(
         def _drain_stderr():
             try:
                 for line in process.stderr:
+                    log_ffmpeg_line(line)
                     stderr_chunks.append(line)
             except Exception:
                 pass

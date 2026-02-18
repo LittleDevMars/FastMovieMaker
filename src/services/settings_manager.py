@@ -72,6 +72,22 @@ class SettingsManager:
         """Set the FPS for frame-by-frame seeking."""
         self._settings.setValue("editing/frame_fps", fps)
 
+    def get_audio_speed_pitch_shift(self) -> bool:
+        """Get whether audio speed changes should also shift pitch (default: False)."""
+        return self._settings.value("editing/audio_speed_pitch_shift", False, bool)
+
+    def set_audio_speed_pitch_shift(self, shift_pitch: bool) -> None:
+        """Set whether audio speed changes should also shift pitch."""
+        self._settings.setValue("editing/audio_speed_pitch_shift", shift_pitch)
+
+    def get_frame_cache_quality(self) -> int:
+        """Get the JPEG quality for frame cache (1-31, lower is better, default: 5)."""
+        return self._settings.value("editing/frame_cache_quality", 5, int)
+
+    def set_frame_cache_quality(self, quality: int) -> None:
+        """Set the JPEG quality for frame cache."""
+        self._settings.setValue("editing/frame_cache_quality", quality)
+
     # ---------------------------------------------------- Advanced Settings
 
     def get_ffmpeg_path(self) -> Optional[str]:

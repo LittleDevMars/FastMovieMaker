@@ -24,6 +24,7 @@ from src.ui.commands import (
     EditStyleCommand,
     EditTextCommand,
     EditTimeCommand,
+    EditSegmentTTSCommand,
     EditVolumeCommand,
     MergeCommand,
     MoveSegmentCommand,
@@ -219,6 +220,40 @@ class SubtitleController:
             ctx.undo_stack.push(cmd)
             ctx.video_widget.set_default_style(ctx.project.default_style)
             ctx.status_bar().showMessage(f"{tr('Style updated')} ({tr('segment')} {index + 1})")
+
+    def on_edit_segment_tts(self, index: int) -> None:
+        """Open TTS dialog for a specific segment."""
+        ctx = self.ctx
+        if not ctx.project.has_subtitles or index < 0 or index >= len(ctx.project.subtitle_track):
+            return
+        
+        seg = ctx.project.subtitle_track[index]
+        from src.ui.dialogs.tts_dialog import TTSDialog
+        
+        # Use segment's voice/speed if set, otherwise defaults
+        # Note: We don't have track-level defaults easily accessible here without parsing config
+        # but TTSDialog handles defaults.
+        
+        dialog = TTSDialog(
+            parent=ctx.window,
+            segment_mode=True,
+            initial_text=seg.text,
+            initial_voice=seg.voice,
+            initial_speed=seg.speed
+        )
+        
+        if dialog.exec():
+            # In segment mode, TTSDialog generates audio for just this text.
+            # However, TTSWorker generates a full track structure.
+            # We need to extract the audio file and update the segment.
+            result_track = dialog.result_track()
+            if result_track and len(result_track) > 0:
+                new_audio_file = result_track[0].audio_file
+                voice, speed = dialog.get_segment_settings()
+                
+                cmd = EditSegmentTTSCommand(ctx.project.subtitle_track, index, seg, new_audio_file, voice, speed)
+                ctx.undo_stack.push(cmd)
+                ctx.status_bar().showMessage(f"TTS updated for segment {index + 1}")
 
     def on_toggle_position_edit(self, checked: bool) -> None:
         """자막 위치 편집 모드 토글."""

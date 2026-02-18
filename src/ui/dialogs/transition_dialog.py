@@ -1,195 +1,103 @@
-"""Dialog for configuring video transition effects."""
+"""Dialog for editing video transition settings."""
 
-import subprocess
-import tempfile
+from __future__ import annotations
+
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal, QUrl, Qt
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFormLayout,
     QComboBox,
-    QSpinBox,
+    QDialog,
     QDialogButtonBox,
-    QPushButton,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
-    QProgressBar,
+    QSpinBox,
+    QVBoxLayout,
 )
+
+from src.services.transition_service import TransitionService
 from src.utils.i18n import tr
-from src.utils.config import find_ffmpeg
-
-
-class PreviewWorker(QThread):
-    """Background worker to generate transition preview using FFmpeg."""
-    
-    finished = Signal(str)  # output_path
-    error = Signal(str)
-
-    def __init__(self, clip_out, clip_in, trans_type, trans_dur_ms):
-        super().__init__()
-        self.clip_out = clip_out
-        self.clip_in = clip_in
-        self.trans_type = trans_type
-        self.trans_dur_ms = trans_dur_ms
-        self._temp_file = None
-
-    def run(self):
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            self.error.emit("FFmpeg not found")
-            return
-
-        if not self.clip_out.source_path or not self.clip_in.source_path:
-            self.error.emit("Missing source video")
-            return
-
-        try:
-            # Create temp file
-            self._temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            output_path = self._temp_file.name
-            self._temp_file.close()
-
-            # Preview settings: 2 seconds of each clip
-            # Note: We ignore speed for preview simplicity, showing raw source transition
-            preview_dur = 2.0
-            trans_dur_sec = self.trans_dur_ms / 1000.0
-            
-            # Calculate trim points (source time)
-            # Clip A: take last 'preview_dur' seconds
-            out_end = self.clip_out.source_out_ms / 1000.0
-            out_start = max(self.clip_out.source_in_ms / 1000.0, out_end - preview_dur)
-            actual_dur_a = out_end - out_start
-
-            # Clip B: take first 'preview_dur' seconds
-            in_start = self.clip_in.source_in_ms / 1000.0
-            in_end = min(self.clip_in.source_out_ms / 1000.0, in_start + preview_dur)
-            
-            # xfade offset = duration of first clip - transition duration
-            offset = actual_dur_a - trans_dur_sec
-
-            # FFmpeg command
-            # Scale to 640x360 for fast preview
-            cmd = [
-                ffmpeg, "-y",
-                "-ss", str(out_start), "-t", str(preview_dur), "-i", self.clip_out.source_path,
-                "-ss", str(in_start), "-t", str(preview_dur), "-i", self.clip_in.source_path,
-                "-filter_complex",
-                f"[0:v]scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];"
-                f"[1:v]scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1[v1];"
-                f"[v0][v1]xfade=transition={self.trans_type}:duration={trans_dur_sec}:offset={offset}[v]",
-                "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-an",
-                output_path
-            ]
-            
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            self.finished.emit(output_path)
-
-        except Exception as e:
-            self.error.emit(str(e))
 
 
 class TransitionDialog(QDialog):
-    """Video transition configuration dialog."""
+    """Dialog to select transition type and duration."""
 
-    def __init__(self, parent=None, initial_type: str = "fade", initial_duration: int = 500,
-                 outgoing_clip=None, incoming_clip=None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        initial_type: str = "fade",
+        initial_duration: int = 1000,
+        outgoing_clip=None,
+        incoming_clip=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle(tr("Transition Settings"))
-        self.resize(400, 450)
+        self.resize(400, 250)
 
+        self._type = initial_type
+        self._duration = initial_duration
         self._outgoing_clip = outgoing_clip
         self._incoming_clip = incoming_clip
-        self._preview_worker = None
-        self._preview_path = None
 
+        self._build_ui()
+
+    def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        
-        # --- Preview Area ---
-        self._video_widget = QVideoWidget()
-        self._video_widget.setMinimumHeight(200)
-        self._video_widget.setStyleSheet("background-color: black;")
-        layout.addWidget(self._video_widget)
 
-        self._player = QMediaPlayer()
-        self._audio_output = QAudioOutput()
-        self._player.setAudioOutput(self._audio_output)
-        self._player.setVideoOutput(self._video_widget)
-        # Loop preview
-        self._player.setLoops(QMediaPlayer.Loops.Infinite)
+        # Clip Info
+        info_group = QGroupBox(tr("Transition Info"))
+        info_layout = QHBoxLayout(info_group)
 
-        preview_layout = QHBoxLayout()
-        self._preview_btn = QPushButton(tr("Preview"))
-        self._preview_btn.clicked.connect(self._start_preview)
-        preview_layout.addWidget(self._preview_btn)
-        
-        self._progress = QProgressBar()
-        self._progress.setRange(0, 0)
-        self._progress.setVisible(False)
-        preview_layout.addWidget(self._progress)
-        layout.addLayout(preview_layout)
+        out_name = "Clip A"
+        if self._outgoing_clip and self._outgoing_clip.source_path:
+            out_name = Path(self._outgoing_clip.source_path).name
 
-        self._error_label = QLabel()
-        self._error_label.setStyleSheet("color: red")
-        layout.addWidget(self._error_label)
+        in_name = "Clip B"
+        if self._incoming_clip and self._incoming_clip.source_path:
+            in_name = Path(self._incoming_clip.source_path).name
+        elif self._incoming_clip is None:
+            in_name = tr("(End of Track)")
 
-        # --- Settings ---
-        form = QFormLayout()
+        info_label = QLabel(f"{out_name} ➔ {in_name}")
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_label.setStyleSheet("font-weight: bold; color: #ccc;")
+        info_layout.addWidget(info_label)
+        layout.addWidget(info_group)
 
+        # Settings Form
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(10)
+
+        # Type
+        type_label = QLabel(tr("Transition Type:"))
         self._type_combo = QComboBox()
-        # Common xfade transitions supported by FFmpeg
-        transitions = [
-            ("fade", tr("Fade")),
-            ("wipeleft", tr("Wipe Left")),
-            ("wiperight", tr("Wipe Right")),
-            ("wipeup", tr("Wipe Up")),
-            ("wipedown", tr("Wipe Down")),
-            ("slideleft", tr("Slide Left")),
-            ("slideright", tr("Slide Right")),
-            ("slideup", tr("Slide Up")),
-            ("slidedown", tr("Slide Down")),
-            ("circlecrop", tr("Circle Crop")),
-            ("rectcrop", tr("Rect Crop")),
-            ("distance", tr("Distance")),
-            ("fadeblack", tr("Fade Black")),
-            ("fadewhite", tr("Fade White")),
-            ("radial", tr("Radial")),
-            ("smoothleft", tr("Smooth Left")),
-            ("smoothright", tr("Smooth Right")),
-            ("smoothup", tr("Smooth Up")),
-            ("smoothdown", tr("Smooth Down")),
-            ("pixelize", tr("Pixelize")),
-            ("dissolve", tr("Dissolve")),
-            ("hblur", tr("Horizontal Blur")),
-            ("wipetl", tr("Wipe Top-Left")),
-            ("wiper", tr("Wipe Radial")),
-        ]
-        for t_id, t_name in transitions:
-            self._type_combo.addItem(t_name, t_id)
-        
-        # Set initial selection
-        idx = self._type_combo.findData(initial_type)
+        transitions = TransitionService.get_available_transitions()
+        for t in transitions:
+            self._type_combo.addItem(t, t)
+
+        idx = self._type_combo.findData(self._type)
         if idx >= 0:
             self._type_combo.setCurrentIndex(idx)
-        else:
-            self._type_combo.setCurrentIndex(0)
 
-        self._duration_spin = QSpinBox()
-        self._duration_spin.setRange(100, 5000) # 0.1s to 5s
-        self._duration_spin.setSingleStep(100)
-        self._duration_spin.setSuffix(" ms")
-        self._duration_spin.setValue(initial_duration)
-        
-        # Auto-preview when type changes
-        self._type_combo.currentIndexChanged.connect(self._start_preview)
+        form_layout.addWidget(type_label)
+        form_layout.addWidget(self._type_combo)
 
-        form.addRow(tr("Type:"), self._type_combo)
-        form.addRow(tr("Duration:"), self._duration_spin)
-        layout.addLayout(form)
+        # Duration
+        dur_label = QLabel(tr("Duration (ms):"))
+        self._dur_spin = QSpinBox()
+        self._dur_spin.setRange(100, 5000)  # 0.1s to 5s
+        self._dur_spin.setSingleStep(100)
+        self._dur_spin.setValue(self._duration)
+        self._dur_spin.setSuffix(" ms")
 
+        form_layout.addWidget(dur_label)
+        form_layout.addWidget(self._dur_spin)
+
+        layout.addLayout(form_layout)
+        layout.addStretch()
+
+        # Buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -197,47 +105,6 @@ class TransitionDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        # Initial preview if clips are available
-        if self._outgoing_clip and self._incoming_clip:
-            self._start_preview()
-        else:
-            self._preview_btn.setEnabled(False)
-            self._error_label.setText(tr("Select clips to preview"))
-
-    def _start_preview(self):
-        if not self._outgoing_clip or not self._incoming_clip:
-            return
-
-        self._preview_btn.setEnabled(False)
-        self._progress.setVisible(True)
-        self._error_label.setText("")
-        self._player.stop()
-
-        trans_type = self._type_combo.currentData()
-        trans_dur = self._duration_spin.value()
-
-        self._preview_worker = PreviewWorker(
-            self._outgoing_clip, self._incoming_clip, trans_type, trans_dur
-        )
-        self._preview_worker.finished.connect(self._on_preview_ready)
-        self._preview_worker.error.connect(self._on_preview_error)
-        self._preview_worker.start()
-
-    def _on_preview_ready(self, path):
-        self._preview_path = path
-        self._progress.setVisible(False)
-        self._preview_btn.setEnabled(True)
-        self._player.setSource(QUrl.fromLocalFile(path))
-        self._player.play()
-
-    def _on_preview_error(self, msg):
-        self._progress.setVisible(False)
-        self._preview_btn.setEnabled(True)
-        self._error_label.setText(f"Preview failed: {msg}")
-
     def get_data(self) -> tuple[str, int]:
         """Return (transition_type, duration_ms)."""
-        return (
-            self._type_combo.currentData(),
-            self._duration_spin.value()
-        )
+        return self._type_combo.currentData(), self._dur_spin.value()

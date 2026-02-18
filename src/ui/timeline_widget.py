@@ -865,6 +865,14 @@ class TimelineWidget(QWidget):
         insert_text_action = menu.addAction(tr("Insert Text Overlay"))
         menu.addSeparator()
         deselect_action = menu.addAction(tr("Deselect All"))
+        
+        menu.addSeparator()
+        ripple_action = menu.addAction(tr("Ripple Edit Mode"))
+        ripple_action.setCheckable(True)
+        ripple_action.setChecked(self._ripple_enabled)
+        
+        # 툴팁 추가로 기능 설명
+        ripple_action.setToolTip(tr("When enabled, deleting or trimming clips will move subsequent clips and subtitles."))
 
         action = menu.exec(event.globalPos())
         if action == insert_image_action:
@@ -875,6 +883,13 @@ class TimelineWidget(QWidget):
             self.insert_text_requested.emit(ms)
         elif action == deselect_action:
             self._clear_selection()
+            self.update()
+        elif action == ripple_action:
+            self.set_ripple_mode(ripple_action.isChecked())
+            state_msg = tr("Ripple Edit ON") if self._ripple_enabled else tr("Ripple Edit OFF")
+            self.status_message_requested.emit(state_msg, 2000)
+            # 리플 모드 상태에 따라 커서나 배경 등을 변경하여 시각적 피드백을 줄 수 있음
+            self._invalidate_static_cache()
             self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:

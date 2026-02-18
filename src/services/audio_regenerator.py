@@ -7,6 +7,8 @@ from typing import List
 import tempfile
 import shutil
 
+from src.services.settings_manager import SettingsManager
+from src.services.ffmpeg_logger import log_ffmpeg_command
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 from src.models.subtitle import SubtitleTrack
 
@@ -109,7 +111,7 @@ class AudioRegenerator:
         sorted_segments = sorted(segments, key=lambda s: s.start_ms)
 
         silence_file = temp_dir / "silence.mp3"
-        runner.run([
+        silence_args = [
             "-f", "lavfi",
             "-i", "anullsrc=r=44100:cl=stereo",
             "-t", "1",
@@ -117,7 +119,9 @@ class AudioRegenerator:
             "-acodec", "libmp3lame",
             "-y",
             str(silence_file),
-        ], check=True)
+        ]
+        log_ffmpeg_command(silence_args)
+        runner.run(silence_args, check=True)
 
         # Build concat list with audio segments and silence gaps
         concat_list = []
@@ -136,7 +140,7 @@ class AudioRegenerator:
                 remaining_ms = gap_ms % 1000
                 if remaining_ms > 50:
                     frac_silence = temp_dir / f"silence_{i}_frac.mp3"
-                    runner.run([
+                    frac_args = [
                         "-f", "lavfi",
                         "-i", "anullsrc=r=44100:cl=stereo",
                         "-t", f"{remaining_ms/1000:.3f}",
@@ -144,30 +148,62 @@ class AudioRegenerator:
                         "-acodec", "libmp3lame",
                         "-y",
                         str(frac_silence),
-                    ], check=True)
+                    ]
+                    log_ffmpeg_command(frac_args)
+                    runner.run(frac_args, check=True)
                     concat_list.append(f"file '{frac_silence}'")
 
             # Add audio segment (with optional volume adjustment)
             if seg.audio_file and Path(seg.audio_file).exists():
                 audio_file_path = seg.audio_file
-                # Apply per-segment volume if enabled and volume != 1.0
-                if apply_segment_volumes and hasattr(seg, 'volume') and seg.volume != 1.0:
-                    vol_adjusted = temp_dir / f"vol_{i}.mp3"
-                    runner.run([
+                
+                # 속도 및 볼륨 처리 필요 여부 확인
+                has_speed = hasattr(seg, 'speed') and seg.speed is not None and seg.speed != 1.0
+                has_volume = apply_segment_volumes and hasattr(seg, 'volume') and seg.volume != 1.0
+                
+                if has_speed or has_volume:
+                    processed_file = temp_dir / f"proc_{i}.mp3"
+                    filters = []
+                    
+                    # 1. 볼륨 필터 추가
+                    if has_volume:
+                        filters.append(f"volume={seg.volume:.2f}")
+                    
+                    # 2. 속도 필터 추가
+                    settings = SettingsManager()
+                    pitch_shift_enabled = settings.get_audio_speed_pitch_shift()
+
+                    if has_speed:
+                        if pitch_shift_enabled:
+                            filters.append(f"asetpts=PTS/{seg.speed:.3f}") # Change audio timing and pitch
+                        else: # Pitch-preserving
+                            s = seg.speed
+                            while s > 2.0:
+                                filters.append("atempo=2.0")
+                                s /= 2.0
+                            while s < 0.5:
+                                filters.append("atempo=0.5")
+                                s /= 0.5
+                            filters.append(f"atempo={s:.3f}")
+                    
+                    proc_args = [
                         "-i", str(seg.audio_file),
-                        "-af", f"volume={seg.volume:.2f}",
+                        "-af", ",".join(filters),
                         "-q:a", "2",
                         "-y",
-                        str(vol_adjusted),
-                    ], check=True)
-                    audio_file_path = str(vol_adjusted)
+                        str(processed_file),
+                    ]
+                    log_ffmpeg_command(proc_args)
+                    runner.run(proc_args, check=True)
+                    audio_file_path = str(processed_file)
+
                 concat_list.append(f"file '{audio_file_path}'")
                 current_time_ms = seg.end_ms
             else:
                 # If audio file missing, add silence for segment duration
                 duration_s = (seg.end_ms - seg.start_ms) / 1000
                 missing_silence = temp_dir / f"missing_{i}.mp3"
-                runner.run([
+                missing_args = [
                     "-f", "lavfi",
                     "-i", "anullsrc=r=44100:cl=stereo",
                     "-t", f"{duration_s:.3f}",
@@ -175,7 +211,9 @@ class AudioRegenerator:
                     "-acodec", "libmp3lame",
                     "-y",
                     str(missing_silence),
-                ], check=True)
+                ]
+                log_ffmpeg_command(missing_args)
+                runner.run(missing_args, check=True)
                 concat_list.append(f"file '{missing_silence}'")
                 current_time_ms = seg.end_ms
 
@@ -183,22 +221,26 @@ class AudioRegenerator:
         timeline_file.write_text("\n".join(concat_list), encoding="utf-8")
 
         output_audio = temp_dir / "merged.mp3"
-        result = runner.run([
+        merge_args = [
             "-f", "concat",
             "-safe", "0",
             "-i", str(timeline_file),
             "-c", "copy",
             "-y",
             str(output_audio),
-        ])
+        ]
+        log_ffmpeg_command(merge_args)
+        result = runner.run(merge_args)
         if result.returncode != 0:
-            runner.run([
+            fallback_args = [
                 "-f", "concat",
                 "-safe", "0",
                 "-i", str(timeline_file),
                 "-q:a", "2",
                 "-y",
                 str(output_audio),
-            ], check=True)
+            ]
+            log_ffmpeg_command(fallback_args)
+            runner.run(fallback_args, check=True)
 
         return output_audio

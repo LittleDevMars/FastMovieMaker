@@ -39,9 +39,10 @@ class TrackHeaderPanel(QWidget):
     _ACTIVE_COLOR = QColor(100, 220, 255)
     _INACTIVE_COLOR = QColor(60, 60, 60)
 
-    def __init__(self, parent=None):
+    def __init__(self, timeline=None, parent=None):
         super().__init__(parent)
         self.setFixedWidth(120)
+        self._timeline = timeline
         self._project = None
 
     def set_project(self, project):
@@ -50,25 +51,24 @@ class TrackHeaderPanel(QWidget):
 
     def _get_tracks_layout(self):
         """Compute dynamic Y positions for all tracks."""
-        if not self._project:
+        if not self._project or not self._timeline:
             return []
             
-        y = self._CLIP_Y
         tracks = []
         
         # Video tracks
         num_v = len(self._project.video_tracks)
         for i in range(num_v):
+            y = self._timeline._video_track_y(i)
             t_name = self._project.video_tracks[i].name or f"Video {i+1}"
             tracks.append({
                 "y": y, "h": self._CLIP_H, 
                 "name": t_name,
                 "controls": "LMH", "track_type": "video", "index": i
             })
-            y += self._CLIP_H
         
-        y += 4
         # Subtitle track (Simplified: only active track shown or grouped)
+        y = self._timeline._subtitle_track_y()
         sub_name = "Subtitles"
         if self._project and self._project.subtitle_track:
             sub_name = self._project.subtitle_track.name or "Subtitles"
@@ -76,19 +76,39 @@ class TrackHeaderPanel(QWidget):
             "y": y, "h": self._SEG_H, 
             "name": sub_name, "controls": "LMH", "track_type": "subtitle"
         })
-        y += self._SEG_H + 4
         
         # Audio track (if any)
+        y = self._timeline._audio_track_y()
         tracks.append({
             "y": y, "h": self._AUDIO_H, 
-            "name": "Audio", "controls": "LMH", "track_type": "audio"
+            "name": "TTS Audio", "controls": "LMH", "track_type": "audio"
         })
-        y += self._AUDIO_H + 4
         
-        # Overlays
+        # Image Overlays
+        y = self._timeline._img_overlay_base_y()
+        next_y = self._timeline._text_overlay_base_y()
+        h = max(self._timeline._IMG_ROW_H, next_y - y - self._timeline._TRACK_GAP)
         tracks.append({
-            "y": y, "h": 60, "name": "Overlays", "controls": "LH", "track_type": "overlay"
+            "y": y, "h": h, "name": "Images", "controls": "LH", "track_type": "overlay"
         })
+
+        # Text Overlays
+        y = next_y
+        next_y = self._timeline._bgm_track_base_y()
+        h = max(self._timeline._TEXT_ROW_H, next_y - y - self._timeline._TRACK_GAP)
+        tracks.append({
+            "y": y, "h": h, "name": "Text", "controls": "LH", "track_type": "text"
+        })
+
+        # BGM Tracks
+        if hasattr(self._project, "bgm_tracks"):
+            for i, track in enumerate(self._project.bgm_tracks):
+                y = self._timeline._bgm_track_y(i)
+                tracks.append({
+                    "y": y, "h": self._BGM_H,
+                    "name": track.name or f"BGM {i+1}",
+                    "controls": "LM", "track_type": "bgm", "index": i
+                })
         
         return tracks
 
@@ -129,6 +149,12 @@ class TrackHeaderPanel(QWidget):
         elif tt == "overlay":
             t = self._project.image_overlay_track
             return t.locked, False, t.hidden
+        elif tt == "text":
+            t = self._project.text_overlay_track
+            return t.locked, False, t.hidden
+        elif tt == "bgm":
+            t = self._project.bgm_tracks[info["index"]]
+            return t.locked, t.muted, False
         return False, False, False
 
     def _draw_track_header(self, painter, info):
@@ -256,6 +282,10 @@ class TrackHeaderPanel(QWidget):
             target = self._project.subtitle_track # fallback
         elif tt == "overlay":
             target = self._project.image_overlay_track
+        elif tt == "text":
+            target = self._project.text_overlay_track
+        elif tt == "bgm":
+            target = self._project.bgm_tracks[info["index"]]
             
         if target:
             current = getattr(target, field)

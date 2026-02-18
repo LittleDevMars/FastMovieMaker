@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.services.ffmpeg_logger import log_ffmpeg_command
 from src.infrastructure.ffmpeg_runner import get_ffmpeg_runner
 
 
@@ -29,16 +30,15 @@ def probe_video(video_path: Path | str) -> VideoInfo:
         return VideoInfo()
 
     try:
-        result = runner.run_ffprobe(
-            [
-                "-v", "error",
-                "-show_entries", "stream=codec_type,width,height",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                str(video_path),
-            ],
-            timeout=15,
-        )
+        args = [
+            "-v", "error",
+            "-show_entries", "stream=codec_type,width,height",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            str(video_path),
+        ]
+        log_ffmpeg_command(["ffprobe"] + args)
+        result = runner.run_ffprobe(args, timeout=15)
 
         data = json.loads(result.stdout)
 
