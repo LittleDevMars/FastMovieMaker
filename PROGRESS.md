@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 23 완료 (2026-02-19)
+**현재 상태:** Day 24 완료 (2026-02-19)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -37,6 +37,7 @@
 | **프레임 버퍼링 및 성능 최적화** — VideoFramePlayer 구현, FFmpeg 실시간 로깅, 오디오 동기화 고도화 | **완료 (Day 21)** |
 | **코드 품질 개선** — MediaController 버그 수정 5종 (초기화 누락, 독스트링 오류, 로직 주석, UX 팝업 제거) | **완료 (Day 22)** |
 | **Phase T2/T3** — SpeedDialog, RippleEditService(BGM/텍스트 오버레이 지원), TrimClipCommand 버그 수정, set_magnetic_snap() 추가 | **완료 (Day 23)** |
+| **BGM Ducking** — TTS 구간 자동 배경음 덕킹 (DuckingService, FFmpeg volume expression, ExportDialog UI) | **완료 (Day 24)** |
 
 ---
 
@@ -151,6 +152,37 @@
 ### 테스트 결과
 - 신규 15/15 passed
 - 전체 411 passed (기존 22개 실패는 변경과 무관한 pre-existing 이슈)
+
+---
+
+## 2026-02-19 (Day 24) 작업 요약
+
+**BGM Ducking — TTS 구간 자동 배경음 볼륨 감소**
+
+### 1. DuckingService 신규 (`src/services/ducking_service.py`)
+- `build_volume_expr(segments, base_volume, duck_volume)`: FFmpeg `volume` 필터 표현식 생성
+- `between(t,s,e)` 패턴으로 TTS 세그먼트 구간 자동 감지
+- 오디오 없는 세그먼트 제외, 세그먼트 없으면 `str(base_volume)` 반환
+
+### 2. AudioMerger 확장 (`src/services/audio_merger.py`)
+- `mix_audio_tracks()` — `track1_volume: float | str` 지원
+- 문자열이면 `volume='expr'` (FFmpeg 표현식), 숫자면 `volume=0.8` 형태 적용
+
+### 3. AudioRegenerator 확장 (`src/services/audio_regenerator.py`)
+- `regenerate_track_audio()`: `ducking_enabled`, `duck_level` 파라미터 추가
+- `ducking_enabled=True`이면 DuckingService로 expression 생성 후 믹싱에 전달
+
+### 4. ExportDialog UI (`src/ui/dialogs/export_dialog.py`)
+- "BGM Ducking" 그룹 추가 (Enable Auto-Ducking 체크박스 + Duck Level 슬라이더 0~100%)
+- TTS/믹싱 비활성화 시 Ducking도 자동 비활성화
+
+### 수정/신규 파일
+- **신규 (2):** `src/services/ducking_service.py`, `tests/test_ducking_service.py`
+- **수정 (4):** `src/services/audio_merger.py`, `src/services/audio_regenerator.py`, `src/ui/dialogs/export_dialog.py`, `src/utils/lang/ko.py`
+
+### 테스트 결과
+- 신규 8/8 passed
+- 전체 419 passed (기존 22개 실패는 pre-existing 이슈)
 
 ---
 
