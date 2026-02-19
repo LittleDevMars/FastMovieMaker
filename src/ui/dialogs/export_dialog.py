@@ -39,6 +39,7 @@ class ExportDialog(QDialog):
         parent=None,
         video_has_audio: bool = False,
         overlay_path: Path | None = None,
+        overlay_template=None,
         image_overlays: list | None = None,
         video_tracks: list | None = None,
         text_overlays: list | None = None,
@@ -52,6 +53,7 @@ class ExportDialog(QDialog):
         self._track = track
         self._video_has_audio = video_has_audio
         self._overlay_path = overlay_path
+        self._overlay_template = overlay_template
         self._image_overlays = image_overlays
         self._video_tracks = video_tracks
         self._text_overlays = text_overlays
@@ -185,8 +187,19 @@ class ExportDialog(QDialog):
         row2.addWidget(QLabel(tr("Resolution:")))
         self._res_combo = QComboBox()
         self._res_combo.addItem(tr("Original"), (0, 0))
-        self._res_combo.addItem("1080p (1920x1080)", (1920, 1080))
-        self._res_combo.addItem("720p (1280x720)", (1280, 720))
+        self._res_combo.addItem("1080p 16:9 (1920×1080)", (1920, 1080))
+        self._res_combo.addItem("720p 16:9 (1280×720)", (1280, 720))
+        self._res_combo.addItem("1080p 9:16 (1080×1920)", (1080, 1920))
+        self._res_combo.addItem("720p 9:16 (720×1280)", (720, 1280))
+        self._res_combo.addItem("1:1 (1080×1080)", (1080, 1080))
+        # Auto-select based on overlay template aspect ratio
+        template_ar = self._overlay_template.aspect_ratio if self._overlay_template else None
+        if template_ar == "9:16":
+            self._res_combo.setCurrentIndex(3)  # 1080×1920
+        elif template_ar == "16:9":
+            self._res_combo.setCurrentIndex(1)  # 1920×1080
+        elif template_ar == "1:1":
+            self._res_combo.setCurrentIndex(5)  # 1080×1080
         row2.addWidget(self._res_combo)
 
         row2.addWidget(QLabel(tr("Quality (CRF):")))

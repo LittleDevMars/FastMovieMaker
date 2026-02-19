@@ -404,18 +404,12 @@ def export_video(
             else:
                 final_a_label = track_a_labels[0]
 
-            # Template overlay
+            # Template overlay — scale to fill canvas exactly (template is designed for this ratio)
             if template_idx >= 0:
-                if scale_width > 0 and scale_height > 0:
-                    fc_parts.append(
-                        f"[{template_idx}:v]scale={scale_width}:{scale_height}"
-                        f":force_original_aspect_ratio=decrease[ovr]"
-                    )
-                    fc_parts.append(f"{current}[ovr]overlay=(W-w)/2:(H-h)/2[comp]")
-                else:
-                    fc_parts.append(
-                        f"{current}[{template_idx}:v]overlay=(W-w)/2:(H-h)/2[comp]"
-                    )
+                fc_parts.append(
+                    f"[{template_idx}:v]scale={norm_w}:{norm_h},format=rgba[ovr]"
+                )
+                fc_parts.append(f"{current}[ovr]overlay=0:0[comp]")
                 current = "[comp]"
 
             # PIP image overlays

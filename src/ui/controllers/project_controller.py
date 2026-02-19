@@ -119,6 +119,7 @@ class ProjectController:
         dialog = ExportDialog(
             ctx.project.video_path, ctx.project.subtitle_track, parent=ctx.window,
             video_has_audio=ctx.project.video_has_audio, overlay_path=overlay_path,
+            overlay_template=overlay_template,
             image_overlays=img_overlays, video_tracks=video_tracks, text_overlays=text_overlays,
         )
         dialog.exec()
