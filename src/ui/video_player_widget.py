@@ -477,22 +477,31 @@ class VideoPlayerWidget(QGraphicsView):
 
     # -------------------------------------------------------- Overlay Utilities
 
-    def _fit_overlay(self) -> None:
-        """Resize the overlay to match the current view size."""
+    def _fit_overlay(self, video_w: float = -1, video_h: float = -1, video_x: float = 0, video_y: float = 0) -> None:
+        """Resize the overlay to match the current video item size and position."""
         if not self._overlay_path or not self._overlay_item.isVisible():
             return
         pixmap = QPixmap(self._overlay_path)
         if pixmap.isNull():
             return
-        view_size = self.viewport().size()
+        
+        if video_w == -1: # No video size provided, use full view
+            view_size = self.viewport().size()
+            video_w = view_size.width()
+            video_h = view_size.height()
+            video_x, video_y = 0, 0
+            
         scaled = pixmap.scaled(
-            view_size.width(), view_size.height(),
+            int(video_w), int(video_h),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         self._overlay_item.setPixmap(scaled)
-        x = (view_size.width() - scaled.width()) / 2
-        y = (view_size.height() - scaled.height()) / 2
+        self._overlay_item.setOpacity(self._current_template.opacity if self._current_template else 1.0)
+        self._overlay_item.setVisible(True)
+        # Center the overlay within the video area
+        x = video_x + (video_w - scaled.width()) / 2
+        y = video_y + (video_h - scaled.height()) / 2
         self._overlay_item.setPos(x, y)
 
     def show_cached_frame(self, pixmap: QPixmap) -> None:
@@ -524,15 +533,53 @@ class VideoPlayerWidget(QGraphicsView):
 
     def _fit_video(self) -> None:
         view_size = self.viewport().size()
-        self._video_item.setSize(QSizeF(view_size.width(), view_size.height()))
-        self._scene.setSceneRect(0, 0, view_size.width(), view_size.height())
-        self._fit_overlay()
+        view_w = view_size.width()
+        view_h = view_size.height()
+        
+        target_w, target_h = float(view_w), float(view_h)
+        target_x, target_y = 0.0, 0.0
+
+        # Adjust video size based on current template aspect ratio
+        if self._current_template and self._current_template.aspect_ratio not in ("16:9", "any"):
+            template_ratio_str = self._current_template.aspect_ratio
+            if template_ratio_str == "9:16":
+                template_ratio = 9 / 16
+            elif template_ratio_str == "4:5":
+                template_ratio = 4 / 5
+            elif template_ratio_str == "1:1":
+                template_ratio = 1 / 1
+            else: # Fallback to 16:9 if unknown (should not happen with valid templates)
+                template_ratio = 16 / 9  
+
+            current_view_ratio = view_w / view_h
+
+            if current_view_ratio > template_ratio:
+                # View is wider than template, constrained by height
+                target_h = float(view_h)
+                target_w = view_h * template_ratio
+            else:
+                # View is taller than template, constrained by width
+                target_w = float(view_w)
+                target_h = view_w / template_ratio
+
+            # Center the video item within the view
+            target_x = (view_w - target_w) / 2.0
+            target_y = (view_h - target_h) / 2.0
+        # If template is "any" or "16:9" or no template, video fills the view_size.
+        # target_w, target_h, target_x, target_y remain view_w, view_h, 0, 0 respectively.
+        
+        self._video_item.setSize(QSizeF(target_w, target_h))
+        self._video_item.setPos(target_x, target_y)
+        self._scene.setSceneRect(0, 0, view_w, view_h) # Scene rect always matches view size
+
+        self._fit_overlay(target_w, target_h, target_x, target_y)
         self._position_subtitle()
         # Re-fit cached frame preview if visible
         if self._frame_preview_item.isVisible():
             pixmap = self._frame_preview_item.pixmap()
             if pixmap and not pixmap.isNull():
                 self.show_cached_frame(pixmap)
+
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
