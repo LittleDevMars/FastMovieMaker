@@ -170,7 +170,7 @@ class TimelineWidget(QWidget):
         # 썸네일 서비스
         from src.services.timeline_thumbnail_service import TimelineThumbnailService
         self._thumbnail_service = TimelineThumbnailService(self)
-        self._thumbnail_service.thumbnail_ready.connect(self.update)
+        self._thumbnail_service.thumbnail_ready.connect(self._on_thumbnail_ready)
 
         # 리플 편집 모드
         self._ripple_enabled: bool = False
@@ -304,9 +304,16 @@ class TimelineWidget(QWidget):
             self._waveform_service.waveform_ready.connect(self._on_waveform_ready)
         self.update()
 
+    @Slot(str, int, object)
+    def _on_thumbnail_ready(self, source_path: str, timestamp_ms: int, image: object) -> None:
+        """Handle thumbnail ready signal — invalidate static cache so paintEvent redraws."""
+        self._invalidate_static_cache()
+        self.update()
+
     @Slot(str, object)
     def _on_waveform_ready(self, source_path: str, data: WaveformData) -> None:
         """Handle waveform ready signal from service."""
+        self._invalidate_static_cache()
         self.update()
 
     def set_primary_video_path(self, path: str | None) -> None:

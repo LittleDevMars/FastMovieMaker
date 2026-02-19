@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 26 완료 (2026-02-20)
+**현재 상태:** Day 27 완료 (2026-02-20)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -40,6 +40,7 @@
 | **BGM Ducking** — TTS 구간 자동 배경음 덕킹 (DuckingService, FFmpeg volume expression, ExportDialog UI) | **완료 (Day 24)** |
 | **기술 부채 해소** — 사전 실패 테스트 21개 전체 수정 (441/441 passed), `clip_boundaries_ms` 버그, `proxy_progress` 필드, ProxyWorker error 시그널 | **완료 (Day 25)** |
 | **TTS 설정 프리셋 저장/로드** — `TTSPreset` 데이터클래스, `TTSPresetManager` (QSettings), TTSDialog 프리셋 UI (드롭다운+Save…+Delete), 13개 테스트 (454/454 passed) | **완료 (Day 26)** |
+| **비디오 썸네일 버그 수정 (Phase T2)** — `thumbnail_ready` static cache 무효화 누락, `_on_waveform_ready` 동일 패턴 수정, `vis_x1/vis_x2` viewport 클리핑 수정, 썸네일 서비스 단위 테스트 15개 (469/469 passed) | **완료 (Day 27)** |
 
 ---
 
@@ -154,6 +155,40 @@
 ### 테스트 결과
 - 신규 15/15 passed
 - 전체 411 passed (기존 22개 실패는 변경과 무관한 pre-existing 이슈)
+
+---
+
+## 2026-02-20 (Day 27) 작업 요약
+
+**비디오 썸네일 버그 수정 (Phase T2) + 단위 테스트**
+
+### 근본 원인
+`thumbnail_ready` Signal이 `self.update()`에만 연결되어 있어서, `paintEvent` 호출 시
+static cache key가 변경되지 않아 캐시된 픽셀맵 재사용 → 썸네일 미표시.
+
+### 1. Bug 1 — `thumbnail_ready` static cache 무효화 누락 (`timeline_widget.py`)
+- `thumbnail_ready.connect(self.update)` → `connect(self._on_thumbnail_ready)` 변경
+- `_on_thumbnail_ready()` 신규 메서드: `_invalidate_static_cache()` + `update()` 호출
+- 이제 썸네일 도착 시 static cache가 무효화되어 `paintEvent`가 재실행됨
+
+### 2. Bug 2 — `_on_waveform_ready` 동일 패턴 수정 (`timeline_widget.py`)
+- `_on_waveform_ready()`에 `_invalidate_static_cache()` 추가 (클립 웨이브폼 미표시 동일 버그)
+
+### 3. Bug 3 — `vis_x1/vis_x2` viewport 클리핑 수정 (`timeline_painter.py`)
+- 기존: `max(x1, ms_to_x(start_ms))` / `min(x2, ms_to_x(end_ms))` → 사실상 no-op
+- 수정: `max(x1, 0)` / `min(x2, tw.width())` → 화면 밖 클립에 불필요한 FFmpeg 호출 방지
+
+### 4. 단위 테스트 (`tests/test_timeline_thumbnail_service.py`)
+- 캐시 히트/미스, LRU move_to_end, 중복 요청 방지, LRU 퇴거, signal emit, clear/cancel
+- 신규 15/15 passed
+
+### 수정/신규 파일
+- **수정 (2):** `src/ui/timeline_widget.py`, `src/ui/timeline_painter.py`
+- **신규 (1):** `tests/test_timeline_thumbnail_service.py`
+
+### 테스트 결과
+- 신규 15/15 passed
+- 전체 **469/469 passed**
 
 ---
 

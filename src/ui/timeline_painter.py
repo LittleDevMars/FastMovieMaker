@@ -687,8 +687,8 @@ class TimelinePainter:
 
             # 필름스트립 썸네일
             if tw._should_draw_thumbnails(rect.width()):
-                vis_x1 = max(int(x1), int(tw._ms_to_x(start_ms)))
-                vis_x2 = min(int(x2), int(tw._ms_to_x(start_ms + clip.duration_ms)))
+                vis_x1 = max(int(x1), 0)
+                vis_x2 = min(int(x2), tw.width())
                 if vis_x2 > vis_x1:
                     interval = tw._get_thumbnail_interval()
                     start_grid = (vis_x1 // interval) * interval
