@@ -62,9 +62,7 @@ class TimelineWidget(QWidget):
     video_files_dropped = Signal(list, int, int)  # (file_paths, position_ms, track_index)
     audio_files_dropped = Signal(list, int)  # (file_paths, position_ms)
     clip_selected = Signal(int, int)            # (track_index, clip_index)
-    clip_split_requested = Signal(int)          # (timeline_ms) - No track index needed usually as it splits all or current? 
-                                                # Actually better to track-specific: 
-                                                # self.clip_split_requested.emit(track_idx, timeline_ms)
+    clip_split_requested = Signal(int, int)     # (track_idx, timeline_ms) — track_idx=-1 은 자동 탐색
     clip_deleted = Signal(int, int)             # (track_index, clip_index)
     clip_speed_requested = Signal(int, int)     # (track_index, clip_index)
     clip_trimmed = Signal(int, int, int, int)   # (track_index, clip_index, new_source_in, new_source_out)
@@ -807,7 +805,7 @@ class TimelineWidget(QWidget):
                 
             action = menu.exec(event.globalPos())
             if action == split_act:
-                self.clip_split_requested.emit(self._playhead_ms)
+                self.clip_split_requested.emit(v_idx, self._playhead_ms)
             elif delete_act and action == delete_act:
                 self.clip_deleted.emit(v_idx, seg_idx)
             elif trans_act and action == trans_act:

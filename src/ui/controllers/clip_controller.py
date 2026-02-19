@@ -61,16 +61,30 @@ class ClipController:
 
     # ---- 클립 분할 ----
 
-    def on_split_clip(self, timeline_ms: int) -> None:
+    def on_split_clip(self, track_idx: int, timeline_ms: int) -> None:
         ctx = self.ctx
-        res = self.get_top_clip_at(timeline_ms)
-        if not res:
-            ctx.status_bar().showMessage(tr("No video clips to split"), 3000)
-            return
+        if track_idx >= 0:
+            # 우클릭 메뉴: 특정 트랙에서 직접 탐색
+            if not ctx.project or track_idx >= len(ctx.project.video_tracks):
+                ctx.status_bar().showMessage(tr("No video clips to split"), 3000)
+                return
+            vt = ctx.project.video_tracks[track_idx]
+            res = vt.clip_at_timeline(timeline_ms)
+            if not res:
+                ctx.status_bar().showMessage(tr("No video clips to split"), 3000)
+                return
+            clip_idx, clip = res
+            v_idx = track_idx
+        else:
+            # Ctrl+B 단축키: 최상위 트랙 자동 탐색
+            res = self.get_top_clip_at(timeline_ms)
+            if not res:
+                ctx.status_bar().showMessage(tr("No video clips to split"), 3000)
+                return
+            v_idx, clip_idx, clip = res
+            vt = ctx.project.video_tracks[v_idx]
 
-        v_idx, clip_idx, clip = res
-        vt = ctx.project.video_tracks[v_idx]
-        offset = sum(c.duration_ms for c in vt.clips[:clip_idx])
+        offset = vt.clip_timeline_start(clip_idx)
         local_ms = timeline_ms - offset
         split_source = clip.source_in_ms + int(local_ms * clip.speed)
 

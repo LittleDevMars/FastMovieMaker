@@ -199,7 +199,7 @@ class MainWindow(QMainWindow):
         sc_paste.activated.connect(self._on_paste)
 
         sc_split = QShortcut(QKeySequence("Ctrl+B"), self)
-        sc_split.activated.connect(lambda: self._clip.on_split_clip(self._timeline._playhead_ms))
+        sc_split.activated.connect(lambda: self._clip.on_split_clip(-1, self._timeline._playhead_ms))
 
         sc_zoom_in = QShortcut(QKeySequence("Ctrl+="), self)
         sc_zoom_in.activated.connect(self._timeline.zoom_in)
