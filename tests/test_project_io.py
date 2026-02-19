@@ -44,7 +44,7 @@ class TestSaveLoadV2:
         path = tmp_path / "test.fmm.json"
         save_project(sample_project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["version"] == 4
+        assert data["version"] == 7  # Updated from v4 → v7
         assert "tracks" in data
         assert "default_style" in data
 
@@ -297,7 +297,7 @@ class TestVideoClipTrack:
         path = tmp_path / "v2.fmm.json"
         path.write_text(json.dumps(old_data), encoding="utf-8")
         loaded = load_project(path)
-        assert loaded.video_clip_track is None
+        assert len(loaded.video_clip_track.clips) == 0  # v2 project: no clips (empty track)
 
     def test_clip_track_json_structure(self, tmp_path):
         from src.models.video_clip import VideoClip, VideoClipTrack
@@ -312,11 +312,14 @@ class TestVideoClipTrack:
         save_project(project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
 
-        assert data["version"] == 4
+        assert data["version"] == 7  # Updated from v4 → v7
         assert "video_clips" in data
-        assert len(data["video_clips"]) == 1
-        assert data["video_clips"][0]["source_in_ms"] == 1000
-        assert data["video_clips"][0]["source_out_ms"] == 5000
+        vc = data["video_clips"]
+        # v7: video_clips is a dict with "items" key (single track serialization)
+        items = vc["items"] if isinstance(vc, dict) else vc
+        assert len(items) == 1
+        assert items[0]["source_in_ms"] == 1000
+        assert items[0]["source_out_ms"] == 5000
 
     def test_v4_source_path_roundtrip(self, tmp_path):
         """source_path should survive save/load."""

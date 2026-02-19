@@ -347,10 +347,8 @@ class VideoClipTrack:
         return 0
 
     def clip_boundaries_ms(self) -> list[int]:
-        """Return list of start timestamps (ms) for each clip on the timeline. O(1) 캐시."""
-        prefix = self._build_prefix()
-        # 마지막 원소(output_duration)는 제외
-        return prefix[:-1] if len(prefix) > 1 else list(prefix)
+        """Return list of clip boundary timestamps (ms): starts + final end. O(1) 캐시."""
+        return list(self._build_prefix())
 
     def next_clip_source_in(self, source_ms: int) -> int | None:
         """Find the source_in_ms of the next clip after source_ms.

@@ -827,7 +827,7 @@ class TimelineDragManager:
             return
 
         boundaries = vt.clip_boundaries_ms()
-        if self.clip_index >= len(boundaries):
+        if self.clip_index >= len(vt.clips):
             return
         clip_start_ms = boundaries[self.clip_index]
         candidates = self.get_snap_candidates(skip_clip_index=self.clip_index)

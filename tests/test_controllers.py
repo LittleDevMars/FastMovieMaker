@@ -116,7 +116,8 @@ class TestMediaController:
         ctx = MagicMock(spec=AppContext)
         ctx.proxy_map = {}
         ctx.status_bar.return_value = MagicMock()
-        ctx.window = MagicMock()
+        ctx.window = None  # QObject requires None or real QObject as parent
+        ctx.use_proxies = False  # instance attr not in class spec
 
         ctrl = MediaController(ctx)
         ctrl._on_proxy_finished("/path/to/video.mp4", "/path/to/proxy.mp4")
@@ -131,6 +132,7 @@ class TestMediaController:
         from src.ui.controllers.media_controller import MediaController
 
         ctx = MagicMock(spec=AppContext)
+        ctx.window = None  # QObject requires None or real QObject as parent
         ctrl = MediaController(ctx)
 
         # Mock workers

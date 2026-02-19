@@ -49,20 +49,23 @@ def test_build_audio_concat_filter_no_atempo_normal_speed():
     filters = _build_audio_concat_filter([clip])
     assert "atempo" not in filters[0]
 
-@patch("src.services.timeline_audio_exporter.find_ffmpeg")
-@patch("subprocess.run")
+@patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="ffmpeg")
+@patch("src.infrastructure.ffmpeg_runner.subprocess.run")
 def test_export_timeline_audio_calls_ffmpeg(mock_run, mock_find):
-    mock_find.return_value = "ffmpeg"
+    # Reset singleton so find_ffmpeg mock is effective
+    import src.infrastructure.ffmpeg_runner as _runner_mod
+    _runner_mod._default_runner = None
+
     mock_run.return_value = MagicMock(returncode=0)
-    
+
     track = VideoClipTrack()
     track.clips.append(VideoClip(source_path=Path("test.mp4"), source_in_ms=0, source_out_ms=1000))
-    
+
     out_path = Path("output.wav")
     export_timeline_audio(track, output_path=out_path)
-    
+
     assert mock_run.called
     args = mock_run.call_args[0][0]
-    assert "ffmpeg" in args
+    assert any("ffmpeg" in str(a) for a in args)
     assert "-filter_complex" in args
     assert "[outa]" in args

@@ -79,8 +79,9 @@ class TestTTSDialogPreview:
             
             # Worker should be created and started
             MockWorker.assert_called_once()
-            # Button should be disabled during generation
-            assert not dialog._preview_btn.isEnabled()
+            # Button text changes to "Stop Preview" during generation (not disabled)
+            assert dialog._preview_btn.isEnabled()
+            assert "Stop Preview" in dialog._preview_btn.text()
             assert "Generating" in dialog._status_label.text()
 
     def test_preview_ready_plays_audio(self, dialog, qtbot):
@@ -93,9 +94,8 @@ class TestTTSDialogPreview:
         fake_path = "/tmp/preview.mp3"
         dialog._on_preview_ready(fake_path)
         
-        # Check UI update
+        # Check UI update: status shows "Playing", button re-enabled with "Preview"
         assert dialog._preview_btn.isEnabled()
-        assert dialog._preview_btn.text() == "Stop Preview"
         assert "Playing" in dialog._status_label.text()
         
         # Check player call

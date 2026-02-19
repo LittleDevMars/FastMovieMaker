@@ -39,6 +39,7 @@ class ProxyWorker(QObject):
             elif success:
                 self.finished.emit(str(dst))
             else:
+                self.error.emit(f"Proxy generation failed for {self._source_path}")
                 self.finished.emit("")
 
         except Exception as e:

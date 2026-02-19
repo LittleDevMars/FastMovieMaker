@@ -299,7 +299,7 @@ class TestExportVideoOptions:
 
     @patch("src.utils.hw_accel.get_hw_encoder")
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
@@ -321,7 +321,7 @@ class TestExportVideoOptions:
         assert cmd[idx + 1] == "h264_nvenc"
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
@@ -343,7 +343,7 @@ class TestExportVideoOptions:
         assert "scale=1280:720" in vf_arg
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
@@ -369,7 +369,7 @@ class TestExportVideoOptions:
         assert "OverlayText" in fc_arg
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
@@ -401,17 +401,14 @@ class TestExportVideoOptions:
         assert len(input_indices) >= 2
         assert str(audio_path) in cmd
         
-        # Check mapping: should map external audio input (1:a)
-        map_indices = [i for i, x in enumerate(cmd) if x == "-map"]
-        audio_map_found = False
-        for idx in map_indices:
-            if idx + 1 < len(cmd) and cmd[idx+1] == "1:a":
-                audio_map_found = True
-                break
-        assert audio_map_found, f"Command should map external audio input (1:a). Cmd: {cmd}"
+        # Check mapping: external audio is referenced (1:a directly or via [ext_a] filter label)
+        cmd_str = " ".join(str(x) for x in cmd)
+        assert "1:a" in cmd_str or "ext_a" in cmd_str, (
+            f"Command should reference external audio. Cmd: {cmd}"
+        )
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
@@ -445,7 +442,7 @@ class TestExportVideoOptions:
         assert "normalize=0" in fc_arg
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
-    @patch("src.services.video_exporter.export_ass")
+    @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))

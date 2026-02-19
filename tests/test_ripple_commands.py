@@ -2,6 +2,7 @@
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
+from src.models.project import ProjectState
 from src.ui.commands import DeleteClipCommand, TrimClipCommand, AddVideoClipCommand
 
 class TestRippleCommands:
@@ -29,6 +30,12 @@ class TestRippleCommands:
         # o1: inside c2
         self.o1 = ImageOverlay(1200, 1800, "o1.png")
         self.overlay_track.overlays = [self.o1]
+
+        # ProjectState wrapping the clip_track (needed by new Command API)
+        self.project = ProjectState()
+        self.project.video_tracks = [self.clip_track]
+        self.project.subtitle_tracks = [self.sub_track]
+        self.project.image_overlay_track = self.overlay_track
 
     def test_delete_clip_ripple(self):
         # Delete c2 (index 1, time 1000-2000). Duration 1000.
@@ -61,7 +68,7 @@ class TestRippleCommands:
         #     Correct. New s4: 1000-1100.
         
         cmd = DeleteClipCommand(
-            self.clip_track, 1, self.c2, 
+            self.project, 0, 1, self.c2,
             self.sub_track, self.overlay_track,
             1000, 2000, ripple=True
         )
@@ -121,7 +128,7 @@ class TestRippleCommands:
         # All items >= 1000 shift by -500.
         
         cmd = TrimClipCommand(
-            self.clip_track, 0, 
+            self.project, 0, 0,
             0, 1000, 0, 500,
             self.sub_track, self.overlay_track,
             ripple=True
@@ -175,7 +182,7 @@ class TestRippleCommands:
         new_clip = VideoClip(0, 500, "new.mp4")
         
         cmd = AddVideoClipCommand(
-            self.clip_track, new_clip, 
+            self.project, 0, new_clip,
             self.sub_track, self.overlay_track,
             1, ripple=True
         )

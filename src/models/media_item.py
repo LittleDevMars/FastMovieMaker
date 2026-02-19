@@ -22,6 +22,7 @@ class MediaItem:
     favorite: bool = False
     has_proxy: bool = False
     is_proxy_generating: bool = False  # Runtime only
+    proxy_progress: int = 0            # Runtime only
 
     def to_dict(self) -> dict:
         return {
