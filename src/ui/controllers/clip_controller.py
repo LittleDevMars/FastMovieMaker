@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QInputDialog, QMessageBox, QApplication
+from PySide6.QtWidgets import QMessageBox, QApplication
 from PySide6.QtCore import Qt
 
 from src.models.video_clip import VideoClipTrack
@@ -184,11 +184,17 @@ class ClipController:
             return
         clip = vt.clips[clip_index]
         old_speed = clip.speed
-        speed, ok = QInputDialog.getDouble(
-            ctx.window, tr("Clip Speed"), tr("Speed (0.25x - 4.0x):"),
-            old_speed, 0.25, 4.0, 2
+
+        from src.ui.dialogs.speed_dialog import SpeedDialog
+        dialog = SpeedDialog(
+            ctx.window,
+            current_speed=old_speed,
+            clip_duration_ms=clip.duration_ms,
         )
-        if ok and speed != old_speed:
+        if not dialog.exec():
+            return
+        speed = dialog.get_speed()
+        if speed != old_speed:
             sub_track = ctx.project.subtitle_track
             overlay_track = ctx.project.image_overlay_track
             cmd = EditSpeedCommand(

@@ -330,10 +330,15 @@ class TimelineWidget(QWidget):
     def toggle_magnetic_snap(self) -> bool:
         """Toggle magnetic snap state."""
         self._snap_enabled = not self._snap_enabled
-        # Clear any existing snap guide
         self._snap_guide_x = None
         self.update()
         return self._snap_enabled
+
+    def set_magnetic_snap(self, enabled: bool) -> None:
+        """Set magnetic snap state directly."""
+        self._snap_enabled = enabled
+        self._snap_guide_x = None
+        self.update()
 
     def is_magnetic_snap_enabled(self) -> bool:
         return self._snap_enabled

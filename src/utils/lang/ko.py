@@ -529,6 +529,12 @@ STRINGS: dict[str, str] = {
     "Duration (ms):": "지속 시간 (ms):",
     "(End of Track)": "(트랙 끝)",
 
+    # ── Speed dialog ──
+    "Change Clip Speed": "클립 속도 변경",
+    "Speed": "속도",
+    "Presets": "프리셋",
+    "Duration": "길이",
+
     # ── Common ──
     "Ok": "확인",
     "Yes": "예",

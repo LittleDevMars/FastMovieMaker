@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 22 완료 (2026-02-19)
+**현재 상태:** Day 23 완료 (2026-02-19)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -36,6 +36,7 @@
 | **P1: TTS 향상** — 미리듣기, 세그먼트별 설정(목소리/속도), 오디오 재생성 통합 | **완료 (Day 20)** |
 | **프레임 버퍼링 및 성능 최적화** — VideoFramePlayer 구현, FFmpeg 실시간 로깅, 오디오 동기화 고도화 | **완료 (Day 21)** |
 | **코드 품질 개선** — MediaController 버그 수정 5종 (초기화 누락, 독스트링 오류, 로직 주석, UX 팝업 제거) | **완료 (Day 22)** |
+| **Phase T2/T3** — SpeedDialog, RippleEditService(BGM/텍스트 오버레이 지원), TrimClipCommand 버그 수정, set_magnetic_snap() 추가 | **완료 (Day 23)** |
 
 ---
 
@@ -114,6 +115,42 @@
 |------|------|
 | PyInstaller 패키징 | 단일 exe/폴더 배포 |
 | Windows 인스톨러 | NSIS/Inno Setup |
+
+---
+
+## 2026-02-19 (Day 23) 작업 요약
+
+**Phase T2/T3 — 리플 편집 완성, SpeedDialog, 자석 스냅 보완**
+
+### 1. RippleEditService 위치 수정 및 확장
+- `src/utils/lang/ripple_edit_service.py` → `src/services/ripple_edit_service.py` 이동 (올바른 서비스 레이어)
+- `DeleteClipCommand`: BGM 클립 + 텍스트 오버레이 ripple 지원 추가 (redo/undo 완전 지원)
+- `TrimClipCommand._apply_shift()`: BGM + 텍스트 오버레이 포함
+- `AddVideoClipCommand._apply_shift()`: BGM + 텍스트 오버레이 포함
+- `EditSpeedCommand._apply_shift()`: BGM + 텍스트 오버레이 포함
+- `EditTransitionCommand._apply_shift()`: BGM + 텍스트 오버레이 포함
+
+### 2. TrimClipCommand 버그 수정
+- `__init__`에서 `self._clip_track` 미할당 버그 수정 (NameError/AttributeError 유발)
+- 중복 클립 순회 루프 제거 (주석 포함 50줄 → 8줄)
+
+### 3. SpeedDialog 신규 구현 (`src/ui/dialogs/speed_dialog.py`)
+- QSlider (0.25x ~ 4.0x), 프리셋 버튼 8종 (0.25/0.5/0.75/1/1.25/1.5/2/4x)
+- 원본 길이 → 변경 길이 실시간 미리보기
+- `clip_controller.py`: `QInputDialog.getDouble()` → `SpeedDialog` 교체
+
+### 4. 자석 스냅 set_magnetic_snap() 추가
+- `timeline_widget.py`: `set_magnetic_snap(enabled: bool)` 메서드 추가
+- `main_window.py`의 `_toggle_magnetic_snap()`이 호출하는 메서드 존재하지 않던 버그 수정
+
+### 수정/신규 파일
+- **신규 (3):** `src/services/ripple_edit_service.py`, `src/ui/dialogs/speed_dialog.py`, `tests/test_ripple_edit.py`, `tests/test_speed_dialog.py`
+- **삭제 (1):** `src/utils/lang/ripple_edit_service.py`
+- **수정 (5):** `src/ui/commands.py`, `src/ui/controllers/clip_controller.py`, `src/ui/timeline_widget.py`, `src/utils/lang/ko.py`
+
+### 테스트 결과
+- 신규 15/15 passed
+- 전체 411 passed (기존 22개 실패는 변경과 무관한 pre-existing 이슈)
 
 ---
 

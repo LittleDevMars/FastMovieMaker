@@ -358,6 +358,10 @@ class DeleteClipCommand(QUndoCommand):
         self._old_audio_duration = subtitle_track.audio_duration_ms
         self._old_audio_path = getattr(subtitle_track, "audio_path", "") or ""
 
+        # Snapshot for BGM and text overlay ripple (undo support)
+        self._shifted_bgm: list[tuple[int, int, int]] = []    # (track_idx, clip_idx, old_start)
+        self._shifted_text: list[tuple[int, int, int]] = []   # (ov_idx, old_start, old_end)
+
     def redo(self) -> None:
         # 1. Remove the clip
         vt = self._project.video_tracks[self._track_index]
@@ -434,6 +438,26 @@ class DeleteClipCommand(QUndoCommand):
         elif self._sub_track.audio_start_ms > self._clip_start:
             self._sub_track.audio_start_ms = self._clip_start
 
+        # 5. BGM clips: 삭제 구간 이후 시작하는 클립을 당김
+        self._shifted_bgm.clear()
+        for t_idx, bgm_track in enumerate(self._project.bgm_tracks):
+            if bgm_track.locked:
+                continue
+            for c_idx, clip in enumerate(bgm_track.clips):
+                if clip.start_ms >= self._clip_end:
+                    self._shifted_bgm.append((t_idx, c_idx, clip.start_ms))
+                    clip.start_ms -= self._shift
+
+        # 6. Text overlays: 삭제 구간 이후 오버레이를 당김
+        self._shifted_text.clear()
+        tt = self._project.text_overlay_track
+        if tt and not tt.locked:
+            for ov_idx, ov in enumerate(tt.overlays):
+                if ov.start_ms >= self._clip_end:
+                    self._shifted_text.append((ov_idx, ov.start_ms, ov.end_ms))
+                    ov.start_ms -= self._shift
+                    ov.end_ms -= self._shift
+
     def undo(self) -> None:
         if self._ripple:
             # 1. Restore removed subtitles
@@ -443,40 +467,54 @@ class DeleteClipCommand(QUndoCommand):
             # 2. Restore truncated subtitles
             for i, old_start, old_end in self._truncated_subs:
                 if i < len(self._sub_track.segments):
-                     self._sub_track.segments[i].start_ms = old_start
-                     self._sub_track.segments[i].end_ms = old_end
+                    self._sub_track.segments[i].start_ms = old_start
+                    self._sub_track.segments[i].end_ms = old_end
 
             # 3. Unshift moved subtitles
             for i, old_start, old_end in self._shifted_subs:
                 if i < len(self._sub_track.segments):
-                     self._sub_track.segments[i].start_ms = old_start
-                     self._sub_track.segments[i].end_ms = old_end
-            
+                    self._sub_track.segments[i].start_ms = old_start
+                    self._sub_track.segments[i].end_ms = old_end
+
             # 4. Restore overlays
             if self._overlay_track is not None:
                 for i, ov in self._removed_overlays:
                     self._overlay_track.overlays.insert(i, ov)
                 for i, old_start, old_end in self._truncated_overlays:
                     if i < len(self._overlay_track.overlays):
-                         self._overlay_track.overlays[i].start_ms = old_start
-                         self._overlay_track.overlays[i].end_ms = old_end
+                        self._overlay_track.overlays[i].start_ms = old_start
+                        self._overlay_track.overlays[i].end_ms = old_end
                 for i, old_start, old_end in self._shifted_overlays:
-                     if i < len(self._overlay_track.overlays):
-                         self._overlay_track.overlays[i].start_ms = old_start
-                         self._overlay_track.overlays[i].end_ms = old_end
+                    if i < len(self._overlay_track.overlays):
+                        self._overlay_track.overlays[i].start_ms = old_start
+                        self._overlay_track.overlays[i].end_ms = old_end
 
             # 5. Restore audio track
             self._sub_track.audio_start_ms = self._old_audio_start
             self._sub_track.audio_duration_ms = self._old_audio_duration
             self._sub_track.audio_path = self._old_audio_path
 
-        # 6. Restore the clip
+            # 6. Restore BGM clips
+            for t_idx, c_idx, old_start in self._shifted_bgm:
+                tracks = self._project.bgm_tracks
+                if t_idx < len(tracks) and c_idx < len(tracks[t_idx].clips):
+                    tracks[t_idx].clips[c_idx].start_ms = old_start
+
+            # 7. Restore text overlays
+            tt = self._project.text_overlay_track
+            if tt:
+                for ov_idx, old_start, old_end in self._shifted_text:
+                    if ov_idx < len(tt.overlays):
+                        tt.overlays[ov_idx].start_ms = old_start
+                        tt.overlays[ov_idx].end_ms = old_end
+
+        # 8. Restore the clip
         vt = self._project.video_tracks[self._track_index]
         vt.clips.insert(self._clip_index, self._removed_clip)
 
         self._sub_track.segments.sort(key=lambda s: s.start_ms)
         if self._overlay_track:
-             self._overlay_track.overlays.sort(key=lambda o: o.start_ms)
+            self._overlay_track.overlays.sort(key=lambda o: o.start_ms)
 
 
 class TrimClipCommand(QUndoCommand):
@@ -502,69 +540,11 @@ class TrimClipCommand(QUndoCommand):
         old_duration = old_out - old_in
         new_duration = new_out - new_in
         self._delta = new_duration - old_duration
-        
-        # Calculate timeline point after which everything shifts
-        # If we trim the start (left edge), the clip itself shifts? 
-        # Actually VideoClipTrack logic: clips are concatenated.
-        # If I change clip[i].duration, clip[i+1] start changes immediately on layout.
-        # The ripple effect for *other tracks* should start from the end of clip[index].
-        # Wait, if I trim the LEFT of clip[i] (increase source_in):
-        # The clip[i] visual start remains fixed? No, in a magnetic timeline, the left edge is fixed to the previous clip's end.
-        # So changing duration changes the end point, shifting all subsequent clips.
-        # BUT, if I trim LEFT (virtual start), usually in NLE ripple edit:
-        # - "Ripple Edit Left": Drag left edge -> clip expands to left, pushing previous clips? Or shrinking gap?
-        # - Here we don't have gaps. 
-        # - Changing `source_in` makes clip shorter/longer.
-        # - Visual start of clip[i] is `sum(prev_clips)`. That doesn't change.
-        # - Visual end of clip[i] changes.
-        # - So all subsequent items shift by `delta`.
-        # - Subtitles/Overlays *inside* the clip might need shift?
-        #   - If I trim LEFT (remove start): effectively the content shifts left? No.
-        #   - `source_in` + 10s: means we skip first 10s. The frame at T=0 is now frame 10s.
-        #   - So the visual content "slides left".
-        #   - If I have a subtitle synced to the face at 5s (original), and I trim first 10s.
-        #   - That face is gone? Or moved?
-        #   - If I change source_in from 0 to 10s. Now visual T=0 is source 10s.
-        #   - The subtitle at T=5s (originally source 5s) is now over source 15s?
-        #   - This is complex. 
-        #   - Standard "Ripple Trim" usually just shifts *subsequent* clips. 
-        #   - It does NOT magically retime subtitles inside the clip unless we explicitly want to "Slip" edit.
-        #   - Let's assume "Ripple" here implies preserving sync for *subsequent* clips.
-        #   - The content *within* this clip changes relative to global timeline.
-        #   - Subtitles are absolute timeline based.
-        #   - If I cut the first 5s of a clip (shorten it):
-        #     - Clip is now 5s shorter.
-        #     - Clip[i+1] starts 5s earlier.
-        #     - Subtitles over Clip[i+1] must move -5s.
-        #     - Subtitles over Clip[i] (the trimmed one)?
-        #       - They stay at T=... ?
-        #       - If I wanted to cut a scene with its subtitle, I usually select both.
-        #       - If I just drag the handle:
-        #         - Usually sub/overlay tracks are independent unless grouped.
-        #         - But "Ripple Edit Mode" implies maintaining sync for the whole timeline downstream.
-        #   - DECISION: Shift everything starting from the END of the trimmed clip (old end or new end? The split point).
-        #   - Actually, the boundary is the visual end of the clip *before* the operation?
-        #   - Let's define the "Ripple Point" as the visual end of the clip.
-        #   - Anything starting >= old_clip_end will shift by delta.
-        
-        # Calculate visual end of this clip BEFORE modification
-        # We need to iterate to find start
-        self._clip_timeline_end_old = 0
-        current_t = 0
-        for i, c in enumerate(clip_track.clips):
-            if i == clip_index:
-                 self._clip_timeline_end_old = current_t + (old_out - old_in)
-                 break
-            if i < clip_index: # Only add up to index-1
-                 current_t += c.duration_ms
-            # Note: stored clip objects might be modified buffer re-reading? 
-            # No, redo applies changes. In __init__, clips are current state (unless passed old/new).
-            # Command is created BEFORE edit usually? Or caller passes old/new values.
-            # We must calculate offsets based on `clip_track` state assuming it holds "current" (which might be old if command pushes later).
-            # Limitation: We need `clip_timeline_start`.
-            pass
-            
-        # Optimization: We can compute start from previous clips
+
+        self._clip_track = project.video_tracks[track_index]
+
+        # 트림 전 클립의 타임라인 끝 위치 = 리플 기준점
+        # 클립 i 이후의 모든 항목이 delta만큼 이동한다
         self._clip_start_tl = 0
         for i in range(self._index):
             self._clip_start_tl += self._clip_track.clips[i].duration_ms
@@ -619,22 +599,38 @@ class TrimClipCommand(QUndoCommand):
                 
     def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
         threshold = threshold if threshold is not None else self._ripple_point
-        # Shift subtitles
+        # Shift subtitles (active track)
         for seg in self._sub_track.segments:
             if seg.start_ms >= threshold:
                 seg.start_ms += delta
                 seg.end_ms += delta
-        
-        # Shift overlays
+
+        # Shift image overlays
         if self._overlay_track:
             for ov in self._overlay_track.overlays:
                 if ov.start_ms >= threshold:
-                     ov.start_ms += delta
-                     ov.end_ms += delta
-        
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+        # Shift text overlays
+        tt = self._project.text_overlay_track
+        if tt and not tt.locked:
+            for ov in tt.overlays:
+                if ov.start_ms >= threshold:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+        # Shift BGM clips
+        for bgm_track in self._project.bgm_tracks:
+            if bgm_track.locked:
+                continue
+            for clip in bgm_track.clips:
+                if clip.start_ms >= threshold:
+                    clip.start_ms += delta
+
         # Shift Audio (TTS)
         if self._sub_track.audio_start_ms >= threshold:
-             self._sub_track.audio_start_ms += delta
+            self._sub_track.audio_start_ms += delta
 
 
 class AddVideoClipCommand(QUndoCommand):
@@ -700,22 +696,39 @@ class AddVideoClipCommand(QUndoCommand):
 
     def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
         threshold = threshold if threshold is not None else self._ripple_point
-        # Shift subtitles
+        # Shift subtitles (active track)
         for seg in self._sub_track.segments:
             if seg.start_ms >= threshold:
                 seg.start_ms += delta
                 seg.end_ms += delta
 
-        # Shift overlays
+        # Shift image overlays
         if self._overlay_track:
             for ov in self._overlay_track.overlays:
                 if ov.start_ms >= threshold:
-                     ov.start_ms += delta
-                     ov.end_ms += delta
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+        # Shift text overlays
+        tt = self._project.text_overlay_track
+        if tt and not tt.locked:
+            for ov in tt.overlays:
+                if ov.start_ms >= threshold:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+        # Shift BGM clips
+        for bgm_track in self._project.bgm_tracks:
+            if bgm_track.locked:
+                continue
+            for clip in bgm_track.clips:
+                if clip.start_ms >= threshold:
+                    clip.start_ms += delta
 
         # Shift Audio (TTS)
         if self._sub_track.audio_start_ms >= threshold:
-             self._sub_track.audio_start_ms += delta
+            self._sub_track.audio_start_ms += delta
+
 
 class EditSpeedCommand(QUndoCommand):
     """Change the playback speed of a video clip with subtitle ripple."""
@@ -767,22 +780,38 @@ class EditSpeedCommand(QUndoCommand):
 
     def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
         threshold = threshold if threshold is not None else self._ripple_point
-        # Shift subtitles
+        # Shift subtitles (active track)
         for seg in self._sub_track.segments:
             if seg.start_ms >= threshold:
                 seg.start_ms += delta
                 seg.end_ms += delta
-        
-        # Shift overlays
+
+        # Shift image overlays
         if self._overlay_track:
             for ov in self._overlay_track.overlays:
                 if ov.start_ms >= threshold:
                     ov.start_ms += delta
                     ov.end_ms += delta
-        
+
+        # Shift text overlays
+        tt = self._project.text_overlay_track
+        if tt and not tt.locked:
+            for ov in tt.overlays:
+                if ov.start_ms >= threshold:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+
+        # Shift BGM clips
+        for bgm_track in self._project.bgm_tracks:
+            if bgm_track.locked:
+                continue
+            for clip in bgm_track.clips:
+                if clip.start_ms >= threshold:
+                    clip.start_ms += delta
+
         # Shift Audio (TTS)
         if self._sub_track.audio_start_ms >= threshold:
-             self._sub_track.audio_start_ms += delta
+            self._sub_track.audio_start_ms += delta
 
 
 class EditTransitionCommand(QUndoCommand):
@@ -828,18 +857,32 @@ class EditTransitionCommand(QUndoCommand):
 
     def _apply_shift(self, delta: int, threshold: int | None = None) -> None:
         target = threshold if threshold is not None else self._ripple_point
-        # Subtitles
+        # Subtitles (active track)
         for seg in self._sub_track.segments:
             if seg.start_ms >= target:
                 seg.start_ms += delta
                 seg.end_ms += delta
-        # Overlays
+        # Image overlays
         if self._overlay_track:
             for ov in self._overlay_track.overlays:
                 if ov.start_ms >= target:
                     ov.start_ms += delta
                     ov.end_ms += delta
-        # Audio
+        # Text overlays
+        tt = self._project.text_overlay_track
+        if tt and not tt.locked:
+            for ov in tt.overlays:
+                if ov.start_ms >= target:
+                    ov.start_ms += delta
+                    ov.end_ms += delta
+        # BGM clips
+        for bgm_track in self._project.bgm_tracks:
+            if bgm_track.locked:
+                continue
+            for clip in bgm_track.clips:
+                if clip.start_ms >= target:
+                    clip.start_ms += delta
+        # Audio (TTS)
         if self._sub_track.audio_start_ms >= target:
             self._sub_track.audio_start_ms += delta
 
