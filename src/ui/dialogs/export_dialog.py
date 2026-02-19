@@ -129,6 +129,31 @@ class ExportDialog(QDialog):
 
         layout.addWidget(self._options_group)
 
+        # --- BGM Ducking group ---
+        self._ducking_group = QGroupBox(tr("BGM Ducking"))
+        ducking_layout = QVBoxLayout(self._ducking_group)
+
+        self._ducking_checkbox = QCheckBox(tr("Enable Auto-Ducking"))
+        self._ducking_checkbox.setChecked(False)
+        self._ducking_checkbox.setEnabled(self._has_tts and self._video_has_audio)
+        self._ducking_checkbox.toggled.connect(self._on_ducking_toggled)
+        ducking_layout.addWidget(self._ducking_checkbox)
+
+        duck_row = QHBoxLayout()
+        duck_row.addWidget(QLabel(tr("Duck Level:")))
+        self._duck_slider = QSlider(Qt.Orientation.Horizontal)
+        self._duck_slider.setRange(0, 100)
+        self._duck_slider.setValue(30)
+        self._duck_slider.setEnabled(False)
+        duck_row.addWidget(self._duck_slider)
+        self._duck_label = QLabel("30%")
+        self._duck_label.setMinimumWidth(40)
+        duck_row.addWidget(self._duck_label)
+        self._duck_slider.valueChanged.connect(lambda v: self._duck_label.setText(f"{v}%"))
+        ducking_layout.addLayout(duck_row)
+
+        layout.addWidget(self._ducking_group)
+
         # --- Video options group ---
         self._video_group = QGroupBox(tr("Video Options"))
         video_layout = QVBoxLayout(self._video_group)
@@ -229,20 +254,32 @@ class ExportDialog(QDialog):
     def _show_options(self) -> None:
         """Show the options UI phase."""
         self._options_group.setVisible(True)
+        self._ducking_group.setVisible(True)
         self._video_group.setVisible(True)
         self._options_group.setEnabled(True)
+        self._ducking_group.setEnabled(True)
         self._video_group.setEnabled(True)
         self._progress_section.setVisible(False)
         self._export_btn.setVisible(True)
 
     def _on_tts_toggled(self, checked: bool) -> None:
-        self._mix_audio_checkbox.setEnabled(checked and self._video_has_audio)
-        self._bg_slider.setEnabled(checked and self._mix_audio_checkbox.isChecked())
+        mix_ok = checked and self._video_has_audio
+        self._mix_audio_checkbox.setEnabled(mix_ok)
+        self._bg_slider.setEnabled(mix_ok and self._mix_audio_checkbox.isChecked())
         self._tts_slider.setEnabled(checked)
         self._seg_vol_checkbox.setEnabled(checked)
+        self._ducking_checkbox.setEnabled(mix_ok)
+        if not mix_ok:
+            self._ducking_checkbox.setChecked(False)
 
     def _on_mix_audio_toggled(self, checked: bool) -> None:
         self._bg_slider.setEnabled(checked)
+        self._ducking_checkbox.setEnabled(checked and self._has_tts)
+        if not checked:
+            self._ducking_checkbox.setChecked(False)
+
+    def _on_ducking_toggled(self, checked: bool) -> None:
+        self._duck_slider.setEnabled(checked)
 
     # ------------------------------------------------------------------ Export
 
@@ -260,6 +297,7 @@ class ExportDialog(QDialog):
 
         # Transition to progress phase
         self._options_group.setEnabled(False)
+        self._ducking_group.setEnabled(False)
         self._video_group.setEnabled(False)
         self._export_btn.setVisible(False)
         self._progress_section.setVisible(True)
@@ -331,6 +369,8 @@ class ExportDialog(QDialog):
         bg_volume = self._bg_slider.value() / 100.0
         tts_volume = self._tts_slider.value() / 100.0
         apply_seg_vol = self._seg_vol_checkbox.isChecked()
+        ducking_enabled = self._ducking_checkbox.isChecked()
+        duck_level = self._duck_slider.value() / 100.0
 
         # Create temp output for the mixed audio
         temp_dir = Path(tempfile.mkdtemp(prefix="export_audio_"))
@@ -347,6 +387,8 @@ class ExportDialog(QDialog):
             bg_volume=bg_volume,
             tts_volume=tts_volume,
             apply_segment_volumes=apply_seg_vol,
+            ducking_enabled=ducking_enabled,
+            duck_level=duck_level,
         )
 
         self._temp_audio_path = regenerated_path

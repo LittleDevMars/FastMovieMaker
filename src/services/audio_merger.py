@@ -199,7 +199,7 @@ class AudioMerger:
         track1_path: Path,
         track2_path: Path,
         output_path: Path,
-        track1_volume: float = 0.5,
+        track1_volume: float | str = 0.5,
         track2_volume: float = 1.0
     ) -> Path:
         """
@@ -209,7 +209,8 @@ class AudioMerger:
             track1_path: Path to first audio track (e.g., background music)
             track2_path: Path to second audio track (e.g., TTS narration)
             output_path: Where to save the mixed audio
-            track1_volume: Volume for track 1 (0.0 to 1.0+)
+            track1_volume: Volume for track 1 (0.0 to 1.0+), or an FFmpeg
+                           volume expression string (e.g. for BGM ducking).
             track2_volume: Volume for track 2 (0.0 to 1.0+)
 
         Returns:
@@ -233,8 +234,11 @@ class AudioMerger:
         if not runner.is_available():
             raise Exception("FFmpeg not found")
 
+        # Support plain float or FFmpeg expression string for ducking
+        vol1_expr = f"'{track1_volume}'" if isinstance(track1_volume, str) else str(track1_volume)
+
         filter_complex = (
-            f"[0:a]volume={track1_volume}[a1];"
+            f"[0:a]volume={vol1_expr}[a1];"
             f"[1:a]volume={track2_volume}[a2];"
             f"[a1][a2]amix=inputs=2:duration=longest"
         )

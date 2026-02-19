@@ -24,6 +24,8 @@ class AudioRegenerator:
         bg_volume: float = 0.5,
         tts_volume: float = 1.0,
         apply_segment_volumes: bool = True,
+        ducking_enabled: bool = False,
+        duck_level: float = 0.3,
     ) -> tuple[Path, int]:
         """
         Regenerate merged audio file based on current segment timing.
@@ -35,6 +37,8 @@ class AudioRegenerator:
             bg_volume: Background audio volume (0.0-1.0)
             tts_volume: TTS audio volume (0.0-1.0)
             apply_segment_volumes: Whether to apply per-segment volume settings
+            ducking_enabled: If True, automatically lower BGM volume during TTS segments
+            duck_level: BGM volume multiplier during TTS segments (0.0-1.0, default 0.3)
 
         Returns:
             tuple[Path, int]: (output_path, total_duration_ms)
@@ -67,11 +71,22 @@ class AudioRegenerator:
             # Step 2: Mix with background audio if provided
             if video_audio_path and video_audio_path.exists():
                 from src.services.audio_merger import AudioMerger
+                from src.services.ducking_service import DuckingService
+
+                # Build volume param: expression string if ducking, plain float otherwise
+                effective_bg_volume: float | str = bg_volume
+                if ducking_enabled:
+                    effective_bg_volume = DuckingService.build_volume_expr(
+                        segments=track.segments,
+                        base_volume=bg_volume,
+                        duck_volume=duck_level,
+                    )
+
                 AudioMerger.mix_audio_tracks(
                     track1_path=video_audio_path,
                     track2_path=tts_audio,
                     output_path=output_path,
-                    track1_volume=bg_volume,
+                    track1_volume=effective_bg_volume,
                     track2_volume=tts_volume
                 )
             else:
