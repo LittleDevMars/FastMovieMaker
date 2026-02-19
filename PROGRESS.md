@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 25 완료 (2026-02-20)
+**현재 상태:** Day 26 완료 (2026-02-20)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -39,6 +39,7 @@
 | **Phase T2/T3** — SpeedDialog, RippleEditService(BGM/텍스트 오버레이 지원), TrimClipCommand 버그 수정, set_magnetic_snap() 추가 | **완료 (Day 23)** |
 | **BGM Ducking** — TTS 구간 자동 배경음 덕킹 (DuckingService, FFmpeg volume expression, ExportDialog UI) | **완료 (Day 24)** |
 | **기술 부채 해소** — 사전 실패 테스트 21개 전체 수정 (441/441 passed), `clip_boundaries_ms` 버그, `proxy_progress` 필드, ProxyWorker error 시그널 | **완료 (Day 25)** |
+| **TTS 설정 프리셋 저장/로드** — `TTSPreset` 데이터클래스, `TTSPresetManager` (QSettings), TTSDialog 프리셋 UI (드롭다운+Save…+Delete), 13개 테스트 (454/454 passed) | **완료 (Day 26)** |
 
 ---
 
@@ -48,7 +49,7 @@
 | 항목 | 설명 |
 |------|------|
 | 배경음악 자동 페이드 (ducking) | TTS 구간에서 배경음 자동 감소 |
-| TTS 설정 프리셋 저장/로드 | 자주 쓰는 TTS 설정 저장 |
+| ~~TTS 설정 프리셋 저장/로드~~ | 완료 (Day 26) |
 
 #### P2 — 고급 기능
 | 항목 | 설명 |

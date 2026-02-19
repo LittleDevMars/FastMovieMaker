@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPlainTextEdit,
     QProgressBar,
@@ -37,6 +38,7 @@ from src.utils.config import (
     TTS_VOICES,
     TTSEngine,
 )
+from src.services.tts_preset_manager import TTSPreset, TTSPresetManager
 from src.workers.tts_worker import TTSWorker
 
 
@@ -114,6 +116,8 @@ class TTSDialog(QDialog):
         self._thread: QThread | None = None
         self._worker: TTSWorker | None = None
 
+        self._preset_manager = TTSPresetManager()
+
         # Preview components
         self._preview_thread: QThread | None = None
         self._preview_worker: TTSPreviewWorker | None = None
@@ -148,6 +152,27 @@ class TTSDialog(QDialog):
         if self._segment_mode:
             self._script_edit.setReadOnly(True)
         layout.addWidget(script_group)
+
+        # Presets group
+        preset_group = QGroupBox(tr("Presets"))
+        preset_layout = QHBoxLayout()
+
+        self._preset_combo = QComboBox()
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        preset_layout.addWidget(self._preset_combo, stretch=1)
+
+        save_preset_btn = QPushButton(tr("Save..."))
+        save_preset_btn.clicked.connect(self._on_save_preset)
+        preset_layout.addWidget(save_preset_btn)
+
+        self._delete_preset_btn = QPushButton(tr("Delete"))
+        self._delete_preset_btn.clicked.connect(self._on_delete_preset)
+        self._delete_preset_btn.setEnabled(False)
+        preset_layout.addWidget(self._delete_preset_btn)
+
+        preset_group.setLayout(preset_layout)
+        layout.addWidget(preset_group)
+        self._refresh_presets()
 
         # Settings group
         settings_group = QGroupBox(tr("Settings"))
@@ -243,6 +268,126 @@ class TTSDialog(QDialog):
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
         layout.addLayout(btn_layout)
+
+    # ── Preset methods ──────────────────────────────────────────────────────
+
+    def _refresh_presets(self) -> None:
+        """프리셋 콤보박스를 최신 목록으로 갱신한다."""
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        self._preset_combo.addItem(tr("-- Select Preset --"))
+        for name in self._preset_manager.list_presets():
+            self._preset_combo.addItem(name)
+        self._preset_combo.blockSignals(False)
+        self._delete_preset_btn.setEnabled(False)
+
+    def _on_preset_selected(self, index: int) -> None:
+        """프리셋 콤보박스 선택 이벤트 처리."""
+        if index <= 0:
+            self._delete_preset_btn.setEnabled(False)
+            return
+        name = self._preset_combo.currentText()
+        preset = self._preset_manager.load_preset(name)
+        if preset:
+            self._apply_preset(preset)
+        self._delete_preset_btn.setEnabled(True)
+
+    def _apply_preset(self, preset: TTSPreset) -> None:
+        """프리셋 값을 UI 위젯에 적용한다."""
+        # Engine
+        engine_idx = self._engine_combo.findData(preset.engine)
+        if engine_idx >= 0:
+            self._engine_combo.setCurrentIndex(engine_idx)
+
+        # Language (Edge-TTS 전용)
+        if preset.engine == TTSEngine.EDGE_TTS:
+            lang_idx = self._lang_combo.findText(preset.language)
+            if lang_idx >= 0:
+                self._lang_combo.setCurrentIndex(lang_idx)
+
+        # Voice
+        voice_idx = self._voice_combo.findData(preset.voice)
+        if voice_idx >= 0:
+            self._voice_combo.setCurrentIndex(voice_idx)
+
+        # Speed
+        self._speed_spin.setValue(preset.speed)
+
+        # Strategy
+        for i in range(self._strategy_combo.count()):
+            data = self._strategy_combo.itemData(i)
+            val = data.value if isinstance(data, SplitStrategy) else data
+            if val == preset.strategy:
+                self._strategy_combo.setCurrentIndex(i)
+                break
+
+    def _on_save_preset(self) -> None:
+        """현재 설정을 프리셋으로 저장한다."""
+        name, ok = QInputDialog.getText(self, tr("Save Preset"), tr("Enter preset name:"))
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        if self._preset_manager.preset_exists(name):
+            reply = QMessageBox.question(
+                self,
+                tr("Overwrite Preset"),
+                f"'{name}' " + tr("already exists. Overwrite?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        engine = self._engine_combo.currentData()
+        language = self._lang_combo.currentText()
+        voice = self._voice_combo.currentData() or ""
+        speed = self._speed_spin.value()
+        strategy_data = self._strategy_combo.currentData()
+        strategy = (
+            strategy_data.value
+            if isinstance(strategy_data, SplitStrategy)
+            else (strategy_data or SplitStrategy.SENTENCE.value)
+        )
+
+        preset = TTSPreset(
+            engine=engine,
+            language=language,
+            voice=voice,
+            speed=speed,
+            strategy=strategy,
+        )
+        self._preset_manager.save_preset(name, preset)
+        self._refresh_presets()
+
+        idx = self._preset_combo.findText(name)
+        if idx >= 0:
+            self._preset_combo.blockSignals(True)
+            self._preset_combo.setCurrentIndex(idx)
+            self._preset_combo.blockSignals(False)
+            self._delete_preset_btn.setEnabled(True)
+
+        QMessageBox.information(self, tr("Preset Saved"), f"'{name}' " + tr("saved."))
+
+    def _on_delete_preset(self) -> None:
+        """선택된 프리셋을 삭제한다."""
+        if self._preset_combo.currentIndex() <= 0:
+            return
+        name = self._preset_combo.currentText()
+
+        reply = QMessageBox.question(
+            self,
+            tr("Delete Preset"),
+            f"'{name}' " + tr("will be deleted. Continue?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._preset_manager.delete_preset(name)
+        self._refresh_presets()
+        QMessageBox.information(self, tr("Preset Deleted"), f"'{name}' " + tr("deleted."))
+
+    # ── Segment / Voice helpers ──────────────────────────────────────────────
 
     def _apply_segment_settings(self) -> None:
         """Apply initial settings for segment mode."""
