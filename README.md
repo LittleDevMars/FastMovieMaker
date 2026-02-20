@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="resources/VortextCut.png" alt="VortexCut Screenshot" width="800">
+  <img src="resources/FastMovieMaker.png" alt="FastMovieMaker Screenshot" width="800">
 </p>
 
 ---
