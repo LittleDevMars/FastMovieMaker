@@ -9,6 +9,10 @@
 [![Tests](https://img.shields.io/badge/tests-414%20passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="resources/FastMovieMaker.png" alt="FastMovieMaker Screenshot" width="800">
+</p>
+
 ---
 
 ## ✨ 주요 기능
