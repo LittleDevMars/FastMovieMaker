@@ -302,8 +302,8 @@ class SubtitlePanel(QWidget):
     def _on_font_changed(self, font: QFont) -> None:
         if self._track:
             self.font_changed.emit(font.family())
-			
-	# --------------------------------------------------------------- Slots
+
+    # --------------------------------------------------------------- Slots
 
     def _on_clicked(self, index: QModelIndex) -> None:
         row = index.row()
