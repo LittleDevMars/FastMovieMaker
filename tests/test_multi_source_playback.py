@@ -12,6 +12,7 @@ import pytest
 from unittest.mock import MagicMock
 from pathlib import Path
 
+from PySide6.QtCore import QObject
 from PySide6.QtMultimedia import QMediaPlayer
 
 from src.models.project import ProjectState
@@ -36,6 +37,7 @@ def _mock_player(**overrides):
     p.playbackState.return_value = QMediaPlayer.PlaybackState.StoppedState
     p.isPlaying.return_value = False
     p.position.return_value = 0
+    p.playbackRate.return_value = 1.0  # Add this line
     for k, v in overrides.items():
         getattr(p, k).return_value = v
     return p
@@ -71,7 +73,7 @@ class _MockCtx:
         self.controls.get_video_volume.return_value = 1.0
         self.controls.get_tts_volume.return_value = 1.0
         self.video_widget = MagicMock()
-        self.window = MagicMock()
+        self.window = QObject()
         self.use_proxies = False
         self.temp_video_path = None
         self.proxy_map: dict[str, str] = {}

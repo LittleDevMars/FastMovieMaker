@@ -260,7 +260,7 @@ class MediaController(QObject):
         ctx = self.ctx
         if ctx.pending_seek_ms is not None:
             return
-        if ctx.project.video_clip_track is not None:
+        if ctx.project.video_clip_track and len(ctx.project.video_clip_track) > 0:
             return
         ctx.project.duration_ms = duration_ms
         if duration_ms > 0:

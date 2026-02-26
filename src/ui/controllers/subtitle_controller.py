@@ -221,6 +221,16 @@ class SubtitleController:
             ctx.video_widget.set_default_style(ctx.project.default_style)
             ctx.status_bar().showMessage(f"{tr('Style updated')} ({tr('segment')} {index + 1})")
 
+    def on_font_changed(self, font_family: str) -> None:
+        """Update the default font for the current track."""
+        ctx = self.ctx
+        if ctx.project.subtitle_track:
+            ctx.project.default_style.font_family = font_family
+            ctx.video_widget.set_default_style(ctx.project.default_style)
+            # We need to refresh the view to apply the new font
+            ctx.refresh_all()
+            ctx.status_bar().showMessage(f"{tr('Font updated to')} {font_family}")
+
     def on_edit_segment_tts(self, index: int) -> None:
         """Open TTS dialog for a specific segment."""
         ctx = self.ctx

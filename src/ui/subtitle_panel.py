@@ -9,12 +9,14 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QShortcut, QKeySequence
+from PySide6.QtGui import QColor, QFont, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
+    QFontComboBox,
     QFormLayout,
+    QHBoxLayout,
     QHeaderView,
     QLineEdit,
     QMenu,
@@ -202,6 +204,7 @@ class SubtitlePanel(QWidget):
     segment_delete_requested = Signal(int)  # segment index
     style_edit_requested = Signal(int)  # segment index
     tts_edit_requested = Signal(int)  # segment index
+    font_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -213,9 +216,17 @@ class SubtitlePanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Header
+        header_layout = QHBoxLayout()
         self._header_label = QLabel(tr("Subtitles"))
         self._header_label.setStyleSheet("font-weight: bold; padding: 4px;")
-        layout.addWidget(self._header_label)
+        header_layout.addWidget(self._header_label)
+
+        self._font_combo = QFontComboBox(self)
+        self._font_combo.currentFontChanged.connect(self._on_font_changed)
+        header_layout.addWidget(self._font_combo)
+        header_layout.addStretch()
+
+        layout.addLayout(header_layout)
 
         # Search bar
         self._search_bar = SearchBar(self)
@@ -253,12 +264,16 @@ class SubtitlePanel(QWidget):
 
     # --------------------------------------------------------------- Public
 
-    def set_track(self, track: SubtitleTrack | None) -> None:
+    def set_track(self, track: SubtitleTrack | None, font_family: str = "Arial") -> None:
         self._track = track
         self._model.set_track(track)
         self._update_header()
+        self._font_combo.blockSignals(True)
+        self._font_combo.setCurrentFont(QFont(font_family))
+        self._font_combo.blockSignals(False)
+        self._font_combo.setVisible(track is not None)
 
-    def refresh(self) -> None:
+    def refresh(self, font_family: str = "Arial") -> None:
         """Notify model of external data change and re-apply search."""
         search_visible = self._search_bar.isVisible()
         if search_visible:
@@ -270,6 +285,10 @@ class SubtitlePanel(QWidget):
 
         self._model.notify_data_changed()
         self._update_header()
+        self._font_combo.blockSignals(True)
+        self._font_combo.setCurrentFont(QFont(font_family))
+        self._font_combo.blockSignals(False)
+        self._font_combo.setVisible(self._track is not None)
 
         if search_visible and search_text:
             self._on_search(search_text, case_sensitive)
@@ -280,7 +299,11 @@ class SubtitlePanel(QWidget):
         count = len(self._track) if self._track else 0
         self._header_label.setText(f"{tr('Subtitles')} ({count})" if count else tr("Subtitles"))
 
-    # --------------------------------------------------------------- Slots
+    def _on_font_changed(self, font: QFont) -> None:
+        if self._track:
+            self.font_changed.emit(font.family())
+			
+	# --------------------------------------------------------------- Slots
 
     def _on_clicked(self, index: QModelIndex) -> None:
         row = index.row()

@@ -274,6 +274,7 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.style_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_style)
         self._subtitle_panel.volume_edited.connect(self._subtitle_ctrl.on_segment_volume_edited)
         self._subtitle_panel.tts_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_tts)
+        self._subtitle_panel.font_changed.connect(self._subtitle_ctrl.on_font_changed)
 
         # Timeline subtitle
         self._timeline.segment_selected.connect(self._subtitle_ctrl.on_timeline_segment_selected)
@@ -357,8 +358,9 @@ class MainWindow(QMainWindow):
     def _refresh_all_widgets(self) -> None:
         """Push current model state to all widgets."""
         track = self._project.subtitle_track
+        font_family = self._project.default_style.font_family
         self._video_widget.set_subtitle_track(track if len(track) > 0 else None)
-        self._subtitle_panel.set_track(track if len(track) > 0 else None)
+        self._subtitle_panel.set_track(track if len(track) > 0 else None, font_family)
         self._timeline.set_track(track if len(track) > 0 else None)
         self._timeline.set_bgm_tracks(self._project.bgm_tracks)
 
