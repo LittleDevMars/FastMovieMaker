@@ -132,13 +132,18 @@ def _build_concat_filter(
         
         trans = getattr(clip_a, "transition_out", None)
         if trans and trans.duration_ms > 0:
-            dur_s = trans.duration_ms / 1000.0
+            # 트랜지션 길이가 클립보다 길면 offset이 음수가 되어 FFmpeg 오류 발생 → 클램핑
+            max_dur_ms = min(trans.duration_ms,
+                             curr_total_ms - 1,
+                             clip_b.duration_ms - 1)
+            max_dur_ms = max(1, max_dur_ms)  # 최소 1ms 보장
+            dur_s = max_dur_ms / 1000.0
             # xfade: offset is when the transition STARTS
-            offset_s = (curr_total_ms - trans.duration_ms) / 1000.0
+            offset_s = (curr_total_ms - max_dur_ms) / 1000.0
             parts.append(f"[{curr_v}][{next_v}]xfade=transition={trans.type}:duration={dur_s:.3f}:offset={offset_s:.3f}[{out_v}]")
             # acrossfade: d is duration
             parts.append(f"[{curr_a}][{next_a}]acrossfade=d={dur_s:.3f}:c1=tri:c2=tri[{out_a}]")
-            curr_total_ms += clip_b.duration_ms - trans.duration_ms
+            curr_total_ms += clip_b.duration_ms - max_dur_ms
         else:
             # Simple concat for this pair
             # FFmpeg doesn't have a simple 2-input concat filter that works like this easily in a chain

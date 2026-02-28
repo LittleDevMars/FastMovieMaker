@@ -246,6 +246,24 @@ class ClipController:
             ctx.timeline.set_duration(ctx.project.duration_ms)
             ctx.refresh_all()
 
+    def on_remove_transition(self, track_idx: int, clip_idx: int) -> None:
+        """트랜지션을 제거합니다 (EditTransitionCommand에 None 전달)."""
+        ctx = self.ctx
+        if not ctx.project:
+            return
+        vt = ctx.project.video_tracks[track_idx]
+        if clip_idx < 0 or clip_idx >= len(vt.clips):
+            return
+        cmd = EditTransitionCommand(
+            ctx.project, track_idx, clip_idx,
+            None,  # new_info=None → 트랜지션 제거
+            ripple=ctx.timeline.is_ripple_mode()
+        )
+        ctx.undo_stack.push(cmd)
+        ctx.project.duration_ms = ctx.project.video_clip_track.output_duration_ms
+        ctx.timeline.set_duration(ctx.project.duration_ms)
+        ctx.refresh_all()
+
     # ---- 클립 이동 ----
 
     def on_clip_moved(self, src_track: int, src_index: int, dst_track: int, dst_index: int) -> None:

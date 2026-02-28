@@ -526,6 +526,7 @@ STRINGS: dict[str, str] = {
     "When enabled, deleting or trimming clips will move subsequent clips and subtitles.": "활성화 시, 클립을 삭제하거나 조절하면 뒤에 있는 클립과 자막이 함께 이동합니다.",
     "Edit Transition...": "트랜지션 편집...",
     "Add Transition...": "트랜지션 추가...",
+    "Remove Transition": "트랜지션 제거",
     "Transition Settings": "트랜지션 설정",
     "Transition Info": "트랜지션 정보",
     "Transition Type:": "트랜지션 유형:",

@@ -302,6 +302,7 @@ class MainWindow(QMainWindow):
         self._timeline.clip_speed_requested.connect(self._clip.on_edit_clip_speed)
         self._timeline.clip_moved.connect(self._clip.on_clip_moved)
         self._timeline.transition_requested.connect(self._clip.on_transition_requested)
+        self._timeline.transition_remove_requested.connect(self._clip.on_remove_transition)
         self._timeline.clip_volume_requested.connect(self._clip.on_edit_clip_properties)
         self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
         self._track_headers.track_add_requested.connect(self._clip.on_add_video_track)

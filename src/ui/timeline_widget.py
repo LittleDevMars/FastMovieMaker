@@ -70,6 +70,7 @@ class TimelineWidget(QWidget):
     clip_duplicated = Signal(int, int, int, int) # (src_track, src_index, dst_track, dst_index)
     clip_double_clicked = Signal(int, int)      # (track_index, clip_index)
     transition_requested = Signal(int, int)     # (track_index, clip_index)
+    transition_remove_requested = Signal(int, int)  # (track_index, clip_index)
     bgm_clip_selected = Signal(int, int)        # (track_index, clip_index)
     bgm_clip_moved = Signal(int, int, int)      # (track_index, clip_index, new_start_ms)
     bgm_clip_trimmed = Signal(int, int, int, int) # (track_index, clip_index, new_start_ms, new_dur_ms)
@@ -802,14 +803,17 @@ class TimelineWidget(QWidget):
                 delete_act = menu.addAction(tr("Delete Clip"))
             
             trans_act = None
+            remove_trans_act = None
             if vt and seg_idx < len(vt.clips) - 1:
                 clip = vt.clips[seg_idx]
                 label = tr("Edit Transition...") if hasattr(clip, "transition_out") and clip.transition_out else tr("Add Transition...")
                 trans_act = menu.addAction(label)
-            
+                if hasattr(clip, "transition_out") and clip.transition_out:
+                    remove_trans_act = menu.addAction(tr("Remove Transition"))
+
             volume_act = menu.addAction(tr("Adjust Volume..."))
             speed_act = menu.addAction(tr("Change Speed..."))
-                
+
             action = menu.exec(event.globalPos())
             if action == split_act:
                 self.clip_split_requested.emit(v_idx, self._playhead_ms)
@@ -817,6 +821,8 @@ class TimelineWidget(QWidget):
                 self.clip_deleted.emit(v_idx, seg_idx)
             elif trans_act and action == trans_act:
                 self.transition_requested.emit(v_idx, seg_idx)
+            elif remove_trans_act and action == remove_trans_act:
+                self.transition_remove_requested.emit(v_idx, seg_idx)
             elif action == volume_act:
                 self.clip_volume_requested.emit(v_idx, seg_idx)
             elif action == speed_act:

@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 27 완료 (2026-02-20)
+**현재 상태:** Day 28 완료 (2026-02-28)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -41,6 +41,7 @@
 | **기술 부채 해소** — 사전 실패 테스트 21개 전체 수정 (441/441 passed), `clip_boundaries_ms` 버그, `proxy_progress` 필드, ProxyWorker error 시그널 | **완료 (Day 25)** |
 | **TTS 설정 프리셋 저장/로드** — `TTSPreset` 데이터클래스, `TTSPresetManager` (QSettings), TTSDialog 프리셋 UI (드롭다운+Save…+Delete), 13개 테스트 (454/454 passed) | **완료 (Day 26)** |
 | **비디오 썸네일 버그 수정 (Phase T2)** — `thumbnail_ready` static cache 무효화 누락, `_on_waveform_ready` 동일 패턴 수정, `vis_x1/vis_x2` viewport 클리핑 수정, 썸네일 서비스 단위 테스트 15개 (469/469 passed) | **완료 (Day 27)** |
+| **Phase T3 트랜지션 완성** — Remove Transition 기능(context menu + 신호 + 컨트롤러), `_build_concat_filter` 클램핑 버그 수정(offset 음수 방지), i18n 추가, 단위 테스트 14개 (512/512 passed) | **완료 (Day 28)** |
 
 ---
 
