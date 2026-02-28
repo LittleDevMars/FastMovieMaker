@@ -539,6 +539,30 @@ STRINGS: dict[str, str] = {
     "Presets": "프리셋",
     "Duration": "길이",
 
+    # ── Scene Detection dialog ──
+    "Detect Scenes...": "장면 감지...",
+    "Detect &Scenes...": "장면 감지(&S)...",
+    "Detect Scenes": "장면 감지",
+    "Sensitivity": "민감도",
+    "Low": "낮음",
+    "High": "높음",
+    "Min gap between scenes": "최소 장면 간격",
+    "Detected Scenes": "감지된 장면",
+    "Apply Splits": "분할 적용",
+    "found": "개 감지됨",
+
+    # ── GPT Script Generation dialog ──
+    "Generate with AI...":                    "AI로 생성...",
+    "Generate script automatically using GPT": "GPT로 스크립트 자동 생성",
+    "Generate Script with AI":                "AI 스크립트 생성",
+    "Topic / Context:":                       "주제 / 맥락:",
+    "Generated Script:":                      "생성된 스크립트:",
+    "Use This Script":                        "이 스크립트 사용",
+    "Informative":                            "정보 전달",
+    "Casual":                                 "친근한",
+    "Persuasive":                             "설득형",
+    "Humorous":                               "유머러스",
+
     # ── Common ──
     "Ok": "확인",
     "Yes": "예",

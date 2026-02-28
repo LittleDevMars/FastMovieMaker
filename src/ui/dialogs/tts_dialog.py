@@ -138,6 +138,18 @@ class TTSDialog(QDialog):
         # Script input
         script_group = QGroupBox(tr("Script"))
         script_layout = QVBoxLayout()
+
+        # "Generate with AI..." 버튼 (segment_mode에서는 숨김)
+        ai_btn_row = QHBoxLayout()
+        self._ai_btn = QPushButton(tr("Generate with AI..."))
+        self._ai_btn.setToolTip(tr("Generate script automatically using GPT"))
+        self._ai_btn.clicked.connect(self._on_gpt_generate)
+        ai_btn_row.addStretch()
+        ai_btn_row.addWidget(self._ai_btn)
+        if self._segment_mode:
+            self._ai_btn.hide()
+        script_layout.addLayout(ai_btn_row)
+
         self._script_edit = QPlainTextEdit()
         self._script_edit.setPlaceholderText(
             "Enter your script here...\n\n"
@@ -386,6 +398,15 @@ class TTSDialog(QDialog):
         self._preset_manager.delete_preset(name)
         self._refresh_presets()
         QMessageBox.information(self, tr("Preset Deleted"), f"'{name}' " + tr("deleted."))
+
+    # ── GPT 대본 생성 ────────────────────────────────────────────────────────
+
+    def _on_gpt_generate(self) -> None:
+        """GPT 대본 생성 다이얼로그를 열고, 결과를 스크립트 입력창에 채운다."""
+        from src.ui.dialogs.gpt_script_dialog import GptScriptDialog
+        dlg = GptScriptDialog(self)
+        if dlg.exec():
+            self._script_edit.setPlainText(dlg.get_script())
 
     # ── Segment / Voice helpers ──────────────────────────────────────────────
 
