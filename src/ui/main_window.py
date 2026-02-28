@@ -423,6 +423,7 @@ class MainWindow(QMainWindow):
         self._media.start_proxy_generation(Path(path))
 
     def _on_track_state_changed(self) -> None:
+        self._timeline._invalidate_static_cache()
         self._timeline.update()
         if self._project.video_clip_track:
             self._audio_output.setMuted(self._project.video_clip_track.muted)

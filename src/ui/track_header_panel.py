@@ -31,6 +31,10 @@ class TrackHeaderPanel(QWidget):
     _WAVEFORM_Y = 134
     _WAVEFORM_H = 45
     _IMG_BASE_Y = 184
+    _BGM_H = 34
+    _TRACK_GAP = 4
+    _IMG_ROW_H = 40
+    _TEXT_ROW_H = 28
     
     # Colors
     _BG_COLOR = QColor(25, 25, 25)
@@ -87,7 +91,7 @@ class TrackHeaderPanel(QWidget):
         # Image Overlays
         y = self._timeline._img_overlay_base_y()
         next_y = self._timeline._text_overlay_base_y()
-        h = max(self._timeline._IMG_ROW_H, next_y - y - self._timeline._TRACK_GAP)
+        h = max(self._IMG_ROW_H, next_y - y - self._TRACK_GAP)
         tracks.append({
             "y": y, "h": h, "name": "Images", "controls": "LH", "track_type": "overlay"
         })
@@ -95,7 +99,7 @@ class TrackHeaderPanel(QWidget):
         # Text Overlays
         y = next_y
         next_y = self._timeline._bgm_track_base_y()
-        h = max(self._timeline._TEXT_ROW_H, next_y - y - self._timeline._TRACK_GAP)
+        h = max(self._TEXT_ROW_H, next_y - y - self._TRACK_GAP)
         tracks.append({
             "y": y, "h": h, "name": "Text", "controls": "LH", "track_type": "text"
         })
@@ -144,8 +148,10 @@ class TrackHeaderPanel(QWidget):
             t = self._project.subtitle_track
             return t.locked, t.muted, t.hidden
         elif tt == "audio":
-            t = self._project.subtitle_track # fallback
-            return t.locked, t.muted, t.hidden
+            t = self._project.subtitle_track
+            if t is None:
+                return False, False, False
+            return getattr(t, "locked", False), getattr(t, "muted", False), getattr(t, "hidden", False)
         elif tt == "overlay":
             t = self._project.image_overlay_track
             return t.locked, False, t.hidden
@@ -287,7 +293,7 @@ class TrackHeaderPanel(QWidget):
         elif tt == "bgm":
             target = self._project.bgm_tracks[info["index"]]
             
-        if target:
+        if target is not None:
             current = getattr(target, field)
             setattr(target, field, not current)
             self.state_changed.emit()
