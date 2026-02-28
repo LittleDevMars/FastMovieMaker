@@ -99,6 +99,11 @@ def build_main_window_menu(window) -> None:
     edit_menu.addAction(jump_frame_action)
     edit_menu.addSeparator()
 
+    scene_detect_action = QAction(tr("Detect &Scenes..."), window)
+    scene_detect_action.triggered.connect(window._on_scene_detect)
+    edit_menu.addAction(scene_detect_action)
+    edit_menu.addSeparator()
+
     preferences_action = QAction(tr("&Preferences..."), window)
     preferences_action.setShortcut(QKeySequence("Ctrl+,"))
     preferences_action.triggered.connect(window._on_preferences)

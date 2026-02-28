@@ -405,6 +405,46 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ Local handlers
 
+    def _on_scene_detect(self) -> None:
+        """장면 감지 → 선택된 경계에서 클립 분할."""
+        if not self._ctx.project or not self._ctx.project.has_video:
+            QMessageBox.warning(self, tr("No Video"), tr("Please open a video file first."))
+            return
+
+        from src.ui.dialogs.scene_detect_dialog import SceneDetectDialog
+        from src.ui.commands import SplitClipCommand
+
+        video_path = str(self._ctx.project.video_path or "")
+        dlg = SceneDetectDialog(self, video_path)
+        if not dlg.exec():
+            return
+
+        boundaries = dlg.get_selected_boundaries()
+        if not boundaries:
+            return
+
+        vt = self._ctx.project.video_clip_track
+        if not vt or not vt.clips:
+            return
+
+        # 뒤에서부터 분할 → 앞쪽 클립 인덱스 불변 보장
+        self._undo_stack.beginMacro(tr("Detect Scenes"))
+        for ms in sorted(boundaries, reverse=True):
+            res = vt.clip_at_timeline(ms)
+            if not res:
+                continue
+            clip_idx, clip = res
+            local_ms = ms - vt.clip_timeline_start(clip_idx)
+            split_src = clip.source_in_ms + int(local_ms * clip.speed)
+            if split_src <= clip.source_in_ms + 100 or split_src >= clip.source_out_ms - 100:
+                continue
+            first, second = clip.split_at(local_ms)
+            self._undo_stack.push(
+                SplitClipCommand(self._ctx.project, 0, clip_idx, clip, first, second)
+            )
+        self._undo_stack.endMacro()
+        self._refresh_all_widgets()
+
     def _on_preferences(self) -> None:
         dialog = PreferencesDialog(self)
         if dialog.exec():
