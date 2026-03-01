@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import textwrap
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -106,3 +107,12 @@ class SubtitleTrack:
             for i in range(len(self.segments) - 1)
             if self.segments[i].end_ms > self.segments[i + 1].start_ms
         ]
+
+    def wrap_all_texts(self, max_chars: int) -> list[tuple[int, str, str]]:
+        """(index, old_text, new_text) 변경 목록 반환."""
+        changes = []
+        for i, seg in enumerate(self.segments):
+            new_text = textwrap.fill(seg.text, width=max_chars)
+            if new_text != seg.text:
+                changes.append((i, seg.text, new_text))
+        return changes

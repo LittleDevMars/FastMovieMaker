@@ -111,6 +111,17 @@ class TimelinePainter:
         (QColor(70, 110, 200), QColor(40, 80, 160), QColor(100, 140, 230)),
     ]
 
+    # 컬러 레이블 색상: (top, bottom, border)
+    _LABEL_COLORS: dict[str, tuple[QColor, QColor, QColor]] = {
+        "red":    (QColor(220, 80, 80),   QColor(180, 50, 50),   QColor(255, 110, 110)),
+        "orange": (QColor(220, 150, 70),  QColor(180, 110, 40),  QColor(255, 180, 100)),
+        "yellow": (QColor(200, 200, 70),  QColor(160, 160, 40),  QColor(230, 230, 100)),
+        "green":  (QColor(80, 180, 80),   QColor(50, 140, 50),   QColor(110, 210, 110)),
+        "blue":   (QColor(70, 130, 220),  QColor(40, 90, 180),   QColor(100, 160, 255)),
+        "purple": (QColor(160, 80, 200),  QColor(120, 40, 160),  QColor(190, 110, 230)),
+        "pink":   (QColor(220, 100, 160), QColor(180, 60, 120),  QColor(255, 130, 190)),
+    }
+
     def __init__(self, tw: TimelineWidget) -> None:
         self.tw = tw
         # 웨이브폼 이미지 캐시
@@ -668,8 +679,12 @@ class TimelinePainter:
                 glow_gradient.setColorAt(1, self._CLIP_SELECTED_COLOR.darker(120))
                 painter.setBrush(QBrush(glow_gradient))
             else:
-                color_idx = source_color_map.get(clip.source_path, 0) % len(source_colors)
-                c_top, c_bot, border_color = source_colors[color_idx]
+                label = getattr(clip, "color_label", "none")
+                if label != "none" and label in self._LABEL_COLORS:
+                    c_top, c_bot, border_color = self._LABEL_COLORS[label]
+                else:
+                    color_idx = source_color_map.get(clip.source_path, 0) % len(source_colors)
+                    c_top, c_bot, border_color = source_colors[color_idx]
                 gradient = QLinearGradient(0, y, 0, y + h)
                 gradient.setColorAt(0, c_top)
                 gradient.setColorAt(1, c_bot)

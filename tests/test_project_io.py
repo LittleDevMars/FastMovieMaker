@@ -44,7 +44,7 @@ class TestSaveLoadV2:
         path = tmp_path / "test.fmm.json"
         save_project(sample_project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["version"] == 8  # Updated from v7 → v8 (animation 필드)
+        assert data["version"] == 9  # Updated from v8 → v9 (color_label 필드)
         assert "tracks" in data
         assert "default_style" in data
 
@@ -312,7 +312,7 @@ class TestVideoClipTrack:
         save_project(project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
 
-        assert data["version"] == 8  # Updated from v7 → v8 (animation 필드)
+        assert data["version"] == 9  # Updated from v8 → v9 (color_label 필드)
         assert "video_clips" in data
         vc = data["video_clips"]
         # v7: video_clips is a dict with "items" key (single track serialization)

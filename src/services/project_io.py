@@ -12,7 +12,7 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
-PROJECT_VERSION = 8
+PROJECT_VERSION = 9
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:

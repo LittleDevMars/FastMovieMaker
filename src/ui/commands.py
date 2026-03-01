@@ -1376,3 +1376,36 @@ class AutoAlignSubtitlesCommand(QUndoCommand):
         for i, (s, e) in enumerate(times):
             self._track.segments[i].start_ms = s
             self._track.segments[i].end_ms = e
+
+
+class WrapSubtitlesCommand(QUndoCommand):
+    """자막 텍스트 자동 줄바꿈."""
+
+    def __init__(self, track: SubtitleTrack, changes: list[tuple[int, str, str]]):
+        super().__init__(tr("Auto-wrap subtitles"))
+        self._track = track
+        self._changes = changes  # [(index, old_text, new_text), ...]
+
+    def redo(self) -> None:
+        for i, _, new in self._changes:
+            self._track.segments[i].text = new
+
+    def undo(self) -> None:
+        for i, old, _ in self._changes:
+            self._track.segments[i].text = old
+
+
+class EditColorLabelCommand(QUndoCommand):
+    """클립 컬러 레이블 설정."""
+
+    def __init__(self, clip: VideoClip, old_label: str, new_label: str):
+        super().__init__(tr("Set color label"))
+        self._clip = clip
+        self._old = old_label
+        self._new = new_label
+
+    def redo(self) -> None:
+        self._clip.color_label = self._new
+
+    def undo(self) -> None:
+        self._clip.color_label = self._old

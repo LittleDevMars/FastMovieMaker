@@ -30,6 +30,7 @@ from src.ui.commands import (
     MergeCommand,
     MoveSegmentCommand,
     SplitCommand,
+    WrapSubtitlesCommand,
 )
 from src.utils.config import find_ffmpeg
 from src.utils.i18n import tr
@@ -771,6 +772,25 @@ class SubtitleController:
                     ctx.refresh_all()
                     ctx.status_bar().showMessage(tr("Track translated"))
                 ctx.autosave.notify_edit()
+
+    def on_wrap_subtitles(self) -> None:
+        """자막 자동 줄바꿈. Undo/Redo 지원."""
+        ctx = self.ctx
+        max_chars, ok = QInputDialog.getInt(
+            ctx.window, tr("Auto-wrap Subtitles"), tr("Max characters per line:"),
+            40, 10, 200, 1
+        )
+        if not ok:
+            return
+        track = ctx.project.subtitle_track
+        changes = track.wrap_all_texts(max_chars)
+        if not changes:
+            ctx.status_bar().showMessage(tr("No subtitles need wrapping"))
+            return
+        ctx.undo_stack.push(WrapSubtitlesCommand(track, changes))
+        ctx.project_ctrl.on_document_edited()
+        ctx.subtitle_panel.refresh()
+        ctx.status_bar().showMessage(tr("Subtitles wrapped"))
 
     def on_auto_align_subtitles(self) -> None:
         """겹치는 자막을 gap 50ms로 자동 정렬한다. Undo/Redo 지원."""

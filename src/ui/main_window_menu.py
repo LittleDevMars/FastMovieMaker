@@ -164,6 +164,11 @@ def build_main_window_menu(window) -> None:
     auto_align_action.triggered.connect(window._subtitle_ctrl.on_auto_align_subtitles)
     sub_menu.addAction(auto_align_action)
 
+    wrap_action = QAction(tr("Auto-wrap &Subtitles\u2026"), window)
+    wrap_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
+    wrap_action.triggered.connect(window._subtitle_ctrl.on_wrap_subtitles)
+    sub_menu.addAction(wrap_action)
+
     view_menu = menubar.addMenu(tr("&View"))
     window._proxy_action = QAction(tr("Use &Proxy Media"), window)
     window._proxy_action.setCheckable(True)

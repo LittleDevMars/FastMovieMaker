@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTabWidget,
+    QUndoView,
     QVBoxLayout,
     QWidget,
 )
@@ -46,10 +47,14 @@ def build_main_window_ui(window, player, audio_output, tts_audio_output, wavefor
     window._templates_panel = TemplatesPanel()
     window._overlay_template = None
 
+    undo_view = QUndoView(window._undo_stack)
+    undo_view.setEmptyLabel(tr("(empty)"))
+
     window._right_tabs = QTabWidget()
     window._right_tabs.addTab(subtitle_tab, tr("Subtitles"))
     window._right_tabs.addTab(window._media_panel, tr("Media"))
     window._right_tabs.addTab(window._templates_panel, tr("Templates"))
+    window._right_tabs.addTab(undo_view, tr("History"))
 
     window._top_splitter = QSplitter(Qt.Orientation.Horizontal)
     window._top_splitter.addWidget(window._video_widget)

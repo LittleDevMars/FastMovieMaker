@@ -83,6 +83,7 @@ class TimelineWidget(QWidget):
     status_message_requested = Signal(str, int)  # (message, timeout_ms)
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
     clip_color_requested = Signal(int, int)    # (track_index, clip_index)
+    clip_color_label_requested = Signal(int, int, str)  # (track_index, clip_index, label)
 
     # ---- 색상 상수는 TimelinePainter로 이동됨 (src/ui/timeline_painter.py) ----
     # 아래는 비-페인팅 코드(히트테스트, 레이아웃 계산)에서도 사용되어 유지하는 상수들
@@ -816,6 +817,23 @@ class TimelineWidget(QWidget):
             color_act = menu.addAction(tr("Color Correction..."))
             speed_act = menu.addAction(tr("Change Speed..."))
 
+            # Color Label 서브메뉴
+            color_label_menu = menu.addMenu(tr("Color Label"))
+            _color_label_items = [
+                ("none",   tr("None")),
+                ("red",    tr("Red")),
+                ("orange", tr("Orange")),
+                ("yellow", tr("Yellow")),
+                ("green",  tr("Green")),
+                ("blue",   tr("Blue")),
+                ("purple", tr("Purple")),
+                ("pink",   tr("Pink")),
+            ]
+            _label_actions = {}
+            for _lbl, _name in _color_label_items:
+                _act = color_label_menu.addAction(_name)
+                _label_actions[_act] = _lbl
+
             action = menu.exec(event.globalPos())
             if action == split_act:
                 self.clip_split_requested.emit(v_idx, self._playhead_ms)
@@ -831,6 +849,8 @@ class TimelineWidget(QWidget):
                 self.clip_color_requested.emit(v_idx, seg_idx)
             elif action == speed_act:
                 self.clip_speed_requested.emit(v_idx, seg_idx)
+            elif action in _label_actions:
+                self.clip_color_label_requested.emit(v_idx, seg_idx, _label_actions[action])
             return
 
         if hit.startswith("img_"):

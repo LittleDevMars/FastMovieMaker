@@ -602,6 +602,30 @@ STRINGS: dict[str, str] = {
     "Auto-aligned subtitles":         "자막 자동 정렬 완료",
     "Auto-align subtitles":           "자막 자동 정렬",
 
+    # ── Auto-wrap ──
+    "Auto-wrap Subtitles":          "자막 자동 줄바꿈",
+    "Auto-wrap &Subtitles\u2026":   "자막 자동 줄바꿈(&W)\u2026",
+    "Max characters per line:":     "줄당 최대 문자 수:",
+    "No subtitles need wrapping":   "줄바꿈이 필요한 자막이 없습니다",
+    "Subtitles wrapped":            "자막 줄바꿈 완료",
+    "Auto-wrap subtitles":          "자막 자동 줄바꿈",
+
+    # ── Color label ──
+    "Color Label":   "컬러 레이블",
+    "Set color label": "컬러 레이블 설정",
+    "None":   "없음",
+    "Red":    "빨강",
+    "Orange": "주황",
+    "Yellow": "노랑",
+    "Green":  "초록",
+    "Blue":   "파랑",
+    "Purple": "보라",
+    "Pink":   "핑크",
+
+    # ── History panel ──
+    "History":  "히스토리",
+    "(empty)":  "(비어있음)",
+
     # ── Common ──
     "Ok": "확인",
     "Yes": "예",

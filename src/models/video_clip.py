@@ -62,6 +62,7 @@ class VideoClip:
     contrast: float = 1.0    # 0.5 to 2.0
     saturation: float = 1.0  # 0.0 to 2.0
     transition_out: TransitionInfo | None = None  # Effect transitioning into the NEXT clip
+    color_label: str = "none"  # 컬러 레이블: none/red/orange/yellow/green/blue/purple/pink
 
     def get_volume_at(self, offset_ms: int) -> float:
         """Calculate the interpolated volume at a given offset within the clip.
@@ -112,7 +113,8 @@ class VideoClip:
             brightness=self.brightness,
             contrast=self.contrast,
             saturation=self.saturation,
-            transition_out=TransitionInfo(tout.type, tout.duration_ms) if tout else None
+            transition_out=TransitionInfo(tout.type, tout.duration_ms) if tout else None,
+            color_label=self.color_label,
         )
         return c
 
@@ -197,6 +199,8 @@ class VideoClip:
         tout = self.transition_out
         if tout:
             d["transition_out"] = tout.to_dict()
+        if self.color_label != "none":
+            d["color_label"] = self.color_label
         return d
 
     @classmethod
@@ -214,6 +218,7 @@ class VideoClip:
             transition_out=TransitionInfo.from_dict(data["transition_out"])
             if "transition_out" in data
             else None,
+            color_label=data.get("color_label", "none"),
         )
 
 

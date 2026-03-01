@@ -308,6 +308,7 @@ class MainWindow(QMainWindow):
         self._timeline.transition_remove_requested.connect(self._clip.on_remove_transition)
         self._timeline.clip_volume_requested.connect(self._clip.on_edit_clip_properties)
         self._timeline.clip_color_requested.connect(self._clip.on_edit_clip_color)
+        self._timeline.clip_color_label_requested.connect(self._clip.on_set_color_label)
         self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
         self._track_headers.track_add_requested.connect(self._clip.on_add_video_track)
         self._track_headers.track_remove_requested.connect(self._clip.on_remove_video_track)

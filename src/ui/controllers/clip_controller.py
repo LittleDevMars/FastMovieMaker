@@ -13,6 +13,7 @@ from src.models.video_clip import VideoClipTrack
 from src.ui.commands import (
     AddVideoClipCommand,
     DeleteClipCommand,
+    EditColorLabelCommand,
     EditSpeedCommand,
     EditTransitionCommand,
     MoveVideoClipCommand,
@@ -390,6 +391,21 @@ class ClipController:
         # For now, let's assume we can't rename video tracks as the model doesn't support it yet,
         # or we just show a message.
         pass
+
+    def on_set_color_label(self, track_idx: int, clip_idx: int, label: str) -> None:
+        """클립 컬러 레이블 변경. Undo/Redo 지원."""
+        ctx = self.ctx
+        if not ctx.project or track_idx >= len(ctx.project.video_tracks):
+            return
+        vt = ctx.project.video_tracks[track_idx]
+        if clip_idx < 0 or clip_idx >= len(vt.clips):
+            return
+        clip = vt.clips[clip_idx]
+        if clip.color_label == label:
+            return
+        ctx.undo_stack.push(EditColorLabelCommand(clip, clip.color_label, label))
+        ctx.project_ctrl.on_document_edited()
+        ctx.timeline.update()
 
     # ---- 복사 / 붙여넣기 ----
 
