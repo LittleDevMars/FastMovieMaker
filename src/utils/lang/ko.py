@@ -611,8 +611,10 @@ STRINGS: dict[str, str] = {
     "Auto-wrap subtitles":          "자막 자동 줄바꿈",
 
     # ── Color label ──
-    "Color Label":   "컬러 레이블",
+    "Color Label":     "컬러 레이블",
     "Set color label": "컬러 레이블 설정",
+    "Color label set": "컬러 레이블 설정됨",
+    "There are no subtitles to wrap.": "줄바꿈할 자막이 없습니다.",
     "None":   "없음",
     "Red":    "빨강",
     "Orange": "주황",

@@ -776,6 +776,9 @@ class SubtitleController:
     def on_wrap_subtitles(self) -> None:
         """자막 자동 줄바꿈. Undo/Redo 지원."""
         ctx = self.ctx
+        if not ctx.project.has_subtitles:
+            QMessageBox.warning(ctx.window, tr("No Subtitles"), tr("There are no subtitles to wrap."))
+            return
         max_chars, ok = QInputDialog.getInt(
             ctx.window, tr("Auto-wrap Subtitles"), tr("Max characters per line:"),
             40, 10, 200, 1
@@ -790,7 +793,7 @@ class SubtitleController:
         ctx.undo_stack.push(WrapSubtitlesCommand(track, changes))
         ctx.project_ctrl.on_document_edited()
         ctx.subtitle_panel.refresh()
-        ctx.status_bar().showMessage(tr("Subtitles wrapped"))
+        ctx.status_bar().showMessage(f"{tr('Subtitles wrapped')}: {len(changes)} {tr('segments')}")
 
     def on_auto_align_subtitles(self) -> None:
         """겹치는 자막을 gap 50ms로 자동 정렬한다. Undo/Redo 지원."""

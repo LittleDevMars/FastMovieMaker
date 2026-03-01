@@ -1388,11 +1388,11 @@ class WrapSubtitlesCommand(QUndoCommand):
 
     def redo(self) -> None:
         for i, _, new in self._changes:
-            self._track.segments[i].text = new
+            self._track.update_segment_text(i, new)
 
     def undo(self) -> None:
         for i, old, _ in self._changes:
-            self._track.segments[i].text = old
+            self._track.update_segment_text(i, old)
 
 
 class EditColorLabelCommand(QUndoCommand):

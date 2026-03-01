@@ -808,9 +808,9 @@ class TimelineWidget(QWidget):
             remove_trans_act = None
             if vt and seg_idx < len(vt.clips) - 1:
                 clip = vt.clips[seg_idx]
-                label = tr("Edit Transition...") if hasattr(clip, "transition_out") and clip.transition_out else tr("Add Transition...")
+                label = tr("Edit Transition...") if clip.transition_out else tr("Add Transition...")
                 trans_act = menu.addAction(label)
-                if hasattr(clip, "transition_out") and clip.transition_out:
+                if clip.transition_out:
                     remove_trans_act = menu.addAction(tr("Remove Transition"))
 
             volume_act = menu.addAction(tr("Adjust Volume..."))
@@ -829,9 +829,12 @@ class TimelineWidget(QWidget):
                 ("purple", tr("Purple")),
                 ("pink",   tr("Pink")),
             ]
+            _current_label = vt.clips[seg_idx].color_label if vt and seg_idx < len(vt.clips) else "none"
             _label_actions = {}
             for _lbl, _name in _color_label_items:
                 _act = color_label_menu.addAction(_name)
+                _act.setCheckable(True)
+                _act.setChecked(_lbl == _current_label)
                 _label_actions[_act] = _lbl
 
             action = menu.exec(event.globalPos())
