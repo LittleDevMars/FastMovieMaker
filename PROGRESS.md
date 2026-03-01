@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 28 완료 (2026-02-28)
+**현재 상태:** Day 29 완료 (2026-03-02)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -42,6 +42,10 @@
 | **TTS 설정 프리셋 저장/로드** — `TTSPreset` 데이터클래스, `TTSPresetManager` (QSettings), TTSDialog 프리셋 UI (드롭다운+Save…+Delete), 13개 테스트 (454/454 passed) | **완료 (Day 26)** |
 | **비디오 썸네일 버그 수정 (Phase T2)** — `thumbnail_ready` static cache 무효화 누락, `_on_waveform_ready` 동일 패턴 수정, `vis_x1/vis_x2` viewport 클리핑 수정, 썸네일 서비스 단위 테스트 15개 (469/469 passed) | **완료 (Day 27)** |
 | **Phase T3 트랜지션 완성** — Remove Transition 기능(context menu + 신호 + 컨트롤러), `_build_concat_filter` 클램핑 버그 수정(offset 음수 방지), i18n 추가, 단위 테스트 14개 (512/512 passed) | **완료 (Day 28)** |
+| **Phase GPT — GPT 대본 자동 생성** — `GptScriptService`(OpenAI API), `GptScriptDialog`, `GptScriptWorker`, TTS 다이얼로그 통합, i18n 키 10개, 단위 테스트 9개 (521/521 passed) | **완료 (Day 28)** |
+| **Phase SD — FFmpeg 장면 감지** — `SceneDetectionService`(PySceneDetect), `SceneDetectDialog`(임계값 슬라이더+결과 리스트), `SceneDetectWorker`, 메뉴 통합, 단위 테스트 13개 (534/534 passed) | **완료 (Day 28)** |
+| **Phase D1 — UX 개선** — 내보내기 프리뷰(`_ThumbWorker`+소스/출력 정보 패널), 단축키 커스터마이징(`settings_manager` 단축키 API, Preferences "Shortcuts" 탭 `QKeySequenceEdit`), 자막 자동 정렬(`AutoAlignSubtitlesCommand`, Ctrl+Shift+A), 자막 애니메이션, 컬러 보정 기반 구현, 테스트 36개 (570/570 passed) | **완료 (Day 28)** |
+| **Phase D2 — UX/품질 개선** — 자막 자동 줄바꿈(`WrapSubtitlesCommand`, `textwrap.fill`, Ctrl+Shift+W), 클립 컬러 레이블(`VideoClip.color_label`, `EditColorLabelCommand`, `_LABEL_COLORS` 8색), Undo 히스토리 패널(`QUndoView` 4번째 탭), PROJECT_VERSION 9, 테스트 15개 (585/585 passed) | **완료 (Day 29)** |
 
 ---
 
@@ -156,6 +160,47 @@
 ### 테스트 결과
 - 신규 15/15 passed
 - 전체 411 passed (기존 22개 실패는 변경과 무관한 pre-existing 이슈)
+
+---
+
+## 2026-03-02 (Day 29) 작업 요약
+
+**Phase D2 — UX/품질 개선 (자막 자동 줄바꿈 + 클립 컬러 레이블 + Undo 히스토리 패널)**
+
+### 1. 자막 자동 줄바꿈 (`WrapSubtitlesCommand`)
+- `src/models/subtitle.py`: `wrap_all_texts(max_chars)` 추가 — Python `textwrap.fill()` 활용, 변경된 세그먼트만 `(index, old, new)` 목록으로 반환
+- `src/ui/commands.py`: `WrapSubtitlesCommand` 추가 — `redo()`/`undo()` 시 `update_segment_text()` 사용 (bounds-safe)
+- `src/ui/controllers/subtitle_controller.py`: `on_wrap_subtitles()` — `QInputDialog.getInt()` (기본 40, 범위 10~200), `has_subtitles` 가드, 상태바 메시지(변경 개수 포함)
+- `src/ui/main_window_menu.py`: Subtitles 메뉴에 `"Auto-wrap &Subtitles…"` 항목 추가 (단축키 `Ctrl+Shift+W`)
+
+### 2. 클립 컬러 레이블 (`EditColorLabelCommand`)
+- `src/models/video_clip.py`: `color_label: str = "none"` 필드 추가 (none/red/orange/yellow/green/blue/purple/pink), `clone()`·`to_dict()`·`from_dict()` 반영
+- `src/services/project_io.py`: `PROJECT_VERSION = 9` (color_label 직렬화 — none이면 생략)
+- `src/ui/commands.py`: `EditColorLabelCommand` 추가 — redo/undo로 color_label 전환
+- `src/ui/timeline_painter.py`: `_LABEL_COLORS` 클래스 변수 (7색상 × 3톤) — `_draw_track_clips()`에서 `color_label != "none"` 이면 소스 기반 색상 오버라이드
+- `src/ui/timeline_widget.py`: `clip_color_label_requested = Signal(int, int, str)` 추가, 우클릭 "Color Label" 서브메뉴(8항목, 현재 레이블에 체크마크)
+- `src/ui/controllers/clip_controller.py`: `on_set_color_label()` — `_invalidate_static_cache()` + `update()` 호출, 상태바 메시지
+- `src/ui/main_window.py`: `clip_color_label_requested` 시그널 연결
+
+### 3. Undo 히스토리 패널
+- `src/ui/main_window_ui.py`: `QUndoView(window._undo_stack)` 생성, `_right_tabs.addTab(undo_view, tr("History"))` — 기존 3탭(Subtitles/Media/Templates)에 4번째 탭 추가
+
+### 4. i18n (`src/utils/lang/ko.py`)
+- 추가 키 20개: 자막 자동 줄바꿈 관련 6개, 컬러 레이블 관련 11개, 히스토리 패널 관련 3개
+
+### 5. 코드 리뷰 피드백 반영 (별도 커밋)
+- `clip_controller.py`: `_invalidate_static_cache()` 누락 수정 (색상 미반영 버그), `track_idx < 0` 가드 추가, 상태바 피드백
+- `subtitle_controller.py`: `has_subtitles` 가드 추가, 줄바꿈 완료 메시지에 변경 개수 포함
+- `commands.py`: `WrapSubtitlesCommand`에서 직접 인덱스 접근 → `update_segment_text()` 사용으로 교체
+- `timeline_widget.py`: Color Label 서브메뉴에 체크마크(`setCheckable`/`setChecked`) 추가, 불필요한 `hasattr` 제거
+
+### 수정/신규 파일
+- **신규 (2):** `tests/test_wrap_subtitles.py`, `tests/test_clip_color_label.py`
+- **수정 (11):** `src/models/subtitle.py`, `src/models/video_clip.py`, `src/services/project_io.py`, `src/ui/commands.py`, `src/ui/controllers/subtitle_controller.py`, `src/ui/controllers/clip_controller.py`, `src/ui/timeline_painter.py`, `src/ui/timeline_widget.py`, `src/ui/main_window_menu.py`, `src/ui/main_window_ui.py`, `src/ui/main_window.py`, `src/utils/lang/ko.py`
+
+### 테스트 결과
+- 신규 15/15 passed (test_wrap_subtitles 8개 + test_clip_color_label 7개)
+- 전체 **585/585 passed**
 
 ---
 
