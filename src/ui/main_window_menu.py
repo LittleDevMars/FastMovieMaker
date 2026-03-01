@@ -158,6 +158,12 @@ def build_main_window_menu(window) -> None:
     sub_menu.addAction(edit_position_action)
     window._edit_position_action = edit_position_action
 
+    sub_menu.addSeparator()
+    auto_align_action = QAction(tr("Auto-align &Subtitles"), window)
+    auto_align_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+    auto_align_action.triggered.connect(window._subtitle_ctrl.on_auto_align_subtitles)
+    sub_menu.addAction(auto_align_action)
+
     view_menu = menubar.addMenu(tr("&View"))
     window._proxy_action = QAction(tr("Use &Proxy Media"), window)
     window._proxy_action.setCheckable(True)

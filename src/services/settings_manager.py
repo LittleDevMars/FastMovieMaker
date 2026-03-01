@@ -5,6 +5,23 @@ from typing import Any, Optional
 
 from PySide6.QtCore import QSettings
 
+# 커스터마이징 가능한 단축키 기본값
+_SHORTCUT_DEFAULTS: dict[str, str] = {
+    "play_pause":        "Space",
+    "seek_back":         "Left",
+    "seek_forward":      "Right",
+    "seek_back_frame":   "Shift+Left",
+    "seek_forward_frame": "Shift+Right",
+    "delete":            "Delete",
+    "split_clip":        "Ctrl+B",
+    "zoom_in":           "Ctrl+=",
+    "zoom_out":          "Ctrl+-",
+    "zoom_fit":          "Ctrl+0",
+    "snap_toggle":       "S",
+    "copy_clip":         "Ctrl+C",
+    "paste_clip":        "Ctrl+V",
+}
+
 
 class SettingsManager:
     """Wrapper around QSettings for type-safe preference management."""
@@ -169,3 +186,15 @@ class SettingsManager:
     def set(self, key: str, value: Any) -> None:
         """Set a setting value by key."""
         self._settings.setValue(key, value)
+
+    # ---------------------------------------------------- Shortcut Settings
+
+    def get_shortcut(self, action: str) -> str:
+        """Get the key sequence string for the given action (falls back to default)."""
+        return self._settings.value(
+            f"shortcuts/{action}", _SHORTCUT_DEFAULTS.get(action, ""), str
+        )
+
+    def set_shortcut(self, action: str, key: str) -> None:
+        """Persist the key sequence string for the given action."""
+        self._settings.setValue(f"shortcuts/{action}", key)

@@ -12,7 +12,7 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
-PROJECT_VERSION = 7
+PROJECT_VERSION = 8
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:
@@ -65,11 +65,23 @@ def _segment_to_dict(seg: SubtitleSegment) -> dict:
         d["voice"] = seg.voice
     if seg.speed is not None:
         d["speed"] = seg.speed
+    if seg.animation is not None:
+        a = seg.animation
+        d["animation"] = {
+            "in_effect": a.in_effect,
+            "out_effect": a.out_effect,
+            "in_duration_ms": a.in_duration_ms,
+            "out_duration_ms": a.out_duration_ms,
+            "slide_offset_px": a.slide_offset_px,
+        }
     return d
 
 
 def _dict_to_segment(d: dict) -> SubtitleSegment:
+    from src.models.subtitle_animation import SubtitleAnimation
     style = _dict_to_style(d["style"]) if "style" in d else None
+    anim_data = d.get("animation")
+    animation = SubtitleAnimation(**anim_data) if anim_data else None
     return SubtitleSegment(
         start_ms=d["start_ms"],
         end_ms=d["end_ms"],
@@ -79,6 +91,7 @@ def _dict_to_segment(d: dict) -> SubtitleSegment:
         volume=d.get("volume", 1.0),
         voice=d.get("voice"),
         speed=d.get("speed"),
+        animation=animation,
     )
 
 

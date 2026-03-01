@@ -19,6 +19,7 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.subtitle_exporter import export_srt, import_smi, import_srt
 from src.ui.commands import (
     AddSegmentCommand,
+    AutoAlignSubtitlesCommand,
     BatchShiftCommand,
     DeleteSegmentCommand,
     EditStyleCommand,
@@ -264,6 +265,22 @@ class SubtitleController:
                 cmd = EditSegmentTTSCommand(ctx.project.subtitle_track, index, seg, new_audio_file, voice, speed)
                 ctx.undo_stack.push(cmd)
                 ctx.status_bar().showMessage(f"TTS updated for segment {index + 1}")
+
+    def on_edit_segment_animation(self, index: int) -> None:
+        """자막 애니메이션 편집 다이얼로그."""
+        from src.ui.dialogs.animation_dialog import AnimationDialog
+        from src.ui.commands import EditAnimationCommand
+        ctx = self.ctx
+        if not ctx.project.has_subtitles or index < 0 or index >= len(ctx.project.subtitle_track):
+            return
+        seg = ctx.project.subtitle_track[index]
+        dialog = AnimationDialog(ctx.window, initial=seg.animation)
+        if dialog.exec():
+            new_anim = dialog.get_values()
+            old_anim = seg.animation.copy() if seg.animation else None
+            cmd = EditAnimationCommand(ctx.project.subtitle_track, index, old_anim, new_anim)
+            ctx.undo_stack.push(cmd)
+            ctx.project_ctrl.on_document_edited()
 
     def on_toggle_position_edit(self, checked: bool) -> None:
         """자막 위치 편집 모드 토글."""
@@ -754,6 +771,34 @@ class SubtitleController:
                     ctx.refresh_all()
                     ctx.status_bar().showMessage(tr("Track translated"))
                 ctx.autosave.notify_edit()
+
+    def on_auto_align_subtitles(self) -> None:
+        """겹치는 자막을 gap 50ms로 자동 정렬한다. Undo/Redo 지원."""
+        gap_ms = 50
+        ctx = self.ctx
+        track = ctx.project.subtitle_track
+        if not track or len(track) < 2:
+            ctx.status_bar().showMessage(tr("No overlapping subtitles found"))
+            return
+
+        old_times = [(s.start_ms, s.end_ms) for s in track.segments]
+        new_times = list(old_times)
+        for i in range(1, len(new_times)):
+            prev_end = new_times[i - 1][1]
+            s, e = new_times[i]
+            if s < prev_end + gap_ms:
+                shift = prev_end + gap_ms - s
+                new_times[i] = (s + shift, e + shift)
+
+        if old_times == new_times:
+            ctx.status_bar().showMessage(tr("No overlapping subtitles found"))
+            return
+
+        ctx.undo_stack.push(AutoAlignSubtitlesCommand(track, old_times, new_times))
+        ctx.project_ctrl.on_document_edited()
+        ctx.subtitle_panel.refresh()
+        ctx.timeline.update()
+        ctx.status_bar().showMessage(tr("Auto-aligned subtitles"))
 
     def on_delete_selected(self) -> None:
         """Delete selected subtitle segment or clip."""

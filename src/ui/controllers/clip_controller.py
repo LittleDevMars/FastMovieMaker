@@ -334,6 +334,36 @@ class ClipController:
                 ctx.project_ctrl.on_document_edited()
                 ctx.refresh_all()
 
+    def on_edit_clip_color(self, track_idx: int, clip_idx: int) -> None:
+        """컬러 보정 다이얼로그 열기."""
+        ctx = self.ctx
+        if not ctx.project:
+            return
+        from src.ui.dialogs.color_correction_dialog import ColorCorrectionDialog
+        from src.ui.commands import EditClipPropertiesCommand
+        vt = ctx.project.video_tracks[track_idx]
+        clip = vt.clips[clip_idx]
+        dialog = ColorCorrectionDialog(
+            ctx.window,
+            initial_brightness=clip.brightness,
+            initial_contrast=clip.contrast,
+            initial_saturation=clip.saturation,
+        )
+        if dialog.exec():
+            new_vals = dialog.get_values()
+            old_vals = {
+                "brightness": clip.brightness,
+                "contrast": clip.contrast,
+                "saturation": clip.saturation,
+                "volume": clip.volume,
+            }
+            if any(new_vals[k] != old_vals[k] for k in new_vals):
+                new_vals["volume"] = clip.volume
+                cmd = EditClipPropertiesCommand(clip, old_vals, new_vals)
+                ctx.undo_stack.push(cmd)
+                ctx.project_ctrl.on_document_edited()
+                ctx.refresh_all()
+
     # ---- 트랙 관리 ----
 
     def on_add_video_track(self) -> None:

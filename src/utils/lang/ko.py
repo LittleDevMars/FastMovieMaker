@@ -563,6 +563,45 @@ STRINGS: dict[str, str] = {
     "Persuasive":                             "설득형",
     "Humorous":                               "유머러스",
 
+    # ── Color Correction dialog ──
+    "Color Correction...":  "컬러 보정...",
+    "Color Correction":     "컬러 보정",
+    "Visual Filters":       "비주얼 필터",
+    "Brightness":           "밝기",
+    "Contrast":             "대비",
+    "Saturation":           "채도",
+    "Reset to Default":     "기본값으로 초기화",
+
+    # ── Subtitle Animation dialog ──
+    "Edit Animation...":  "애니메이션 편집...",
+    "Subtitle Animation": "자막 애니메이션",
+    "Entry Effect":       "진입 효과",
+    "Exit Effect":        "퇴출 효과",
+    "Fade In":            "페이드 인",
+    "Fade Out":           "페이드 아웃",
+    "Slide Up":           "위로 슬라이드",
+    "Slide Down":         "아래로 슬라이드",
+    "Typewriter":         "타이핑 효과",
+    "Edit animation":     "애니메이션 편집",
+
+    # ── Shortcuts tab ──
+    "Shortcuts":               "단축키",
+    "Reset All Shortcuts":     "모든 단축키 초기화",
+    "Action":                  "동작",
+    "Shortcut":                "단축키",
+
+    # ── Export preview ──
+    "Source Preview":          "소스 미리보기",
+    "Estimated Size":          "예상 파일 크기",
+    "Output":                  "출력",
+
+    # ── Auto-align ──
+    "Auto-align Subtitles":           "자막 자동 정렬",
+    "Auto-align &Subtitles":          "자막 자동 정렬(&A)",
+    "No overlapping subtitles found": "겹치는 자막이 없습니다",
+    "Auto-aligned subtitles":         "자막 자동 정렬 완료",
+    "Auto-align subtitles":           "자막 자동 정렬",
+
     # ── Common ──
     "Ok": "확인",
     "Yes": "예",

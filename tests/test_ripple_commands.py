@@ -207,3 +207,56 @@ class TestRippleCommands:
         assert len(self.clip_track.clips) == 3
         assert self.s2.start_ms == 1100
         assert self.o1.start_ms == 1200
+
+    def test_delete_first_clip_ripple(self):
+        # Delete c1 (index 0, time 0-1000). Duration 1000.
+        # All subsequent items should be shifted left by 1000ms.
+        cmd = DeleteClipCommand(
+            self.project, 0, 0, self.c1,
+            self.sub_track, self.overlay_track,
+            0, 1000, ripple=True
+        )
+        cmd.redo()
+
+        # Clips
+        assert len(self.clip_track.clips) == 2
+        assert self.clip_track.clips[0] == self.c2
+        assert self.clip_track.clips[1] == self.c3
+        # Verify timeline positions of shifted clips
+        assert self.clip_track.clip_timeline_start(0) == 0
+        assert self.clip_track.clip_timeline_start(1) == 1000
+
+        # Subtitles
+        # s1 (100-900) - removed
+        assert self.s1 not in self.sub_track.segments
+        # s2 (1100-1900) -> shifted to 100-900
+        assert self.s2.start_ms == 100
+        assert self.s2.end_ms == 900
+        # s3 (2100-2900) -> shifted to 1100-1900
+        assert self.s3.start_ms == 1100
+        assert self.s3.end_ms == 1900
+        # s4 (1900-2100) -> shifted to 900-1100
+        assert self.s4.start_ms == 900
+        assert self.s4.end_ms == 1100
+
+        # Overlays
+        # o1 (1200-1800) -> shifted to 200-800
+        assert self.o1.start_ms == 200
+        assert self.o1.end_ms == 800
+
+        # UNDO
+        cmd.undo()
+
+        # Clips restored
+        assert len(self.clip_track.clips) == 3
+        assert self.clip_track.clips[0] == self.c1
+
+        # Subtitles restored
+        assert self.s1 in self.sub_track.segments
+        assert self.s1.start_ms == 100
+        assert self.s2.start_ms == 1100
+        assert self.s3.start_ms == 2100
+        assert self.s4.start_ms == 1900
+
+        # Overlays restored
+        assert self.o1.start_ms == 1200

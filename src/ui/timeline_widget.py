@@ -82,6 +82,7 @@ class TimelineWidget(QWidget):
 
     status_message_requested = Signal(str, int)  # (message, timeout_ms)
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
+    clip_color_requested = Signal(int, int)    # (track_index, clip_index)
 
     # ---- 색상 상수는 TimelinePainter로 이동됨 (src/ui/timeline_painter.py) ----
     # 아래는 비-페인팅 코드(히트테스트, 레이아웃 계산)에서도 사용되어 유지하는 상수들
@@ -812,6 +813,7 @@ class TimelineWidget(QWidget):
                     remove_trans_act = menu.addAction(tr("Remove Transition"))
 
             volume_act = menu.addAction(tr("Adjust Volume..."))
+            color_act = menu.addAction(tr("Color Correction..."))
             speed_act = menu.addAction(tr("Change Speed..."))
 
             action = menu.exec(event.globalPos())
@@ -825,6 +827,8 @@ class TimelineWidget(QWidget):
                 self.transition_remove_requested.emit(v_idx, seg_idx)
             elif action == volume_act:
                 self.clip_volume_requested.emit(v_idx, seg_idx)
+            elif action == color_act:
+                self.clip_color_requested.emit(v_idx, seg_idx)
             elif action == speed_act:
                 self.clip_speed_requested.emit(v_idx, seg_idx)
             return

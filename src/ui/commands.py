@@ -131,6 +131,26 @@ class EditStyleCommand(QUndoCommand):
             self._track[self._index].style = self._old_style
 
 
+class EditAnimationCommand(QUndoCommand):
+    """Change the animation of a subtitle segment."""
+
+    def __init__(self, track: SubtitleTrack, index: int,
+                 old_anim, new_anim):
+        super().__init__(tr("Edit animation"))
+        self._track = track
+        self._index = index
+        self._old = old_anim
+        self._new = new_anim
+
+    def redo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            self._track[self._index].animation = self._new
+
+    def undo(self) -> None:
+        if 0 <= self._index < len(self._track):
+            self._track[self._index].animation = self._old
+
+
 class SplitCommand(QUndoCommand):
     """Split a subtitle segment at a given time position."""
 
@@ -1330,3 +1350,29 @@ class DeleteAudioClipCommand(QUndoCommand):
             track = self._project.bgm_tracks[self._track_index]
             track.clips.insert(self._clip_index, self._clip)
             track.clips.sort(key=lambda c: c.start_ms)
+
+
+class AutoAlignSubtitlesCommand(QUndoCommand):
+    """겹치는 자막 자동 정렬."""
+
+    def __init__(
+        self,
+        track: SubtitleTrack,
+        old_times: list[tuple[int, int]],
+        new_times: list[tuple[int, int]],
+    ):
+        super().__init__(tr("Auto-align subtitles"))
+        self._track = track
+        self._old_times = old_times
+        self._new_times = new_times
+
+    def redo(self) -> None:
+        self._apply(self._new_times)
+
+    def undo(self) -> None:
+        self._apply(self._old_times)
+
+    def _apply(self, times: list[tuple[int, int]]) -> None:
+        for i, (s, e) in enumerate(times):
+            self._track.segments[i].start_ms = s
+            self._track.segments[i].end_ms = e

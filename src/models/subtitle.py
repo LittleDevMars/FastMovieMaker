@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.models.style import SubtitleStyle
+    from src.models.subtitle_animation import SubtitleAnimation
 
 
 @dataclass(slots=True)
@@ -22,6 +23,7 @@ class SubtitleSegment:
     volume: float = 1.0  # Per-segment volume (0.0~2.0, default 1.0=100%)
     voice: str | None = None  # Per-segment voice override
     speed: float | None = None  # Per-segment speed override
+    animation: SubtitleAnimation | None = None  # Per-segment animation
 
     @property
     def duration_ms(self) -> int:
@@ -96,3 +98,11 @@ class SubtitleTrack:
             seg.start_ms = start_ms
             seg.end_ms = end_ms
             bisect.insort(self.segments, seg, key=lambda s: s.start_ms)
+
+    def find_overlapping_pairs(self) -> list[tuple[int, int]]:
+        """연속 세그먼트 중 겹치는 쌍의 인덱스 (0-based) 반환."""
+        return [
+            (i, i + 1)
+            for i in range(len(self.segments) - 1)
+            if self.segments[i].end_ms > self.segments[i + 1].start_ms
+        ]

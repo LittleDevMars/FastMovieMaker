@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -12,18 +13,38 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from src.services.settings_manager import SettingsManager
+from src.services.settings_manager import SettingsManager, _SHORTCUT_DEFAULTS
 from src.services.translator import ISO_639_1_CODES
 from src.utils.i18n import tr
+
+# 단축키 탭에 표시될 (action_key, display_name) 목록
+_SHORTCUT_ACTIONS: list[tuple[str, str]] = [
+    ("play_pause",        "Play / Pause"),
+    ("seek_back",         "Seek Back 5s"),
+    ("seek_forward",      "Seek Forward 5s"),
+    ("seek_back_frame",   "Seek Back 1 Frame"),
+    ("seek_forward_frame", "Seek Forward 1 Frame"),
+    ("delete",            "Delete Selected"),
+    ("split_clip",        "Split Clip"),
+    ("zoom_in",           "Timeline Zoom In"),
+    ("zoom_out",          "Timeline Zoom Out"),
+    ("zoom_fit",          "Timeline Zoom Fit"),
+    ("snap_toggle",       "Toggle Snap"),
+    ("copy_clip",         "Copy Clip"),
+    ("paste_clip",        "Paste Clip"),
+]
 
 
 class PreferencesDialog(QDialog):
@@ -50,6 +71,7 @@ class PreferencesDialog(QDialog):
         self._tabs.addTab(self._create_editing_tab(), tr("Editing"))
         self._tabs.addTab(self._create_advanced_tab(), tr("Advanced"))
         self._tabs.addTab(self._create_api_keys_tab(), tr("API Keys"))
+        self._tabs.addTab(self._create_shortcuts_tab(), tr("Shortcuts"))
 
         # Buttons
         button_box = QDialogButtonBox(
@@ -283,6 +305,55 @@ class PreferencesDialog(QDialog):
         layout.addStretch()
         return widget
 
+    def _create_shortcuts_tab(self) -> QWidget:
+        """단축키 커스터마이징 탭을 생성한다."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        self._shortcuts_table = QTableWidget(len(_SHORTCUT_ACTIONS), 2)
+        self._shortcuts_table.setHorizontalHeaderLabels(
+            [tr("Action"), tr("Shortcut")]
+        )
+        self._shortcuts_table.horizontalHeader().setStretchLastSection(True)
+        self._shortcuts_table.verticalHeader().setVisible(False)
+        self._shortcuts_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
+        self._key_edits: list[QKeySequenceEdit] = []
+        for row, (action, label) in enumerate(_SHORTCUT_ACTIONS):
+            item = QTableWidgetItem(label)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._shortcuts_table.setItem(row, 0, item)
+            edit = QKeySequenceEdit()
+            self._shortcuts_table.setCellWidget(row, 1, edit)
+            self._key_edits.append(edit)
+
+        layout.addWidget(self._shortcuts_table)
+
+        reset_btn = QPushButton(tr("Reset All Shortcuts"))
+        reset_btn.clicked.connect(self._reset_all_shortcuts)
+        layout.addWidget(reset_btn)
+
+        self._load_shortcuts()
+        return widget
+
+    def _load_shortcuts(self) -> None:
+        """SettingsManager에서 단축키를 읽어 QKeySequenceEdit에 적용한다."""
+        for row, (action, _) in enumerate(_SHORTCUT_ACTIONS):
+            key = self._settings.get_shortcut(action)
+            self._key_edits[row].setKeySequence(QKeySequence(key))
+
+    def _save_shortcuts(self) -> None:
+        """QKeySequenceEdit 값을 SettingsManager에 저장한다."""
+        for row, (action, _) in enumerate(_SHORTCUT_ACTIONS):
+            seq = self._key_edits[row].keySequence()
+            self._settings.set_shortcut(action, seq.toString())
+
+    def _reset_all_shortcuts(self) -> None:
+        """모든 단축키를 기본값으로 초기화한다."""
+        for row, (action, _) in enumerate(_SHORTCUT_ACTIONS):
+            default = _SHORTCUT_DEFAULTS.get(action, "")
+            self._key_edits[row].setKeySequence(QKeySequence(default))
+
     def _load_settings(self):
         """Load current settings into UI."""
         # General
@@ -349,6 +420,9 @@ class PreferencesDialog(QDialog):
         self._settings.set_deepl_api_key(self._deepl_key.text().strip())
         self._settings.set_openai_api_key(self._openai_key.text().strip())
         self._settings.set_elevenlabs_api_key(self._elevenlabs_key.text().strip())
+
+        # Shortcuts
+        self._save_shortcuts()
 
         # Sync to disk
         self._settings.sync()

@@ -176,42 +176,44 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- Shortcuts
 
     def _setup_shortcuts(self) -> None:
-        sc_space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
-        sc_space.activated.connect(self._playback.toggle_play_pause)
+        from src.services.settings_manager import SettingsManager
+        sm = SettingsManager()
 
-        sc_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
-        sc_left.activated.connect(lambda: self._playback.seek_relative(-5000))
-        sc_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
-        sc_right.activated.connect(lambda: self._playback.seek_relative(5000))
+        self._shortcuts: dict[str, QShortcut] = {}
 
-        sc_frame_left = QShortcut(QKeySequence("Shift+Left"), self)
-        sc_frame_left.activated.connect(lambda: self._playback.seek_frame_relative(-1))
-        sc_frame_right = QShortcut(QKeySequence("Shift+Right"), self)
-        sc_frame_right.activated.connect(lambda: self._playback.seek_frame_relative(1))
+        def _make(action: str, slot) -> QShortcut:
+            key = sm.get_shortcut(action)
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(slot)
+            self._shortcuts[action] = sc
+            return sc
 
-        sc_del = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
-        sc_del.activated.connect(self._on_delete_pressed)
+        _make("play_pause", self._playback.toggle_play_pause)
+        _make("seek_back", lambda: self._playback.seek_relative(-5000))
+        _make("seek_forward", lambda: self._playback.seek_relative(5000))
+        _make("seek_back_frame", lambda: self._playback.seek_frame_relative(-1))
+        _make("seek_forward_frame", lambda: self._playback.seek_frame_relative(1))
+        _make("delete", self._on_delete_pressed)
+        _make("copy_clip", self._on_copy)
+        _make("paste_clip", self._on_paste)
+        _make("split_clip", lambda: self._clip.on_split_clip(-1, self._timeline._playhead_ms))
+        _make("zoom_in", self._timeline.zoom_in)
+        _make("zoom_out", self._timeline.zoom_out)
+        _make("zoom_fit", self._timeline.zoom_fit)
+        _make("snap_toggle", self._toggle_magnetic_snap)
 
-        sc_copy = QShortcut(QKeySequence.Copy, self)
-        sc_copy.activated.connect(self._on_copy)
-
-        sc_paste = QShortcut(QKeySequence.Paste, self)
-        sc_paste.activated.connect(self._on_paste)
-
-        sc_split = QShortcut(QKeySequence("Ctrl+B"), self)
-        sc_split.activated.connect(lambda: self._clip.on_split_clip(-1, self._timeline._playhead_ms))
-
-        sc_zoom_in = QShortcut(QKeySequence("Ctrl+="), self)
-        sc_zoom_in.activated.connect(self._timeline.zoom_in)
+        # Ctrl++ 보조 단축키 (커스터마이징 불가)
         sc_zoom_in2 = QShortcut(QKeySequence("Ctrl++"), self)
         sc_zoom_in2.activated.connect(self._timeline.zoom_in)
-        sc_zoom_out = QShortcut(QKeySequence("Ctrl+-"), self)
-        sc_zoom_out.activated.connect(self._timeline.zoom_out)
-        sc_zoom_fit = QShortcut(QKeySequence("Ctrl+0"), self)
-        sc_zoom_fit.activated.connect(self._timeline.zoom_fit)
 
-        sc_snap = QShortcut(QKeySequence(Qt.Key.Key_S), self)
-        sc_snap.activated.connect(self._toggle_magnetic_snap)
+    def apply_shortcuts(self) -> None:
+        """저장된 단축키 설정을 즉시 적용한다 (앱 재시작 불필요)."""
+        from src.services.settings_manager import SettingsManager
+        sm = SettingsManager()
+        for action, sc in self._shortcuts.items():
+            key = sm.get_shortcut(action)
+            if key:
+                sc.setKey(QKeySequence(key))
 
     def _on_delete_pressed(self) -> None:
         """Handle delete key press: delete selected item from timeline or subtitle panel."""
@@ -274,6 +276,7 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.style_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_style)
         self._subtitle_panel.volume_edited.connect(self._subtitle_ctrl.on_segment_volume_edited)
         self._subtitle_panel.tts_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_tts)
+        self._subtitle_panel.animation_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_animation)
         self._subtitle_panel.font_changed.connect(self._subtitle_ctrl.on_font_changed)
 
         # Timeline subtitle
@@ -304,6 +307,7 @@ class MainWindow(QMainWindow):
         self._timeline.transition_requested.connect(self._clip.on_transition_requested)
         self._timeline.transition_remove_requested.connect(self._clip.on_remove_transition)
         self._timeline.clip_volume_requested.connect(self._clip.on_edit_clip_properties)
+        self._timeline.clip_color_requested.connect(self._clip.on_edit_clip_color)
         self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
         self._track_headers.track_add_requested.connect(self._clip.on_add_video_track)
         self._track_headers.track_remove_requested.connect(self._clip.on_remove_video_track)
@@ -448,6 +452,7 @@ class MainWindow(QMainWindow):
     def _on_preferences(self) -> None:
         dialog = PreferencesDialog(self)
         if dialog.exec():
+            self.apply_shortcuts()
             self.statusBar().showMessage(tr("Preferences updated"))
 
     def _toggle_magnetic_snap(self) -> None:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,6 +29,37 @@ from src.models.subtitle import SubtitleTrack
 from src.utils.i18n import tr
 from src.workers.export_worker import ExportWorker
 from src.utils.hw_accel import get_hw_info
+
+
+class _ThumbSignals(QObject):
+    """QRunnable은 시그널 미지원 → 별도 QObject로 분리."""
+    thumb_ready = Signal(str)  # 임시 JPEG 경로
+
+
+class _ThumbWorker(QRunnable):
+    """별도 스레드에서 FFmpeg로 첫 프레임을 추출한다."""
+
+    def __init__(self, video_path: Path) -> None:
+        super().__init__()
+        self.signals = _ThumbSignals()
+        self._video_path = video_path
+
+    def run(self) -> None:
+        try:
+            from src.utils.config import find_ffmpeg
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg:
+                return
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()
+            subprocess.run(
+                [ffmpeg, "-ss", "0", "-i", str(self._video_path),
+                 "-vframes", "1", "-f", "image2", "-y", tmp.name],
+                capture_output=True, timeout=15,
+            )
+            self.signals.thumb_ready.emit(tmp.name)
+        except Exception:
+            pass
 
 
 class ExportDialog(QDialog):
@@ -60,17 +93,36 @@ class ExportDialog(QDialog):
         self._thread: QThread | None = None
         self._worker: ExportWorker | None = None
         self._temp_audio_path: Path | None = None
+        self._thumb_tmp_path: str | None = None
 
         # Check if track has TTS audio segments
         self._has_tts = any(seg.audio_file for seg in track.segments)
 
+        # Probe video metadata (synchronous, fast)
+        self._video_info = None
+        if video_path and video_path.exists():
+            try:
+                from src.services.video_probe import probe_video
+                self._video_info = probe_video(video_path)
+            except Exception:
+                pass
+
         self._build_ui()
         self._show_options()
+
+        # 썸네일 비동기 추출 시작
+        if video_path and video_path.exists():
+            worker = _ThumbWorker(video_path)
+            worker.signals.thumb_ready.connect(self._on_thumbnail_ready)
+            QThreadPool.globalInstance().start(worker)
 
     # ------------------------------------------------------------------ UI
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+
+        # --- Source Preview panel ---
+        layout.addWidget(self._build_preview_panel())
 
         # --- Audio options group ---
         self._options_group = QGroupBox(tr("Audio Options"))
@@ -237,6 +289,12 @@ class ExportDialog(QDialog):
 
         layout.addWidget(self._video_group)
 
+        # 코덱/해상도/CRF 변경 시 출력 정보 실시간 갱신
+        self._codec_combo.currentIndexChanged.connect(self._update_output_info)
+        self._res_combo.currentIndexChanged.connect(self._update_output_info)
+        self._crf_slider.valueChanged.connect(self._update_output_info)
+        self._update_output_info()
+
         # --- Progress section (hidden initially) ---
         self._progress_section = QGroupBox(tr("Export Progress"))
         progress_layout = QVBoxLayout(self._progress_section)
@@ -263,6 +321,93 @@ class ExportDialog(QDialog):
         btn_layout.addWidget(self._cancel_btn)
 
         layout.addLayout(btn_layout)
+
+    def _build_preview_panel(self) -> QGroupBox:
+        """소스 미리보기 패널 — 썸네일 + 소스/출력 정보."""
+        group = QGroupBox(tr("Source Preview"))
+        h = QHBoxLayout(group)
+
+        self._thumb_label = QLabel()
+        self._thumb_label.setFixedSize(200, 112)
+        self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumb_label.setStyleSheet("background: #333; color: #888;")
+        self._thumb_label.setText("...")
+        h.addWidget(self._thumb_label)
+
+        info_layout = QVBoxLayout()
+        self._source_info_label = QLabel(f"{tr('Resolution')}: —")
+        self._output_info_label = QLabel(f"{tr('Output')}: —")
+        info_layout.addWidget(self._source_info_label)
+        info_layout.addWidget(self._output_info_label)
+        info_layout.addStretch()
+        h.addLayout(info_layout)
+
+        # 소스 정보 즉시 표시 (video_info가 있으면)
+        self._update_source_info()
+        return group
+
+    def _update_source_info(self) -> None:
+        """소스 해상도/길이 라벨을 갱신한다."""
+        if not self._video_info:
+            return
+        vi = self._video_info
+        if vi.width and vi.height:
+            total_sec = vi.duration_ms / 1000
+            m, s = divmod(int(total_sec), 60)
+            h, m = divmod(m, 60)
+            dur_str = f"{h:02d}:{m:02d}:{s:02d}"
+            self._source_info_label.setText(
+                f"Source: {vi.width}×{vi.height}  {dur_str}"
+            )
+
+    def _update_output_info(self) -> None:
+        """출력 해상도/예상 크기/코덱 라벨을 갱신한다."""
+        codec_txt = self._codec_combo.currentText()
+        res_data = self._res_combo.currentData()
+        crf = self._crf_slider.value()
+
+        # 출력 해상도 결정
+        if res_data and res_data != (0, 0):
+            out_w, out_h = res_data
+        elif self._video_info and self._video_info.width:
+            out_w, out_h = self._video_info.width, self._video_info.height
+        else:
+            out_w, out_h = 1920, 1080
+
+        # CRF 기반 비트레이트 추정 (H.264 1080p 기준 ~4000kbps, CRF 낮을수록 품질↑)
+        base_kbps = 4000  # H.264 1080p at CRF 23
+        if "HEVC" in codec_txt or "hevc" in codec_txt.lower():
+            base_kbps = 2000
+        # CRF 차이에 따른 보정 (±6 CRF ≈ ×2 bitrate)
+        crf_factor = 2 ** ((23 - crf) / 6)
+        # 해상도 비율 보정 (1080p = 2073600px 기준)
+        pixel_ratio = (out_w * out_h) / 2_073_600
+        bitrate_kbps = int(base_kbps * crf_factor * pixel_ratio)
+
+        # 예상 파일 크기 (MB)
+        if self._video_info and self._video_info.duration_ms:
+            dur_sec = self._video_info.duration_ms / 1000
+            size_mb = dur_sec * bitrate_kbps / 8 / 1024
+            size_str = f"~{size_mb:.0f} MB"
+        else:
+            size_str = "—"
+
+        self._output_info_label.setText(
+            f"Output: {out_w}×{out_h}  {size_str}  {codec_txt}"
+        )
+
+    def _on_thumbnail_ready(self, path: str) -> None:
+        """썸네일 추출 완료 콜백 — QPixmap을 라벨에 표시한다."""
+        self._thumb_tmp_path = path
+        pixmap = QPixmap(path)
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
+                200, 112,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._thumb_label.setPixmap(scaled)
+            self._thumb_label.setText("")
 
     def _show_options(self) -> None:
         """Show the options UI phase."""
@@ -455,4 +600,10 @@ class ExportDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         self._on_cancel()
+        # 썸네일 임시 파일 정리
+        if self._thumb_tmp_path:
+            try:
+                Path(self._thumb_tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
         super().closeEvent(event)

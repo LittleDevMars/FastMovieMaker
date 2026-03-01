@@ -117,6 +117,83 @@ def import_smi(path: Path) -> SubtitleTrack:
         print(f"Error parsing SMI: {e}")
         return SubtitleTrack()
 
+def _get_anchor_pos(style, video_width: int, video_height: int) -> tuple[int, int]:
+    """슬라이드 애니메이션을 위한 자막 앵커 좌표 반환."""
+    if style and style.custom_x is not None and style.custom_y is not None:
+        return style.custom_x, style.custom_y
+    pos = (style.position if style else "bottom-center") or "bottom-center"
+    margin = (style.margin_bottom if style else 40) or 40
+    x = video_width // 2
+    if "left" in pos:
+        x = 20
+    elif "right" in pos:
+        x = video_width - 20
+    if "bottom" in pos:
+        y = video_height - margin
+    elif "top" in pos:
+        y = margin
+    else:
+        y = video_height // 2
+    return x, y
+
+
+def _build_animation_tag(
+    anim,
+    seg_start_ms: int,
+    seg_end_ms: int,
+    style,
+    video_width: int,
+    video_height: int,
+) -> str:
+    """ASS 인라인 태그 문자열 반환 (중괄호 없이). typewriter면 빈 문자열."""
+    if anim is None or anim.in_effect == "typewriter":
+        return ""
+    parts: list[str] = []
+
+    # fade
+    in_ms = anim.in_duration_ms if anim.in_effect == "fade" else 0
+    out_ms = anim.out_duration_ms if anim.out_effect == "fade" else 0
+    if in_ms > 0 or out_ms > 0:
+        parts.append(f"\\fad({in_ms},{out_ms})")
+
+    # slide (entry) — \move가 있으면 \pos 태그는 제거됨
+    if anim.in_effect in ("slide_up", "slide_down"):
+        ax, ay = _get_anchor_pos(style, video_width, video_height)
+        offset = anim.slide_offset_px
+        start_y = ay + offset if anim.in_effect == "slide_up" else ay - offset
+        t = min(anim.in_duration_ms, seg_end_ms - seg_start_ms)
+        parts.append(f"\\move({ax},{start_y},{ax},{ay},0,{t})")
+
+    return "".join(parts)
+
+
+def _generate_typewriter_events(
+    seg,
+    style_name: str,
+    style,
+    anim,
+    video_width: int,
+    video_height: int,
+) -> list[str]:
+    """타이핑 효과: 글자 수만큼 Dialogue 이벤트 생성."""
+    original = list(seg.text)  # \n 포함 원본 문자 리스트
+    n = len(original)
+    if n == 0:
+        return []
+    out_tag = f"\\fad(0,{anim.out_duration_ms})" if anim.out_effect == "fade" else ""
+    ms_per_char = anim.in_duration_ms / n
+    events: list[str] = []
+    cumulative = ""
+    for i, ch in enumerate(original):
+        cumulative += ch
+        char_start = _ms_to_ass_time(seg.start_ms + int(i * ms_per_char))
+        char_end = _ms_to_ass_time(seg.end_ms)
+        text = cumulative.replace("\n", "\\N")
+        tag_block = f"{{{out_tag}}}" if out_tag else ""
+        events.append(f"Dialogue: 0,{char_start},{char_end},{style_name},,0,0,0,,{tag_block}{text}")
+    return events
+
+
 def _color_to_ass(hex_color: str, alpha: int = 0) -> str:
     """Convert hex color (#RRGGBB) to ASS color (&HBBGGRR&)."""
     if not hex_color or not hex_color.startswith("#"):
@@ -238,20 +315,35 @@ def export_ass(track: SubtitleTrack, output_path: Path, video_width: int = 1920,
     for seg in track.segments:
         start = _ms_to_ass_time(seg.start_ms)
         end = _ms_to_ass_time(seg.end_ms)
-        
+
         style_name = "Default"
         if seg.style:
             s = seg.style
-            key = (s.font_family, s.font_size, s.font_bold, s.font_italic, s.font_color, 
+            key = (s.font_family, s.font_size, s.font_bold, s.font_italic, s.font_color,
                    s.outline_color, s.outline_width, s.bg_color, s.position, s.margin_bottom, s.custom_x, s.custom_y)
             style_name = style_map.get(key, "Default")
-            
+
         text = seg.text.replace("\n", "\\N")
-        
-        # Apply custom positioning tag if needed
-        if seg.style and seg.style.custom_x is not None and seg.style.custom_y is not None:
-             text = f"{{\\pos({seg.style.custom_x},{seg.style.custom_y})}}{text}"
-        
-        lines.append(f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,{text}")
+        anim = seg.animation
+
+        # 타이핑 효과: 다중 이벤트 생성
+        if anim and anim.in_effect == "typewriter":
+            lines.extend(_generate_typewriter_events(
+                seg, style_name, seg.style, anim, video_width, video_height))
+            continue
+
+        # 단일 이벤트: 태그 조합
+        anim_tag = _build_animation_tag(
+            anim, seg.start_ms, seg.end_ms, seg.style, video_width, video_height)
+
+        # \move가 포함되면 \pos 태그 생략 (충돌 방지)
+        has_move = "\\move" in anim_tag
+        pos_tag = ""
+        if not has_move and seg.style and seg.style.custom_x is not None:
+            pos_tag = f"\\pos({seg.style.custom_x},{seg.style.custom_y})"
+
+        all_tags = pos_tag + anim_tag
+        full_text = f"{{{all_tags}}}{text}" if all_tags else text
+        lines.append(f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,{full_text}")
         
     output_path.write_text("\n".join(lines), encoding="utf-8")
