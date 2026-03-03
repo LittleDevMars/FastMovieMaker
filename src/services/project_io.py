@@ -13,7 +13,7 @@ from src.models.timeline_marker import TimelineMarker
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
-PROJECT_VERSION = 11
+PROJECT_VERSION = 12
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:

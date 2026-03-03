@@ -61,6 +61,7 @@ class VideoClip:
     brightness: float = 1.0  # 0.5 to 2.0
     contrast: float = 1.0    # 0.5 to 2.0
     saturation: float = 1.0  # 0.0 to 2.0
+    hue: float = 0.0          # -180.0 to 180.0 (degrees)
     transition_out: TransitionInfo | None = None  # Effect transitioning into the NEXT clip
     color_label: str = "none"  # 컬러 레이블: none/red/orange/yellow/green/blue/purple/pink
 
@@ -113,6 +114,7 @@ class VideoClip:
             brightness=self.brightness,
             contrast=self.contrast,
             saturation=self.saturation,
+            hue=self.hue,
             transition_out=TransitionInfo(tout.type, tout.duration_ms) if tout else None,
             color_label=self.color_label,
         )
@@ -194,6 +196,8 @@ class VideoClip:
             d["contrast"] = self.contrast
         if self.saturation != 1.0:
             d["saturation"] = self.saturation
+        if self.hue != 0.0:
+            d["hue"] = self.hue
         if self.volume_points:
             d["volume_points"] = [p.to_dict() for p in self.volume_points]
         tout = self.transition_out
@@ -214,6 +218,7 @@ class VideoClip:
             brightness=data.get("brightness", 1.0),
             contrast=data.get("contrast", 1.0),
             saturation=data.get("saturation", 1.0),
+            hue=data.get("hue", 0.0),
             volume_points=[VolumePoint.from_dict(p) for p in data.get("volume_points", [])],
             transition_out=TransitionInfo.from_dict(data["transition_out"])
             if "transition_out" in data

@@ -1413,21 +1413,22 @@ class EditColorLabelCommand(QUndoCommand):
 
 
 class EditColorCorrectionCommand(QUndoCommand):
-    """클립 컬러 보정 (brightness/contrast/saturation) 전용 커맨드."""
+    """클립 컬러 보정 (brightness/contrast/saturation/hue) 전용 커맨드."""
 
     def __init__(self, clip: VideoClip,
                  old_br: float, old_ct: float, old_sat: float,
-                 new_br: float, new_ct: float, new_sat: float):
+                 new_br: float, new_ct: float, new_sat: float,
+                 old_hue: float = 0.0, new_hue: float = 0.0):
         super().__init__(tr("Edit color correction"))
         self._clip = clip
-        self._old = (old_br, old_ct, old_sat)
-        self._new = (new_br, new_ct, new_sat)
+        self._old = (old_br, old_ct, old_sat, old_hue)
+        self._new = (new_br, new_ct, new_sat, new_hue)
 
     def redo(self) -> None:
-        self._clip.brightness, self._clip.contrast, self._clip.saturation = self._new
+        self._clip.brightness, self._clip.contrast, self._clip.saturation, self._clip.hue = self._new
 
     def undo(self) -> None:
-        self._clip.brightness, self._clip.contrast, self._clip.saturation = self._old
+        self._clip.brightness, self._clip.contrast, self._clip.saturation, self._clip.hue = self._old
 
 
 class AddMarkerCommand(QUndoCommand):

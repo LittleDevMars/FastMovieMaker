@@ -283,6 +283,31 @@ class SubtitleController:
             ctx.undo_stack.push(cmd)
             ctx.project_ctrl.on_document_edited()
 
+    def on_bulk_edit_animation(self, indices: list[int]) -> None:
+        """다중 자막 세그먼트 일괄 애니메이션 편집."""
+        from src.ui.dialogs.animation_dialog import AnimationDialog
+        from src.ui.commands import EditAnimationCommand
+        ctx = self.ctx
+        if not ctx.project.has_subtitles or not indices:
+            return
+        track = ctx.project.subtitle_track
+        dialog = AnimationDialog(ctx.window, initial=None)
+        if not dialog.exec():
+            return
+        new_anim = dialog.get_values()
+        ctx.undo_stack.beginMacro(tr("Apply animation to %d segments") % len(indices))
+        for idx in indices:
+            if 0 <= idx < len(track):
+                seg = track[idx]
+                old_anim = seg.animation.copy() if seg.animation else None
+                ctx.undo_stack.push(EditAnimationCommand(track, idx, old_anim, new_anim.copy() if new_anim else None))
+        ctx.undo_stack.endMacro()
+        ctx.project_ctrl.on_document_edited()
+        ctx.subtitle_panel.refresh()
+        ctx.status_bar().showMessage(
+            tr("Animation applied to %d segment(s)") % len(indices), 3000
+        )
+
     def on_toggle_position_edit(self, checked: bool) -> None:
         """자막 위치 편집 모드 토글."""
         ctx = self.ctx

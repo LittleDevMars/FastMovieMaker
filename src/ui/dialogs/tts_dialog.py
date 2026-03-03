@@ -600,13 +600,14 @@ class TTSDialog(QDialog):
 
         # Get settings
         voice_data = self._voice_combo.currentData()
+        self._final_voice = voice_data
         self._final_speed = self._speed_spin.value()
         strategy = self._strategy_combo.currentData()
         language = self._lang_combo.currentText().lower()[:2]  # "Korean" -> "ko"
 
         # Rate format differs by engine
         if engine == TTSEngine.ELEVENLABS:
-            rate = str(speed)
+            rate = str(self._final_speed)
         else:
             rate = TTSService.format_rate(self._final_speed)
 

@@ -724,6 +724,18 @@ STRINGS: dict[str, str] = {
     "Clip copied":          "클립 복사됨",
     "Clip pasted":          "클립 붙여넣기됨",
 
+    # ── Phase CC2: 컬러 보정 강화 ──
+    "Hue":                                      "색조",
+    "Apply Color to All Clips in Track...":     "트랙 내 모든 클립에 색보정 적용...",
+    "Apply color to all clips":                 "모든 클립에 색보정 적용",
+    "Color correction applied to %d clips":     "%d개 클립에 색보정 적용됨",
+
+    # ── Phase ANIM2: 자막 애니메이션 강화 ──
+    "Apply Animation to Selected...":           "선택한 자막에 애니메이션 적용...",
+    "Apply animation to %d segments":           "%d개 세그먼트에 애니메이션 적용",
+    "Animation applied to %d segment(s)":       "%d개 자막에 애니메이션 적용됨",
+    "Animation":                                "애니메이션",
+
     # ── Phase Q: 크래시 리포트 ──
     "Application Error":            "애플리케이션 오류",
     "An unexpected error occurred:": "예기치 않은 오류가 발생했습니다:",

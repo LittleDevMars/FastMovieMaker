@@ -113,6 +113,19 @@ class _SubtitleTableModel(QAbstractTableModel):
             if row in self._search_rows:
                 return QColor(100, 150, 240, 50)
 
+        elif role == Qt.ItemDataRole.ForegroundRole:
+            # # 열: 애니메이션 설정된 세그먼트 → 파란색으로 표시
+            if col == 0:
+                anim = getattr(seg, "animation", None)
+                if anim is not None and anim.is_active:
+                    return QColor(80, 160, 255)
+
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            if col == 0:
+                anim = getattr(seg, "animation", None)
+                if anim is not None and anim.is_active:
+                    return f"▶ {tr('Animation')}: in={anim.in_effect}, out={anim.out_effect}"
+
         return None
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
@@ -205,6 +218,7 @@ class SubtitlePanel(QWidget):
     style_edit_requested = Signal(int)  # segment index
     tts_edit_requested = Signal(int)  # segment index
     animation_edit_requested = Signal(int)  # segment index
+    bulk_animation_requested = Signal(list)  # list[int] — 다중 세그먼트 인덱스
     font_changed = Signal(str)
 
     def __init__(self, parent=None):
@@ -245,7 +259,7 @@ class SubtitlePanel(QWidget):
         self._table.setModel(self._model)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
@@ -421,17 +435,25 @@ class SubtitlePanel(QWidget):
         row = index.row() if index.isValid() else -1
         menu = QMenu(self)
 
+        # 현재 선택된 행 목록
+        selected_rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
+
         add_action = menu.addAction(tr("Add Subtitle Here"))
         delete_action = None
         style_action = None
         tts_action = None
         anim_action = None
+        bulk_anim_action = None
         if self._track and 0 <= row < len(self._track):
             delete_action = menu.addAction(tr("Delete Subtitle"))
             menu.addSeparator()
             style_action = menu.addAction(tr("Edit Style..."))
             tts_action = menu.addAction(tr("Edit TTS Settings..."))
             anim_action = menu.addAction(tr("Edit Animation..."))
+            if len(selected_rows) > 1:
+                bulk_anim_action = menu.addAction(
+                    tr("Apply Animation to Selected...") + f" ({len(selected_rows)})"
+                )
 
         menu.addSeparator()
         search_action = menu.addAction(tr("Find in Subtitles..."))
@@ -444,6 +466,8 @@ class SubtitlePanel(QWidget):
             self.tts_edit_requested.emit(row)
         elif action is not None and action == anim_action:
             self.animation_edit_requested.emit(row)
+        elif bulk_anim_action is not None and action == bulk_anim_action:
+            self.bulk_animation_requested.emit(selected_rows)
         elif action == add_action:
             if self._track and 0 <= row < len(self._track):
                 seg = self._track[row]

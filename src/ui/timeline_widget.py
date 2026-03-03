@@ -83,6 +83,7 @@ class TimelineWidget(QWidget):
     status_message_requested = Signal(str, int)  # (message, timeout_ms)
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
     clip_color_requested = Signal(int, int)    # (track_index, clip_index)
+    clip_bulk_color_requested = Signal(int)    # (track_index) — 트랙 전체 일괄 색보정
     clip_color_label_requested = Signal(int, int, str)  # (track_index, clip_index, label)
     clips_delete_requested = Signal()          # 선택된 클립들 삭제 요청 (멀티)
     clip_copy_requested = Signal()             # 클립 복사 요청
@@ -902,6 +903,7 @@ class TimelineWidget(QWidget):
 
             volume_act = menu.addAction(tr("Adjust Volume..."))
             color_act = menu.addAction(tr("Color Correction..."))
+            bulk_color_act = menu.addAction(tr("Apply Color to All Clips in Track..."))
             speed_act = menu.addAction(tr("Change Speed..."))
 
             # Color Label 서브메뉴
@@ -949,6 +951,8 @@ class TimelineWidget(QWidget):
                 self.clip_volume_requested.emit(v_idx, seg_idx)
             elif action == color_act:
                 self.clip_color_requested.emit(v_idx, seg_idx)
+            elif action == bulk_color_act:
+                self.clip_bulk_color_requested.emit(v_idx)
             elif action == speed_act:
                 self.clip_speed_requested.emit(v_idx, seg_idx)
             elif action in _label_actions:

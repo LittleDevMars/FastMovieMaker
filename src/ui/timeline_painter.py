@@ -78,6 +78,9 @@ class TimelinePainter:
     # Color Correction Badge
     _CORRECTION_BADGE_BRUSH = QBrush(QColor(255, 210, 60, 220))
 
+    # Animation Badge (파란 원형)
+    _ANIMATION_BADGE_BRUSH = QBrush(QColor(80, 160, 255, 220))
+
     # Waveform
     _WAVEFORM_FILL = QColor(255, 140, 40, 120)
     _WAVEFORM_EDGE = QColor(255, 180, 80, 200)
@@ -492,6 +495,17 @@ class TimelinePainter:
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                 seg.text,
             )
+            # 애니메이션 배지 (파란 원형) — animation 설정된 세그먼트
+            anim = getattr(seg, "animation", None)
+            if anim is not None and anim.is_active and (x2 - x1) > 20:
+                badge_r = 5
+                bx = x2 - badge_r - 4
+                by = y + track_h - badge_r - 4
+                painter.save()
+                painter.setBrush(self._ANIMATION_BADGE_BRUSH)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QRectF(bx - badge_r, by - badge_r, badge_r * 2, badge_r * 2))
+                painter.restore()
 
     # ---- Image Overlays ----
 

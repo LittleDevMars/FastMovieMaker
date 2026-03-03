@@ -15,6 +15,11 @@ class SubtitleAnimation:
     out_duration_ms: int = 300       # 퇴출 효과 지속 시간 (ms)
     slide_offset_px: int = 60        # 슬라이드 오프셋 (px)
 
+    @property
+    def is_active(self) -> bool:
+        """in/out 효과 중 하나라도 설정되어 있으면 True."""
+        return self.in_effect != "none" or self.out_effect != "none"
+
     def copy(self) -> SubtitleAnimation:
         """독립적인 복사본 반환."""
         return SubtitleAnimation(

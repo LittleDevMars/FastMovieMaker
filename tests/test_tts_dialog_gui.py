@@ -14,6 +14,8 @@ def tts_dialog(qtbot):
     """Create a TTS dialog for testing."""
     dialog = TTSDialog(video_audio_path=None, parent=None)
     qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(50)
     return dialog
 
 

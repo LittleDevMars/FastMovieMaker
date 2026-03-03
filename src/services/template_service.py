@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -17,10 +18,23 @@ def _get_builtin_dir() -> Path:
 
 
 def _get_user_dir() -> Path:
-    """Return the user templates directory, creating it if needed."""
-    user_dir = Path.home() / ".fastmoviemaker" / "templates"
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
+    """Return a writable user templates directory, creating it if needed."""
+    candidates = [
+        Path.home() / ".fastmoviemaker" / "templates",
+        Path.cwd() / ".fastmoviemaker" / "templates",
+        Path(tempfile.gettempdir()) / "fastmoviemaker" / "templates",
+    ]
+    for user_dir in candidates:
+        try:
+            user_dir.mkdir(parents=True, exist_ok=True)
+            test_file = user_dir / ".write_test"
+            with test_file.open("w", encoding="utf-8"):
+                pass
+            test_file.unlink(missing_ok=True)
+            return user_dir
+        except OSError:
+            continue
+    raise OSError("No writable directory available for user templates.")
 
 
 class TemplateService:
@@ -29,6 +43,7 @@ class TemplateService:
     def __init__(self):
         self._builtin: list[OverlayTemplate] = []
         self._user: list[OverlayTemplate] = []
+        self._user_dir = _get_user_dir()
         self._load_builtin()
         self._load_user()
 
@@ -55,7 +70,7 @@ class TemplateService:
             self._builtin = []
 
     def _load_user(self) -> None:
-        manifest_path = _get_user_dir() / "user_manifest.json"
+        manifest_path = self._user_dir / "user_manifest.json"
         if not manifest_path.exists():
             self._user = []
             return
@@ -69,7 +84,7 @@ class TemplateService:
             self._user = []
 
     def _save_user(self) -> None:
-        manifest_path = _get_user_dir() / "user_manifest.json"
+        manifest_path = self._user_dir / "user_manifest.json"
         data = {"templates": [t.to_dict() for t in self._user]}
         manifest_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -118,7 +133,7 @@ class TemplateService:
             return None
 
         template_id = uuid.uuid4().hex[:12]
-        user_dir = _get_user_dir()
+        user_dir = self._user_dir
 
         # Copy image to user templates dir
         dest = user_dir / f"{template_id}{image_path.suffix}"
@@ -163,7 +178,7 @@ class TemplateService:
             if img.isNull():
                 return None
             scaled = img.scaledToWidth(160, Qt.TransformationMode.SmoothTransformation)
-            thumb_path = _get_user_dir() / f"{template_id}_thumb.png"
+            thumb_path = self._user_dir / f"{template_id}_thumb.png"
             if scaled.save(str(thumb_path), "PNG"):
                 return thumb_path
         except Exception:

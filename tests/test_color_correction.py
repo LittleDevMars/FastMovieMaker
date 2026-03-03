@@ -12,32 +12,22 @@ from src.utils.lang.ko import STRINGS
 class TestColorCorrectionDialog:
     """Qt 위젯 없이 다이얼로그 로직만 검증."""
 
-    def _make_dialog(self, br=1.0, ct=1.0, sat=1.0):
+    def _make_dialog(self, br=1.0, ct=1.0, sat=1.0, hue=0.0):
         """QApplication 없이 다이얼로그 객체 생성."""
         from src.ui.dialogs.color_correction_dialog import ColorCorrectionDialog
-        with patch("src.ui.dialogs.color_correction_dialog.QDialog.__init__", return_value=None), \
-             patch("src.ui.dialogs.color_correction_dialog.QVBoxLayout"), \
-             patch("src.ui.dialogs.color_correction_dialog.QGroupBox"), \
-             patch("src.ui.dialogs.color_correction_dialog.QPushButton"), \
-             patch("src.ui.dialogs.color_correction_dialog.QDialogButtonBox"), \
-             patch("src.ui.dialogs.color_correction_dialog.QLabel"), \
-             patch("src.ui.dialogs.color_correction_dialog.QHBoxLayout"):
-
-            # QSlider를 모킹하여 슬라이더 값 추적
-            mock_slider_cls = MagicMock()
-            br_slider = MagicMock()
-            ct_slider = MagicMock()
-            sat_slider = MagicMock()
-            br_slider.value.return_value = int(br * 100)
-            ct_slider.value.return_value = int(ct * 100)
-            sat_slider.value.return_value = int(sat * 100)
-            mock_slider_cls.side_effect = [br_slider, ct_slider, sat_slider]
-
-            with patch("src.ui.dialogs.color_correction_dialog.QSlider", mock_slider_cls):
-                dlg = ColorCorrectionDialog.__new__(ColorCorrectionDialog)
-                dlg._br_slider = br_slider
-                dlg._ct_slider = ct_slider
-                dlg._sat_slider = sat_slider
+        dlg = ColorCorrectionDialog.__new__(ColorCorrectionDialog)
+        br_slider = MagicMock()
+        ct_slider = MagicMock()
+        sat_slider = MagicMock()
+        hue_slider = MagicMock()
+        br_slider.value.return_value = int(br * 100)
+        ct_slider.value.return_value = int(ct * 100)
+        sat_slider.value.return_value = int(sat * 100)
+        hue_slider.value.return_value = int(hue)
+        dlg._br_slider = br_slider
+        dlg._ct_slider = ct_slider
+        dlg._sat_slider = sat_slider
+        dlg._hue_slider = hue_slider
         return dlg
 
     def test_default_values(self):
@@ -60,12 +50,13 @@ class TestColorCorrectionDialog:
         assert dlg.get_values()["saturation"] == pytest.approx(2.0)
 
     def test_reset_values(self):
-        dlg = self._make_dialog(1.5, 0.8, 2.0)
+        dlg = self._make_dialog(1.5, 0.8, 2.0, hue=45.0)
         # _on_reset 호출 시 setValue(100)가 불려야 함
         dlg._on_reset()
         dlg._br_slider.setValue.assert_called_with(100)
         dlg._ct_slider.setValue.assert_called_with(100)
         dlg._sat_slider.setValue.assert_called_with(100)
+        dlg._hue_slider.setValue.assert_called_with(0)
 
 
 # ── FFmpeg eq 필터 테스트 ──────────────────────────────────────────────────────

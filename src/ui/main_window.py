@@ -283,6 +283,7 @@ class MainWindow(QMainWindow):
         self._subtitle_panel.volume_edited.connect(self._subtitle_ctrl.on_segment_volume_edited)
         self._subtitle_panel.tts_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_tts)
         self._subtitle_panel.animation_edit_requested.connect(self._subtitle_ctrl.on_edit_segment_animation)
+        self._subtitle_panel.bulk_animation_requested.connect(self._subtitle_ctrl.on_bulk_edit_animation)
         self._subtitle_panel.font_changed.connect(self._subtitle_ctrl.on_font_changed)
 
         # Timeline subtitle
@@ -314,6 +315,7 @@ class MainWindow(QMainWindow):
         self._timeline.transition_remove_requested.connect(self._clip.on_remove_transition)
         self._timeline.clip_volume_requested.connect(self._clip.on_edit_clip_properties)
         self._timeline.clip_color_requested.connect(self._clip.on_edit_clip_color)
+        self._timeline.clip_bulk_color_requested.connect(self._clip.on_bulk_edit_color)
         self._timeline.clip_color_label_requested.connect(self._clip.on_set_color_label)
         self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
         self._timeline.clips_delete_requested.connect(self._clip.on_delete_selected_clips)

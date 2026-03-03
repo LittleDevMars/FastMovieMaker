@@ -124,7 +124,7 @@ class TestProjectIORoundTripMarkers:
     def test_project_io_round_trip_markers(self):
         from src.services.project_io import save_project, load_project, PROJECT_VERSION
 
-        assert PROJECT_VERSION == 11, "PROJECT_VERSION이 11이어야 합니다"
+        assert PROJECT_VERSION == 12, "PROJECT_VERSION이 12이어야 합니다"
 
         project = ProjectState()
         project.markers = [

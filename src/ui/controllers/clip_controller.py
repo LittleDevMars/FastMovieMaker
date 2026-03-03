@@ -402,21 +402,53 @@ class ClipController:
             initial_brightness=clip.brightness,
             initial_contrast=clip.contrast,
             initial_saturation=clip.saturation,
+            initial_hue=getattr(clip, "hue", 0.0),
         )
         if not dialog.exec():
             return
         vals = dialog.get_values()
-        new_br, new_ct, new_sat = vals["brightness"], vals["contrast"], vals["saturation"]
-        if new_br == clip.brightness and new_ct == clip.contrast and new_sat == clip.saturation:
+        new_br, new_ct, new_sat, new_hue = vals["brightness"], vals["contrast"], vals["saturation"], vals["hue"]
+        old_hue = getattr(clip, "hue", 0.0)
+        if new_br == clip.brightness and new_ct == clip.contrast and new_sat == clip.saturation and new_hue == old_hue:
             return
         ctx.undo_stack.push(EditColorCorrectionCommand(
             clip, clip.brightness, clip.contrast, clip.saturation,
             new_br, new_ct, new_sat,
+            old_hue=old_hue, new_hue=new_hue,
         ))
         ctx.project_ctrl.on_document_edited()
         ctx.timeline._invalidate_static_cache()
         ctx.timeline.update()
         ctx.status_bar().showMessage(tr("Color correction applied"), 3000)
+
+    def on_bulk_edit_color(self, track_idx: int) -> None:
+        """트랙 내 모든 클립에 동일한 컬러 보정 일괄 적용."""
+        ctx = self.ctx
+        if not ctx.project or track_idx < 0 or track_idx >= len(ctx.project.video_tracks):
+            return
+        vt = ctx.project.video_tracks[track_idx]
+        if not vt.clips:
+            return
+        from src.ui.dialogs.color_correction_dialog import ColorCorrectionDialog
+        dialog = ColorCorrectionDialog(ctx.window)
+        if not dialog.exec():
+            return
+        vals = dialog.get_values()
+        new_br, new_ct, new_sat, new_hue = vals["brightness"], vals["contrast"], vals["saturation"], vals["hue"]
+        ctx.undo_stack.beginMacro(tr("Apply color to all clips"))
+        for clip in vt.clips:
+            old_hue = getattr(clip, "hue", 0.0)
+            ctx.undo_stack.push(EditColorCorrectionCommand(
+                clip, clip.brightness, clip.contrast, clip.saturation,
+                new_br, new_ct, new_sat,
+                old_hue=old_hue, new_hue=new_hue,
+            ))
+        ctx.undo_stack.endMacro()
+        ctx.project_ctrl.on_document_edited()
+        ctx.timeline._invalidate_static_cache()
+        ctx.timeline.update()
+        n = len(vt.clips)
+        ctx.status_bar().showMessage(tr("Color correction applied to %d clips") % n, 3000)
 
     # ---- 트랙 관리 ----
 

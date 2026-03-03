@@ -87,12 +87,12 @@ class TestBlendModeSerialization:
         assert loaded_vt.chroma_blend == pytest.approx(0.25)
 
     def test_project_version_11(self, tmp_path):
-        """저장 시 version=11."""
+        """저장 시 version=12 (hue 필드 추가로 v12 업데이트)."""
         project = _make_project_with_two_tracks()
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["version"] == 11
+        assert data["version"] == 12
 
     def test_backward_compat_v10(self, tmp_path):
         """v10 파일 로드 → blend_mode 기본값 'normal'."""

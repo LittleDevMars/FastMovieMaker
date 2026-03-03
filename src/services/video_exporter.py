@@ -56,10 +56,13 @@ def _build_concat_filter(
         # 리스트 + join 패턴 (HPP Ch.11 — O(n) vs O(n²) 문자열 연결)
         v_chain: list[str] = [f"[{idx}:v]trim=start={start_s:.3f}:end={end_s:.3f}", "setpts=PTS-STARTPTS"]
 
-        # Apply visual filters (Brightness, Contrast, Saturation)
+        # Apply visual filters (Brightness, Contrast, Saturation, Hue)
+        clip_hue = getattr(clip, "hue", 0.0)
         if clip.brightness != 1.0 or clip.contrast != 1.0 or clip.saturation != 1.0:
             f_bri = clip.brightness - 1.0
             v_chain.append(f"eq=brightness={f_bri:.2f}:contrast={clip.contrast:.2f}:saturation={clip.saturation:.2f}")
+        if clip_hue != 0.0:
+            v_chain.append(f"hue=h={clip_hue:.2f}")
 
         settings = SettingsManager()
         pitch_shift_enabled = settings.get_audio_speed_pitch_shift()
