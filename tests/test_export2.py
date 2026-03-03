@@ -95,18 +95,20 @@ def manager():
     if not QCoreApplication.instance():
         QCoreApplication([])
 
+    # ExportPresetManager가 사용하는 QSettings()과 동일한 네임스페이스로 격리
+    QCoreApplication.setOrganizationName("FastMovieMakerTest")
+    QCoreApplication.setApplicationName("ExportPresetTest")
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-    settings = QSettings("FastMovieMakerTest", "ExportPresetTest")
+
+    # 이전 테스트 잔류 데이터 일괄 삭제 (단일 sync)
+    settings = QSettings()
     settings.beginGroup("ExportPresets")
-    settings.remove("")  # 그룹 내 모든 키 삭제
+    settings.remove("")
     settings.endGroup()
     settings.sync()
 
     from src.services.export_preset_manager import ExportPresetManager
     mgr = ExportPresetManager()
-    # 혹시 남은 항목 제거
-    for name in mgr.list_presets():
-        mgr.delete_preset(name)
 
     yield mgr
 

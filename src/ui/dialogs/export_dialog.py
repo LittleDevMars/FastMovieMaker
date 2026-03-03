@@ -657,47 +657,47 @@ class ExportDialog(QDialog):
         _, preset = data
 
         # 여러 위젯의 signal을 일괄 차단하여 _update_output_info 중복 호출 방지
-        for w in (self._codec_combo, self._res_combo, self._crf_slider,
-                  self._preset_combo, self._audio_bitrate_combo, self._container_combo):
+        _widgets = (self._codec_combo, self._res_combo, self._crf_slider,
+                    self._preset_combo, self._audio_bitrate_combo, self._container_combo)
+        for w in _widgets:
             w.blockSignals(True)
+        try:
+            # 코덱
+            codec_map = {"h264": "H.264", "hevc": "HEVC"}
+            codec_text = codec_map.get(preset.codec, "H.264")
+            idx = self._codec_combo.findText(codec_text)
+            if idx >= 0:
+                self._codec_combo.setCurrentIndex(idx)
 
-        # 코덱
-        codec_map = {"h264": "H.264", "hevc": "HEVC"}
-        codec_text = codec_map.get(preset.codec, "H.264")
-        idx = self._codec_combo.findText(codec_text)
-        if idx >= 0:
-            self._codec_combo.setCurrentIndex(idx)
+            # 해상도
+            res_found = False
+            for i in range(self._res_combo.count()):
+                if self._res_combo.itemData(i) == (preset.width, preset.height):
+                    self._res_combo.setCurrentIndex(i)
+                    res_found = True
+                    break
+            if not res_found:
+                self._res_combo.setCurrentIndex(0)  # Original
 
-        # 해상도
-        res_found = False
-        for i in range(self._res_combo.count()):
-            if self._res_combo.itemData(i) == (preset.width, preset.height):
-                self._res_combo.setCurrentIndex(i)
-                res_found = True
-                break
-        if not res_found:
-            self._res_combo.setCurrentIndex(0)  # Original
+            # CRF
+            self._crf_slider.setValue(preset.crf)
 
-        # CRF
-        self._crf_slider.setValue(preset.crf)
+            # Speed preset
+            speed_map = {"fast": 0, "medium": 1, "slow": 2}
+            self._preset_combo.setCurrentIndex(speed_map.get(preset.speed_preset, 1))
 
-        # Speed preset
-        speed_map = {"fast": 0, "medium": 1, "slow": 2}
-        self._preset_combo.setCurrentIndex(speed_map.get(preset.speed_preset, 1))
+            # 오디오 비트레이트
+            ab_idx = self._audio_bitrate_combo.findData(preset.audio_bitrate)
+            if ab_idx >= 0:
+                self._audio_bitrate_combo.setCurrentIndex(ab_idx)
 
-        # 오디오 비트레이트
-        ab_idx = self._audio_bitrate_combo.findData(preset.audio_bitrate)
-        if ab_idx >= 0:
-            self._audio_bitrate_combo.setCurrentIndex(ab_idx)
-
-        # 컨테이너
-        container_idx = self._container_combo.findData(preset.container)
-        if container_idx >= 0:
-            self._container_combo.setCurrentIndex(container_idx)
-
-        for w in (self._codec_combo, self._res_combo, self._crf_slider,
-                  self._preset_combo, self._audio_bitrate_combo, self._container_combo):
-            w.blockSignals(False)
+            # 컨테이너
+            container_idx = self._container_combo.findData(preset.container)
+            if container_idx >= 0:
+                self._container_combo.setCurrentIndex(container_idx)
+        finally:
+            for w in _widgets:
+                w.blockSignals(False)
 
         self._update_output_info()
 
