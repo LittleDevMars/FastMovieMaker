@@ -15,6 +15,8 @@ class ExportPreset:
     codec: str          # "h264", "hevc"
     container: str      # "mp4", "mkv", "webm"
     audio_bitrate: str = "192k"
+    crf: int = 23
+    speed_preset: str = "medium"
     suffix: str = ""    # Filename suffix, e.g. "_720p"
 
     @property
@@ -26,6 +28,35 @@ class ExportPreset:
     @property
     def file_extension(self) -> str:
         return f".{self.container}"
+
+    def to_dict(self) -> dict:
+        """QSettings 직렬화 및 프리셋 저장용 딕셔너리 변환."""
+        return {
+            "name": self.name,
+            "width": self.width,
+            "height": self.height,
+            "codec": self.codec,
+            "container": self.container,
+            "audio_bitrate": self.audio_bitrate,
+            "crf": self.crf,
+            "speed_preset": self.speed_preset,
+            "suffix": self.suffix,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ExportPreset:
+        """딕셔너리에서 ExportPreset을 복원한다. 누락 필드는 기본값 사용."""
+        return cls(
+            name=data["name"],
+            width=data.get("width", 0),
+            height=data.get("height", 0),
+            codec=data.get("codec", "h264"),
+            container=data.get("container", "mp4"),
+            audio_bitrate=data.get("audio_bitrate", "192k"),
+            crf=data.get("crf", 23),
+            speed_preset=data.get("speed_preset", "medium"),
+            suffix=data.get("suffix", ""),
+        )
 
 
 DEFAULT_PRESETS: list[ExportPreset] = [

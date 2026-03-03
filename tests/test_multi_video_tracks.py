@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import subprocess
 import tempfile
@@ -91,7 +92,8 @@ class TestBlendModeSerialization:
         project = _make_project_with_two_tracks()
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         assert data["version"] == 12
 
     def test_backward_compat_v10(self, tmp_path):
@@ -100,7 +102,8 @@ class TestBlendModeSerialization:
         project = _make_project_with_two_tracks()
         path = tmp_path / "test_v10.fmm.json"
         save_project(project, path)
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         data["version"] = 10
         # blend_mode 필드 제거
         for vt_data in data.get("video_tracks", []):

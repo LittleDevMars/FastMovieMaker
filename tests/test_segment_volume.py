@@ -1,5 +1,6 @@
 """Tests for per-segment volume feature."""
 
+import gzip
 import json
 from pathlib import Path
 
@@ -57,7 +58,8 @@ class TestVolumeProjectIO:
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         seg_data = data["tracks"][0]["segments"][0]
         assert "volume" not in seg_data
 
@@ -72,7 +74,8 @@ class TestVolumeProjectIO:
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         seg_data = data["tracks"][0]["segments"][0]
         assert seg_data["volume"] == 0.7
 

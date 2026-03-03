@@ -30,7 +30,7 @@ class ProjectController:
             QMessageBox.warning(ctx.window, tr("No Video"), tr("Please open a video file first."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            ctx.window, tr("Save Project"), "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
+            ctx.window, tr("Save Project"), "", "FastMovieMaker Project (*.fmm *.fmm.json);;All Files (*)"
         )
         if not path:
             return
@@ -49,7 +49,7 @@ class ProjectController:
         ctx = self.ctx
         if not path:
             path, _ = QFileDialog.getOpenFileName(
-                ctx.window, tr("Load Project"), "", "FastMovieMaker Project (*.fmm.json);;All Files (*)"
+                ctx.window, tr("Load Project"), "", "FastMovieMaker Project (*.fmm *.fmm.json);;All Files (*)"
             )
             if not path:
                 return
@@ -73,13 +73,6 @@ class ProjectController:
             track_headers = getattr(ctx.window, "_track_headers", None)
             if track_headers:
                 track_headers.set_project(project)
-
-            if project.video_path and project.video_path.is_file():
-                ctx.current_playback_source = str(project.video_path)
-                ctx.current_clip_index = 0
-                ctx.player.setSource(QUrl.fromLocalFile(str(project.video_path)))
-                ctx.player.play()
-                ctx.window.setWindowTitle(f"{project.video_path.name} – {APP_NAME}")
 
             ctx.refresh_all()
 

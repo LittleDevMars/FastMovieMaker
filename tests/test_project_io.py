@@ -1,5 +1,6 @@
 """Tests for project I/O (save/load with v1/v2 format)."""
 
+import gzip
 import json
 import tempfile
 from pathlib import Path
@@ -43,7 +44,8 @@ class TestSaveLoadV2:
     def test_version_2(self, sample_project, tmp_path):
         path = tmp_path / "test.fmm.json"
         save_project(sample_project, path)
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         assert data["version"] == 12  # Updated from v11 → v12 (hue 필드)
         assert "tracks" in data
         assert "default_style" in data
@@ -158,7 +160,8 @@ class TestAudioTimeline:
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
         track_data = data["tracks"][0]
 
         assert "audio_path" in track_data
@@ -310,7 +313,8 @@ class TestVideoClipTrack:
 
         path = tmp_path / "test.fmm.json"
         save_project(project, path)
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(gzip.decompress(raw).decode("utf-8") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8"))
 
         assert data["version"] == 12  # Updated from v11 → v12 (hue 필드)
         assert "video_clips" in data

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -25,7 +26,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.models.export_preset import DEFAULT_PRESETS, ExportPreset
 from src.models.subtitle import SubtitleTrack
+from src.services.export_preset_manager import ExportPresetManager
 from src.utils.i18n import tr
 from src.workers.export_worker import ExportWorker
 from src.utils.hw_accel import get_hw_info
@@ -94,6 +97,7 @@ class ExportDialog(QDialog):
         self._worker: ExportWorker | None = None
         self._temp_audio_path: Path | None = None
         self._thumb_tmp_path: str | None = None
+        self._preset_manager = ExportPresetManager()
 
         # Check if track has TTS audio segments
         self._has_tts = any(seg.audio_file for seg in track.segments)
@@ -211,6 +215,47 @@ class ExportDialog(QDialog):
         # --- Video options group ---
         self._video_group = QGroupBox(tr("Video Options"))
         video_layout = QVBoxLayout(self._video_group)
+
+        # ── 프리셋 툴바 행 ──
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel(tr("Export Preset:")))
+        self._export_preset_combo = QComboBox()
+        self._export_preset_combo.setMinimumWidth(180)
+        self._populate_export_preset_combo()
+        self._export_preset_combo.currentIndexChanged.connect(self._on_export_preset_selected)
+        preset_row.addWidget(self._export_preset_combo)
+
+        self._save_preset_btn = QPushButton(tr("Save Preset..."))
+        self._save_preset_btn.clicked.connect(self._on_save_export_preset)
+        preset_row.addWidget(self._save_preset_btn)
+
+        self._delete_preset_btn = QPushButton(tr("Delete Preset"))
+        self._delete_preset_btn.clicked.connect(self._on_delete_export_preset)
+        preset_row.addWidget(self._delete_preset_btn)
+        video_layout.addLayout(preset_row)
+
+        # ── Audio Bitrate 행 ──
+        ab_row = QHBoxLayout()
+        ab_row.addWidget(QLabel(tr("Audio Bitrate:")))
+        self._audio_bitrate_combo = QComboBox()
+        for br in ["96k", "128k", "192k", "320k"]:
+            self._audio_bitrate_combo.addItem(br, br)
+        self._audio_bitrate_combo.setCurrentIndex(2)  # 192k 기본
+        ab_row.addWidget(self._audio_bitrate_combo)
+        ab_row.addStretch()
+        video_layout.addLayout(ab_row)
+
+        # ── Container 행 ──
+        container_row = QHBoxLayout()
+        container_row.addWidget(QLabel(tr("Container:")))
+        self._container_combo = QComboBox()
+        self._container_combo.addItem("MP4", "mp4")
+        self._container_combo.addItem("MKV", "mkv")
+        self._container_combo.addItem("WebM", "webm")
+        self._container_combo.currentIndexChanged.connect(self._update_output_info)
+        container_row.addWidget(self._container_combo)
+        container_row.addStretch()
+        video_layout.addLayout(container_row)
 
         # Codec & Preset row
         row1 = QHBoxLayout()
@@ -442,11 +487,18 @@ class ExportDialog(QDialog):
     # ------------------------------------------------------------------ Export
 
     def _ask_output_and_start(self) -> None:
-        default_name = self._video_path.stem + "_subtitled.mp4"
+        container = self._container_combo.currentData() or "mp4"
+        filter_map = {
+            "mp4": "MP4 Files (*.mp4);;All Files (*)",
+            "mkv": "MKV Files (*.mkv);;All Files (*)",
+            "webm": "WebM Files (*.webm);;All Files (*)",
+        }
+        file_filter = filter_map.get(container, "Video Files (*.mp4 *.mkv *.webm);;All Files (*)")
+        default_name = self._video_path.stem + f"_subtitled.{container}"
         default_dir = str(self._video_path.parent / default_name)
         path, _ = QFileDialog.getSaveFileName(
             self, tr("Save Video As"), default_dir,
-            "MP4 Files (*.mp4);;All Files (*)",
+            file_filter,
         )
         if not path:
             return
@@ -508,6 +560,7 @@ class ExportDialog(QDialog):
             mix_with_original_audio=self._mix_audio_checkbox.isChecked(),
             video_volume=self._bg_slider.value() / 100.0,
             audio_volume=self._tts_slider.value() / 100.0,
+            audio_bitrate=self._audio_bitrate_combo.currentText(),
         )
         self._worker.moveToThread(self._thread)
 
@@ -575,6 +628,134 @@ class ExportDialog(QDialog):
         self._cancel_btn.setText(tr("Close"))
         self._cleanup_temp_audio()
         QMessageBox.critical(self, tr("Export Error"), message)
+
+    # ------------------------------------------------------------------ Preset helpers
+
+    def _populate_export_preset_combo(self) -> None:
+        """기본 프리셋 + 사용자 프리셋으로 콤보박스를 채운다."""
+        self._export_preset_combo.blockSignals(True)
+        self._export_preset_combo.clear()
+
+        # 기본 프리셋
+        for p in DEFAULT_PRESETS:
+            self._export_preset_combo.addItem(p.name, ("default", p))
+
+        # 사용자 프리셋이 있으면 구분선 + 사용자 프리셋 추가 (단일 QSettings 읽기)
+        user_presets = self._preset_manager.get_all_presets()
+        if user_presets:
+            self._export_preset_combo.insertSeparator(len(DEFAULT_PRESETS))
+            for name, preset in user_presets.items():
+                self._export_preset_combo.addItem(name, ("user", preset))
+
+        self._export_preset_combo.blockSignals(False)
+
+    def _on_export_preset_selected(self, index: int) -> None:
+        """프리셋 선택 시 UI 값을 프리셋 내용으로 세팅한다."""
+        data = self._export_preset_combo.itemData(index)
+        if not data:
+            return
+        _, preset = data
+
+        # 여러 위젯의 signal을 일괄 차단하여 _update_output_info 중복 호출 방지
+        for w in (self._codec_combo, self._res_combo, self._crf_slider,
+                  self._preset_combo, self._audio_bitrate_combo, self._container_combo):
+            w.blockSignals(True)
+
+        # 코덱
+        codec_map = {"h264": "H.264", "hevc": "HEVC"}
+        codec_text = codec_map.get(preset.codec, "H.264")
+        idx = self._codec_combo.findText(codec_text)
+        if idx >= 0:
+            self._codec_combo.setCurrentIndex(idx)
+
+        # 해상도
+        res_found = False
+        for i in range(self._res_combo.count()):
+            if self._res_combo.itemData(i) == (preset.width, preset.height):
+                self._res_combo.setCurrentIndex(i)
+                res_found = True
+                break
+        if not res_found:
+            self._res_combo.setCurrentIndex(0)  # Original
+
+        # CRF
+        self._crf_slider.setValue(preset.crf)
+
+        # Speed preset
+        speed_map = {"fast": 0, "medium": 1, "slow": 2}
+        self._preset_combo.setCurrentIndex(speed_map.get(preset.speed_preset, 1))
+
+        # 오디오 비트레이트
+        ab_idx = self._audio_bitrate_combo.findData(preset.audio_bitrate)
+        if ab_idx >= 0:
+            self._audio_bitrate_combo.setCurrentIndex(ab_idx)
+
+        # 컨테이너
+        container_idx = self._container_combo.findData(preset.container)
+        if container_idx >= 0:
+            self._container_combo.setCurrentIndex(container_idx)
+
+        for w in (self._codec_combo, self._res_combo, self._crf_slider,
+                  self._preset_combo, self._audio_bitrate_combo, self._container_combo):
+            w.blockSignals(False)
+
+        self._update_output_info()
+
+    def _on_save_export_preset(self) -> None:
+        """현재 UI 설정을 이름으로 사용자 프리셋에 저장한다."""
+        name, ok = QInputDialog.getText(
+            self,
+            tr("Save Preset..."),
+            tr("Preset name:"),
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        # 기본 프리셋 이름으로 저장 금지
+        default_names = {p.name for p in DEFAULT_PRESETS}
+        if name in default_names:
+            QMessageBox.warning(
+                self, tr("Save Preset..."),
+                tr("Cannot save over built-in preset"),
+            )
+            return
+
+        codec_text = self._codec_combo.currentText()
+        codec = "hevc" if "HEVC" in codec_text else "h264"
+        w, h = self._res_combo.currentData() or (0, 0)
+        speed_key = self._presets[self._preset_combo.currentIndex()][1]
+        audio_bitrate = self._audio_bitrate_combo.currentData() or "192k"
+        container = self._container_combo.currentData() or "mp4"
+
+        preset = ExportPreset(
+            name=name,
+            width=w,
+            height=h,
+            codec=codec,
+            container=container,
+            audio_bitrate=audio_bitrate,
+            crf=self._crf_slider.value(),
+            speed_preset=speed_key,
+        )
+        self._preset_manager.save_preset(name, preset)
+        self._populate_export_preset_combo()
+        QMessageBox.information(self, tr("Save Preset..."), tr("Export preset saved"))
+
+    def _on_delete_export_preset(self) -> None:
+        """선택된 프리셋을 삭제한다. 기본 프리셋은 삭제 불가."""
+        data = self._export_preset_combo.currentData()
+        if not data:
+            return
+        kind, preset = data
+        if kind == "default":
+            QMessageBox.warning(
+                self, tr("Delete Preset"),
+                tr("Cannot delete built-in preset"),
+            )
+            return
+        self._preset_manager.delete_preset(preset.name)
+        self._populate_export_preset_combo()
 
     def _on_cancel(self) -> None:
         self._cleanup_thread()

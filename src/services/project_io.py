@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.models.subtitle_animation import SubtitleAnimation
 from src.models.timeline_marker import TimelineMarker
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.text_overlay import TextOverlay, TextOverlayTrack
@@ -79,7 +81,6 @@ def _segment_to_dict(seg: SubtitleSegment) -> dict:
 
 
 def _dict_to_segment(d: dict) -> SubtitleSegment:
-    from src.models.subtitle_animation import SubtitleAnimation
     style = _dict_to_style(d["style"]) if "style" in d else None
     anim_data = d.get("animation")
     animation = SubtitleAnimation(**anim_data) if anim_data else None
@@ -151,12 +152,15 @@ def save_project(project: ProjectState, path: Path) -> None:
         },
         "markers": [m.to_dict() for m in project.markers],
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    path.write_bytes(gzip.compress(raw))
 
 
 def load_project(path: Path) -> ProjectState:
     """Deserialize a project from a JSON file (v1-v4)."""
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    raw = path.read_bytes()
+    text = gzip.decompress(raw).decode("utf-8-sig") if raw[:2] == b'\x1f\x8b' else raw.decode("utf-8-sig")
+    data = json.loads(text)
     version = data.get("version", 1)
 
     project = ProjectState()

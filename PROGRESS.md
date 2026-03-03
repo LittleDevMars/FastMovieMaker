@@ -55,6 +55,8 @@
 | **Phase CLIP2 — 클립 편집 UX 고도화** — `_selected_clips: set[tuple[int,int]]` 멀티 선택 집합 추가, Ctrl+클릭 토글/Shift+클릭 범위 선택, `get_selected_clips()` API, 시그널 3개 신규(`clips_delete_requested`/`clip_copy_requested`/`clip_paste_requested`), `keyPressEvent` Delete·Ctrl+C·V 처리, 우클릭 메뉴 Copy·Paste·Delete N Clips 항목, `timeline_painter.py` `is_selected` 판정 `_selected_clips` 기반 변경 + 캐시 키 `frozenset` 추가, `ClipController.on_delete_selected_clips()` macro Undo(역순 삭제, 마지막 클립 보호), `main_window._on_delete_pressed()` 멀티 선택 분기, 시그널 연결 3개, i18n 5개 키, 테스트 25개 신규 (706/706 passed) | **완료 (Day 36)** |
 | **Phase ANIM2 + CC2 — 자막 애니메이션 강화 & 컬러 보정 강화** — CC2: `VideoClip.hue` 필드(-180~180°, to_dict/from_dict/clone 포함), `ColorCorrectionDialog` Hue 슬라이더 추가, `EditColorCorrectionCommand` hue 파라미터 확장, `video_exporter.py` `hue=h=` FFmpeg 필터 추가, `ClipController.on_bulk_edit_color()` 트랙 전체 일괄 색보정+macro Undo, `timeline_widget.py` `clip_bulk_color_requested` 시그널+"Apply Color to All Clips" 메뉴; ANIM2: `timeline_painter.py` 자막 세그먼트 파란 원형 배지(animation 활성 시), `_SubtitleTableModel.data()` ForegroundRole+ToolTipRole 애니메이션 인디케이터, `SubtitlePanel` `ExtendedSelection`+`bulk_animation_requested` 시그널+우클릭 "Apply Animation to Selected…", `SubtitleController.on_bulk_edit_animation()` macro Undo; PROJECT_VERSION → 12, i18n 8개 키, 테스트 15개 신규 (731/731 passed) | **완료 (Day 37)** |
 | **코드 품질 개선 (Simplify)** — `SubtitleAnimation.is_active` 프로퍼티 추가(subtitle_panel/timeline_painter 중복 체크 제거), `timeline_painter.py` 배지 draw 시 `painter.save()/restore()` 추가(상태 누수 수정), `TemplateService._user_dir` 캐싱(`__init__`에서 1회 결정 → 4개 내부 `_get_user_dir()` 호출 교체), `TODO.md` 현행화(Day 21 잔여물 제거, Day 37 기준 갱신) | **완료 (Day 37)** |
+| **TECHSPEC.md 갱신 + Phase EXPORT2** — TECHSPEC.md 전체 재작성(v0.4.0→v0.10.0, Day 37 기준: 프로젝트 파일 v12, 731→744 테스트, VideoClip/VideoClipTrack/ProjectState 모델 완전 반영, 다이얼로그 9→24개, services 목록 확장, 워커 목록 확장); `ExportPreset` 모델에 `crf: int = 23` + `speed_preset: str = "medium"` 필드 + `to_dict()/from_dict()` 추가; `ExportPresetManager` 신규(QSettings Group `"ExportPresets"`, save/load/delete/list/exists/get_all 메서드); `ExportDialog` 확장(Video Options 상단에 프리셋 툴바[QComboBox+Save…+Delete], Audio Bitrate[96k/128k/192k/320k], Container[MP4/MKV/WebM] 행 추가, 컨테이너 변경 시 파일 저장 필터·확장자 자동 연동, `_on_export_preset_selected()` 전체 UI 세팅); ko.py i18n 8개 키 추가; `tests/test_export2.py` 신규 13개 테스트(744/744 passed) | **완료 (Day 38)** |
+| **Phase PERF/UX3 — 프로젝트 로드 속도 개선** — `project_io.py`: `gzip.compress()` 저장 + magic byte `\x1f\x8b` 자동 감지 해제(기존 평문 JSON 하위호환 완전 보장), `SubtitleAnimation` import 모듈 상단으로 이동(세그먼트마다 반복 로컬 import 제거); `project_controller.py`: `on_load_project()` 중복 비디오 로드 블록 제거(미디어 플레이어 초기화 2회→1회), 파일 대화상자 필터 `*.fmm *.fmm.json`으로 확장; `test_project_io.py`: gzip 인식 직접 파싱 테스트 3개 수정(`import gzip` 추가); 신규 테스트 없음(744/744 passed 유지) | **완료 (Day 39)** |
 
 ---
 
@@ -63,14 +65,14 @@
 #### P1 — TTS 향상
 | 항목 | 설명 |
 |------|------|
-| 배경음악 자동 페이드 (ducking) | TTS 구간에서 배경음 자동 감소 |
+| ~~배경음악 자동 페이드 (ducking)~~ | 완료 (Day 24) |
 | ~~TTS 설정 프리셋 저장/로드~~ | 완료 (Day 26) |
 
 #### P2 — 고급 기능
 | 항목 | 설명 |
 |------|------|
 | ~~Whisper 역방향 검증~~ | 완료 (Day 31) |
-| GPT 대본 자동 생성 | OpenAI API로 대본 자동 작성 |
+| ~~GPT 대본 자동 생성~~ | 완료 (Day 28) |
 | ~~배치 TTS 생성~~ | 완료 (Day 31) |
 
 #### 미실행 — 수동 GUI 테스트

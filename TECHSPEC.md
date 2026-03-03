@@ -1,29 +1,38 @@
 # FastMovieMaker Technical Specification
 
-**Version:** 0.4.0
+**Version:** 0.10.0
 **Platform:** Windows (primary), macOS (Apple Silicon 지원)
 **Python:** 3.13+ (3.14 테스트 완료)
 **Framework:** PySide6 (Qt 6)
-**Last Updated:** 2026-02-15
+**Last Updated:** 2026-03-03
 
 ---
 
 ## 1. Overview
 
-FastMovieMaker is a desktop video subtitle editor combining AI-powered transcription (Whisper), text-to-speech synthesis (Edge-TTS / ElevenLabs), non-destructive video clip editing, and FFmpeg-based export into a single application.
+FastMovieMaker is a desktop video subtitle editor combining AI-powered transcription (Whisper), text-to-speech synthesis (Edge-TTS / ElevenLabs), non-destructive multi-track video clip editing, color correction, subtitle animation, and FFmpeg-based export into a single application.
 
 ### Core Capabilities
 
 | Feature | Description |
 |---------|-------------|
-| Subtitle Editing | Multi-track segments with per-segment styling, volume, undo/redo |
+| Subtitle Editing | Multi-track segments with per-segment styling, volume, animation, undo/redo |
 | Whisper Transcription | GPU-accelerated speech-to-text (tiny ~ large models) |
-| TTS Synthesis | Edge-TTS (free) + ElevenLabs (premium API) with audio merging |
-| Video Clip Editing | Timeline-based cut/split/trim with multi-source video support |
-| Export | Single/batch FFmpeg rendering with subtitle burn-in, audio mixing, PIP |
+| TTS Synthesis | Edge-TTS (free) + ElevenLabs (premium API) with audio merging, batch TTS |
+| Video Clip Editing | Timeline-based cut/split/trim with multi-source video support, ripple edit |
+| Multi-Video Tracks | Layer compositing with blend modes (screen/multiply/lighten/darken) and chroma key |
+| Color Correction | Per-clip brightness/contrast/saturation/hue with bulk apply |
+| Subtitle Animation | Per-segment in/out effects (fade, slide, typewriter) with bulk apply |
+| Export | Single/batch FFmpeg rendering with subtitle burn-in, audio mixing, PIP, export presets |
 | Media Library | Persistent thumbnail browser with drag-to-timeline insertion |
 | Image Overlays | Picture-in-Picture with drag/scale/opacity on video canvas |
 | Waveform Display | Memory-efficient audio peak visualization on timeline |
+| Timeline Markers | Named bookmarks with undo/redo |
+| GPT Script Generation | OpenAI API-powered script draft for TTS |
+| Scene Detection | FFmpeg-based automatic scene split detection |
+| Project Templates | Built-in and user-defined project starting points |
+| Crash Reporting | Unhandled exception capture with log file + clipboard copy |
+| Deployment Packaging | PyInstaller .app (macOS) / .exe (Windows) build pipeline |
 | i18n | Korean / English UI localization |
 
 ---
@@ -63,7 +72,7 @@ MainWindow                        QThread
     | -- thread.quit() / wait() ---> |
 ```
 
-Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker`, `WaveformWorker`, `FrameCacheWorker`, `VideoLoadWorker`, `ThumbnailRunnable`
+Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker`, `WaveformWorker`, `FrameCacheWorker`, `VideoLoadWorker`, `ThumbnailRunnable`, `GptScriptWorker`, `SceneDetectWorker`, `TtsVerifyWorker`, `BatchTtsWorker`
 
 **Thread safety notes:**
 - `_cleanup_thread()`는 반드시 `quit()` → `wait()` 순서로 호출 (이벤트 루프 미종료 방지)
@@ -88,6 +97,18 @@ Worker classes: `WhisperWorker`, `ExportWorker`, `BatchExportWorker`, `TTSWorker
 | `DeleteClipCommand` | Remove video clip |
 | `SplitClipCommand` | Split video clip at playhead |
 | `TrimClipCommand` | Trim clip left/right edge |
+| `AutoAlignSubtitlesCommand` | Auto-align overlapping subtitles |
+| `WrapSubtitlesCommand` | Auto-wrap long subtitle lines |
+| `EditColorLabelCommand` | Set clip color label |
+| `EditColorCorrectionCommand` | Per-clip brightness/contrast/saturation/hue |
+| `EditTrackBlendModeCommand` | Track blend mode / chroma key settings |
+| `EditSubtitleAnimationCommand` | Per-segment animation in/out effects |
+| `AddMarkerCommand` / `RemoveMarkerCommand` / `RenameMarkerCommand` | Timeline marker CRUD |
+| `ApplyTTSVerificationCommand` | Apply Whisper-verified TTS timing corrections |
+| `AddTransitionCommand` / `RemoveTransitionCommand` | Clip transition effects |
+| `DeleteSelectedClipsCommand` | Bulk delete multiple selected clips (macro) |
+| `BulkEditColorCommand` | Bulk color correction across track (macro) |
+| `BulkEditAnimationCommand` | Bulk animation across selected subtitles (macro) |
 
 ---
 
@@ -103,8 +124,13 @@ ProjectState
   active_track_index: int
   default_style: SubtitleStyle
   image_overlay_track: ImageOverlayTrack
-  video_clip_track: VideoClipTrack | None
+  video_tracks: list[VideoClipTrack]     # multi-layer (index 0 = primary)
+  text_overlay_track: TextOverlayTrack
+  bgm_tracks: list[AudioTrack]
+  markers: list[TimelineMarker]
 ```
+
+**Backward compat:** `video_clip_track` property delegates to `video_tracks[0]`.
 
 ### 3.2 Subtitle Models
 
@@ -116,6 +142,12 @@ SubtitleSegment
   style: SubtitleStyle | None   # per-segment override
   audio_file: str | None        # TTS audio path
   volume: float = 1.0           # 0.0 ~ 2.0
+  animation: SubtitleAnimation | None
+
+SubtitleAnimation
+  in_effect: str   # "none" | "fade_in" | "slide_up" | "slide_down" | "typewriter"
+  out_effect: str  # "none" | "fade_out" | "slide_up" | "slide_down"
+  is_active: bool  # property: in_effect != "none" or out_effect != "none"
 
 SubtitleTrack
   name: str
@@ -133,16 +165,31 @@ VideoClip
   source_in_ms: int             # start in source video
   source_out_ms: int            # end in source video
   source_path: str | None       # None = primary video
+  speed: float = 1.0            # 0.25 ~ 4.0
+  volume: float = 1.0
+  volume_points: list[VolumePoint]
+  brightness: float = 1.0       # 0.5 ~ 2.0
+  contrast: float = 1.0         # 0.5 ~ 2.0
+  saturation: float = 1.0       # 0.0 ~ 2.0
+  hue: float = 0.0              # -180.0 ~ 180.0 (degrees)
+  transition_out: TransitionInfo | None
+  color_label: str = "none"     # none/red/orange/yellow/green/blue/purple/pink
 
 VideoClipTrack
   clips: list[VideoClip]        # ordered playback sequence
+  locked: bool = False
+  muted: bool = False
+  hidden: bool = False
+  name: str = ""
+  blend_mode: str = "normal"    # "normal"|"screen"|"multiply"|"lighten"|"darken"|"chroma_key"
+  chroma_color: str = "#00FF00"
+  chroma_similarity: float = 0.3
+  chroma_blend: float = 0.1
 ```
 
-**Time mapping:** Output timeline is the sequential concatenation of all clips. `timeline_to_source()` and `source_to_timeline()` convert between coordinate systems. `clip_timeline_start(idx)` returns clip start position on output timeline.
+**Time mapping:** Output timeline is the sequential concatenation of all clips. `timeline_to_source()` and `source_to_timeline()` convert between coordinate systems. `clip_timeline_start(idx)` returns clip start position on output timeline. `clip_boundaries_ms()` returns N+1 timestamps (start + final_end).
 
 **Multi-source:** Clips can reference different video files. A `_NO_SOURCE_FILTER` sentinel distinguishes "no filter" from "primary video only" in `source_to_timeline()`.
-
-**Playback tracking:** `_current_clip_index`로 재생 중인 클립을 추적. 시크 시 `clip_at_timeline()`으로 동기화, 경계 도달 시 자동 증가.
 
 ### 3.4 Style Model
 
@@ -175,29 +222,65 @@ ImageOverlay
   opacity: float                # 0.0 ~ 1.0
 ```
 
-### 3.6 Other Models
+### 3.6 Timeline Marker Model
+
+```
+TimelineMarker
+  ms: int       # position on timeline
+  label: str    # display name
+```
+
+### 3.7 Export Models
+
+```
+ExportPreset
+  name: str
+  width: int          # 0 = keep original
+  height: int
+  codec: str          # "h264" | "hevc"
+  container: str      # "mp4" | "mkv" | "webm"
+  audio_bitrate: str = "192k"
+  crf: int = 23
+  speed_preset: str = "medium"  # "fast" | "medium" | "slow"
+  suffix: str = ""
+  to_dict() / from_dict()
+
+BatchExportJob
+  preset: ExportPreset
+  output_path: str
+  status: str = "pending"   # pending | running | completed | failed | skipped
+  error_message: str = ""
+  progress_pct: int = 0
+```
+
+**DEFAULT_PRESETS:** 7개 내장 프리셋 (4K/1080p/720p/480p H.264, 1080p HEVC MP4/MKV, Original).
+
+### 3.8 Other Models
 
 ```
 MediaItem              # Library entry: file_path, media_type, thumbnail_path, metadata
 OverlayTemplate        # Predefined overlay: category (frame/watermark/lower_third)
-ExportPreset           # Render preset: resolution, codec, container, audio_bitrate
-BatchExportJob         # Job state: preset, output_path, status, progress_pct
+ProjectTemplate        # Project starting point: name, aspect_ratio, default_style preset
+BatchTtsJob / Result   # Batch TTS job: file path, engine/voice settings, status
+TextOverlay            # On-screen text with position, style, timing
+AudioClip / AudioTrack # BGM track items with volume envelope, fade in/out
 ```
 
 ---
 
 ## 4. Project File Format
 
-**Extension:** `.fmm.json`
-**Version:** 4
+**Extension:** `.fmm.json` (또는 `.fmm`)
+**Version:** 12
+**Storage:** gzip-compressed binary (magic bytes `\x1f\x8b`); 기존 평문 JSON 자동 감지 하위호환
 **Encoding:** UTF-8 (BOM-tolerant on read)
 
 ```json
 {
-  "version": 4,
+  "version": 12,
   "video_path": "path/to/video.mp4",
   "duration_ms": 25300,
-  "default_style": { ... },
+  "default_style": { "font_family": "Arial", "font_size": 18, "..." : "..." },
   "active_track_index": 0,
   "tracks": [
     {
@@ -213,20 +296,41 @@ BatchExportJob         # Job state: preset, output_path, status, progress_pct
           "text": "Hello",
           "style": null,
           "audio_file": null,
-          "volume": 1.0
+          "volume": 1.0,
+          "animation": { "in_effect": "fade_in", "out_effect": "none" }
         }
       ]
     }
   ],
-  "image_overlays": [ ... ],
-  "video_clips": [
-    { "source_in_ms": 0, "source_out_ms": 4129 },
-    { "source_in_ms": 0, "source_out_ms": 25301, "source_path": "extra.mp4" }
+  "image_overlays": [],
+  "video_tracks": [
+    {
+      "name": "Main",
+      "blend_mode": "normal",
+      "muted": false,
+      "hidden": false,
+      "clips": [
+        {
+          "source_in_ms": 0,
+          "source_out_ms": 25301,
+          "brightness": 1.1,
+          "contrast": 1.0,
+          "saturation": 1.2,
+          "hue": 15.0,
+          "color_label": "blue"
+        }
+      ]
+    }
+  ],
+  "markers": [
+    { "ms": 5000, "label": "Intro End" }
   ]
 }
 ```
 
-Backward compatible with v1-v3 (migration on load).
+Backward compatible with v1–v11 (migration on load via `.get()` defaults).
+
+**파일 크기:** gzip 압축으로 평문 JSON 대비 50-70% 감소.
 
 ---
 
@@ -236,7 +340,7 @@ Backward compatible with v1-v3 (migration on load).
 
 | Item | Detail |
 |------|--------|
-| Library | `openai-whisper` (faster-whisper) |
+| Library | `faster-whisper` (ctranslate2 backend) |
 | Models | tiny, base, small, medium, large |
 | GPU | CUDA float16 (auto-detect), CPU int8 fallback |
 | Input | 16kHz mono WAV (extracted via FFmpeg) |
@@ -254,9 +358,8 @@ Backward compatible with v1-v3 (migration on load).
 - REST API with API key authentication
 - Voice ID selection, speed/stability controls
 - Error handling: 401 (auth), 429 (rate limit)
-- Returns audio duration metadata
 
-**Pipeline:** Text splitting (sentence/word/char strategies) -> per-segment TTS -> audio merging with silence gaps -> optional mixing with video audio
+**Pipeline:** Text splitting (sentence/word/char strategies) → per-segment TTS → audio merging with silence gaps → optional mixing with video audio
 
 ### 5.3 Video Export
 
@@ -273,10 +376,20 @@ export_video(
 - Subtitles: SRT temp file + `subtitles` filter
 - PIP: `overlay` filter with time ranges
 - Audio: `-filter_complex` for mixing tracks with volume control
+- Color correction: `eq=brightness=:contrast=:saturation=` + `hue=h=` filter
+- Blend modes: `blend` filter (`screen`/`multiply`/`lighten`/`darken`), chroma key: `chromakey`
+- Transitions: `xfade` filter between consecutive clips
 - Codecs: H.264 (`libx264`), HEVC (`libx265`)
 - Containers: MP4, MKV, WebM
 
-### 5.4 Frame Cache
+### 5.4 Export Preset Manager
+
+`ExportPresetManager` (QSettings, Group: `"ExportPresets"`):
+- 사용자 정의 프리셋 저장/로드/삭제/목록 조회
+- 필드: name, width, height, codec, container, audio_bitrate, crf, speed_preset
+- DEFAULT_PRESETS(7개)는 별도 관리 — `ExportPresetManager`에 저장되지 않음
+
+### 5.5 Frame Cache
 
 Pre-extracted JPEG thumbnails for instant preview during multi-source scrubbing:
 
@@ -292,7 +405,7 @@ Pre-extracted JPEG thumbnails for instant preview during multi-source scrubbing:
 - Lookup: Binary search on sorted filenames, O(log n)
 - Lifecycle: Created per-session in temp dir, cleaned on exit
 
-### 5.5 Waveform
+### 5.6 Waveform
 
 Memory-efficient peak computation from WAV:
 - 1-peak-per-millisecond resolution
@@ -300,19 +413,47 @@ Memory-efficient peak computation from WAV:
 - Output: `WaveformData(peaks_pos, peaks_neg)` normalized to [-1, 1]
 
 ### 5.7 Timeline Thumbnails
+
 - **Service:** `TimelineThumbnailService`
 - **Mechanism:** Async FFmpeg generation via `QThreadPool` + `ThumbnailRunnable`
 - **Optimization:** "Double-SS" seeking (fast seek to keyframe + precise seek)
 - **Caching:** LRU Cache (max 200 items) for instant reuse
 
-
-### 5.6 Autosave & Recovery
+### 5.8 Autosave & Recovery
 
 - Timer-based: 30s interval (configurable)
 - Idle timeout: 5s after last edit
 - Recovery: Detects unclean shutdown, offers file selection dialog
 - Recent files: QSettings-based MRU list
 - Autosave dir: `~/.fastmoviemaker/autosave/`
+
+### 5.9 GPT Script Generation
+
+- `GptScriptService`: OpenAI ChatCompletion API를 사용하여 주제/톤에서 TTS 대본 생성
+- `GptScriptWorker`: 백그라운드 QObject+moveToThread 패턴
+- 지원 톤: Informative / Casual / Persuasive / Humorous
+
+### 5.10 Scene Detection
+
+- `SceneDetectionService`: FFmpeg `select` 필터로 씬 전환 감지
+- `SceneDetectWorker`: 백그라운드 실행, 감지된 씬 타임스탬프 리스트 반환
+- `SceneDetectDialog`: 민감도 슬라이더 + 결과 리스트 + "Apply Splits" 버튼
+
+### 5.11 TTS Timing Verification
+
+- `TtsVerifier.verify_and_align()`: Whisper로 TTS 오디오를 재전사 후 `difflib.SequenceMatcher`로 타이밍 보정
+- 보정 결과를 `ApplyTTSVerificationCommand`(Undo/Redo)로 적용
+
+### 5.12 Project Template Manager
+
+- `TemplateManager`: 3종 내장 템플릿 (YT Shorts / Commentary / IG Reels) + 사용자 커스텀
+- `apply_to_project()`: ProjectState에 기본 스타일/해상도/언어 적용
+
+### 5.13 Crash Reporter
+
+- `setup_excepthook()`: `sys.excepthook` 교체로 처리되지 않은 예외 캡처
+- 크래시 로그 → `~/.fastmoviemaker/crash_reports/` (RotatingFileHandler 5MB×3)
+- `CrashReportDialog`: 스택 트레이스 표시 + 클립보드 복사 + 로그 폴더 열기
 
 ---
 
@@ -322,7 +463,7 @@ Memory-efficient peak computation from WAV:
 
 `MainWindow(QMainWindow)` — Central orchestrator:
 - Menu bar: File, Edit, Subtitle, Help
-- Video player (left) + sidebar tabs (right: Subtitle, Media, Templates)
+- Video player (left) + sidebar tabs (right: Subtitle, Media, Templates, History)
 - Playback controls bar
 - Timeline widget (bottom)
 - Status bar with autosave indicator
@@ -344,27 +485,36 @@ Memory-efficient peak computation from WAV:
 Track layout (top to bottom):
   [Ruler]              Time ticks with labels
   [Video Clips]        Color-coded clip bars with filmstrip thumbnails
-  [Subtitles]          Segment bars with text labels
+    [Track N...]       Additional video tracks (blend modes)
+  [Subtitles]          Segment bars with text labels + animation badge (blue dot)
   [TTS Audio]          Audio track bar
   [Waveform]           Peak visualization
   [Image Overlays]     Overlay bars
+  [BGM Tracks]         Background music clip bars
+  [Text Overlays]      On-screen text overlay bars
+  [Markers]            Named bookmarks on ruler
 ```
 
 **Interactions:**
 - Click: seek to position
-- Drag segment: move/resize (edge detection +-6px)
+- Drag segment: move/resize (edge detection ±6px)
 - Drag clip edge: trim left/right
+- Ctrl+Click: multi-select clips
+- Shift+Click: range select clips
 - Scroll: pan view horizontally
 - Ctrl+Scroll: zoom in/out
-- Right-click: context menu (split clip, delete, add segment)
+- Right-click: context menu (split clip, delete, add segment, transitions, color correction, etc.)
+- M key: add marker at playhead
 
 ### 6.4 Subtitle Panel
 
 `SubtitlePanel(QWidget)`:
 - `QTableView` with virtual model (`_SubtitleTableModel(QAbstractTableModel)`)
 - Columns: #, Start, End, Text, Volume
+- ExtendedSelection mode for bulk operations
 - Inline editing with undo/redo integration
 - Search bar integration (real-time filter/highlight)
+- Animation badge: ForegroundRole + ToolTipRole per row
 
 ### 6.5 Playback Controls
 
@@ -380,19 +530,31 @@ Track layout (top to bottom):
 | Dialog | Purpose |
 |--------|---------|
 | `WhisperDialog` | Model/language selection, progress bar |
-| `TTSDialog` | Engine/voice selection, script input, preview |
-| `ExportDialog` | Output path, resolution, codec, scale options |
+| `TTSDialog` | Engine/voice selection, script input, preview, presets |
+| `ExportDialog` | Output path, resolution, codec, CRF, export presets, audio bitrate, container |
 | `BatchExportDialog` | Multi-preset table, output directory |
-| `StyleDialog` | Font, color, position, margin pickers |
-| `PreferencesDialog` | Autosave, FPS, language, API keys, theme |
+| `StyleDialog` | Font, color, position, margin pickers, style presets |
+| `PreferencesDialog` | Autosave, FPS, language, API keys, theme, shortcuts |
 | `TranslateDialog` | Target language, translation provider |
 | `RecoveryDialog` | Crash recovery file selector |
 | `JumpToFrameDialog` | Frame navigation |
+| `ColorCorrectionDialog` | Per-clip brightness/contrast/saturation/hue sliders |
+| `SubtitleAnimationDialog` | Per-segment in/out effect picker |
+| `TrackSettingsDialog` | Track blend mode + chroma key configuration |
+| `SpeedDialog` | Clip playback speed (0.25x–4x) |
+| `SceneDetectDialog` | FFmpeg scene detection + split preview |
+| `GptScriptDialog` | GPT topic/tone input → generated script |
+| `TtsVerifyDialog` | Whisper-based TTS timing verification |
+| `BatchTtsDialog` | Batch TTS generation from multiple .txt files |
+| `WelcomeDialog` | Recent projects + template cards on startup |
+| `TemplatePickerDialog` | New project from template |
+| `CrashReportDialog` | Unhandled exception display + log export |
 
 ### 6.7 Sidebar Panels
 
-- `MediaLibraryPanel`: Thumbnail grid, filter buttons (All/Image/Video), drag-to-timeline, add/remove/favorite
+- `MediaLibraryPanel`: Thumbnail grid, filter buttons (All/Image/Video/Favorites), drag-to-timeline, add/remove/favorite
 - `TemplatesPanel`: Overlay template browser, category tabs, drag-to-apply
+- **History tab**: `QUndoView` showing full undo/redo stack
 
 ---
 
@@ -496,6 +658,9 @@ Extensible: add `src/utils/lang/{code}.py` with `STRINGS` dict.
 FastMovieMaker/
   main.py                         Entry point
   requirements.txt                Dependencies
+  pyproject.toml                  Project metadata (single-source version)
+  FastMovieMaker.spec             PyInstaller spec
+  build_macos.sh / build_windows.bat  Build scripts
   TECHSPEC.md                     This document
   PROGRESS.md                     Development progress tracker
   resources/
@@ -509,11 +674,15 @@ FastMovieMaker/
       project.py                  ProjectState
       subtitle.py                 SubtitleSegment, SubtitleTrack
       style.py                    SubtitleStyle
-      video_clip.py               VideoClip, VideoClipTrack
+      video_clip.py               VideoClip, VideoClipTrack, TransitionInfo, VolumePoint
       image_overlay.py            ImageOverlay, ImageOverlayTrack
+      text_overlay.py             TextOverlay, TextOverlayTrack
+      audio.py                    AudioClip, AudioTrack (BGM)
+      timeline_marker.py          TimelineMarker
       media_item.py               MediaItem
       overlay_template.py         OverlayTemplate
-      export_preset.py            ExportPreset, BatchExportJob
+      project_template.py         ProjectTemplate
+      export_preset.py            ExportPreset (crf/speed_preset/to_dict/from_dict), BatchExportJob
     services/
       whisper_service.py          Whisper AI transcription
       tts_service.py              Edge-TTS synthesis
@@ -528,13 +697,21 @@ FastMovieMaker/
       subtitle_exporter.py        SRT/SMI import/export
       text_splitter.py            Text segmentation strategies
       translator.py               Translation API client
-      project_io.py               JSON project persistence (v4)
+      project_io.py               JSON project persistence (v12)
       media_library_service.py    Persistent media library
       settings_manager.py         QSettings wrapper
       style_preset_manager.py     Style preset CRUD
+      tts_preset_manager.py       TTS settings preset CRUD
+      export_preset_manager.py    Export preset CRUD (NEW)
       template_service.py         Overlay template management
+      template_manager.py         Project template management
       autosave.py                 Auto-save & crash recovery
       video_probe.py              FFprobe metadata extraction
+      ducking_service.py          BGM auto-ducking during TTS playback
+      ripple_edit_service.py      Ripple edit (cascade clip/subtitle shift)
+      scene_detection_service.py  FFmpeg scene detection
+      gpt_script_service.py       OpenAI GPT script generation
+      tts_verifier.py             Whisper-based TTS timing verification
     workers/
       whisper_worker.py           Background transcription
       export_worker.py            Background single export
@@ -543,29 +720,54 @@ FastMovieMaker/
       waveform_worker.py          Background waveform computation
       frame_cache_worker.py       Background frame extraction
       video_load_worker.py        Async video loading
+      gpt_script_worker.py        Background GPT script generation
+      scene_detect_worker.py      Background scene detection
+      tts_verify_worker.py        Background TTS verification
+      batch_tts_worker.py         Background batch TTS generation
     ui/
       main_window.py              MainWindow (central orchestrator)
       video_player_widget.py      QGraphicsView video + overlays
       timeline_widget.py          Custom QPainter timeline
+      timeline_painter.py         QPainter drawing helpers
+      timeline_hit_test.py        Timeline (x,y) hit testing
+      timeline_controller.py      Timeline interaction controller
+      main_window_ui.py           UI layout builder
+      main_window_menu.py         Menu builder
       subtitle_panel.py           Subtitle table + editing
       playback_controls.py        Play/seek/volume controls
       track_selector.py           Multi-track dropdown
+      track_header_panel.py       Track name/mute/hide controls
       search_bar.py               Real-time subtitle search
       media_library_panel.py      Thumbnail grid browser
       templates_panel.py          Overlay template browser
       commands.py                 QUndoCommand subclasses
+      controllers/
+        clip_controller.py        Clip CRUD + bulk color/selection
+        subtitle_controller.py    Subtitle CRUD + bulk animation
+        media_controller.py       Media library operations
+        playback_controller.py    Playback state management
       styles/
         dark.qss                  Dark theme stylesheet
       dialogs/
         whisper_dialog.py         Whisper settings
         tts_dialog.py             TTS generation
-        export_dialog.py          Export settings
+        export_dialog.py          Export settings + presets
         batch_export_dialog.py    Batch export
         style_dialog.py           Subtitle style editor
-        preferences_dialog.py     App preferences
+        preferences_dialog.py     App preferences + shortcuts
         translate_dialog.py       Translation
         recovery_dialog.py        Crash recovery
         jump_to_frame_dialog.py   Frame navigation
+        color_correction_dialog.py Per-clip color correction
+        subtitle_animation_dialog.py Subtitle in/out animation
+        track_settings_dialog.py  Track blend mode / chroma key
+        speed_dialog.py           Clip speed change
+        scene_detect_dialog.py    Scene detection + splits
+        gpt_script_dialog.py      GPT script generation
+        tts_verify_dialog.py      Whisper TTS timing verification
+        batch_tts_dialog.py       Batch TTS generation
+        welcome_dialog.py         Startup welcome + recent projects
+        crash_report_dialog.py    Crash report display
     utils/
       config.py                   App constants
       i18n.py                     Localization engine
@@ -573,10 +775,13 @@ FastMovieMaker/
       ffmpeg_utils.py             FFmpeg/FFprobe path detection
       ffmpeg_bundled.py           Auto-download FFmpeg
       hw_accel.py                 Hardware acceleration detection
+      resource_path.py            Resource path (frozen/dev env)
+      logger.py                   RotatingFileHandler logger
+      crash_reporter.py           sys.excepthook-based crash capture
       lang/
         en.py                     English strings
         ko.py                     Korean strings
-  tests/                          29 test modules, 414 test cases
+  tests/                          35+ test modules, 744+ test cases
 ```
 
 ---
@@ -586,14 +791,16 @@ FastMovieMaker/
 | Package | Version | Purpose |
 |---------|---------|---------|
 | PySide6 | >= 6.7.0 | Qt 6 UI framework |
-| openai-whisper | >= 20250625 | Speech-to-text transcription |
+| faster-whisper | >= 1.1.0 | Speech-to-text transcription |
 | torch | >= 2.3.0 | PyTorch (Whisper backend) |
 | torchaudio | >= 2.3.0 | Audio processing for Whisper |
 | edge-tts | >= 7.2.0 | Free TTS synthesis |
+| openai | >= 1.0.0 | GPT script generation |
 | pytest-qt | >= 4.5.0 | Qt widget testing |
 | imageio-ffmpeg | >= 0.5.1 | Bundled FFmpeg fallback |
+| pyinstaller | >= 6.0 | Desktop app packaging |
 
-**Optional:** ElevenLabs API key for premium TTS.
+**Optional:** ElevenLabs API key for premium TTS; OpenAI API key for GPT script generation.
 
 **GPU:** PyTorch CUDA 12.4 (`pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124`)
 
@@ -620,7 +827,8 @@ FastMovieMaker/
 ## 13. Testing
 
 - **Framework:** pytest + pytest-qt
-- **Test count:** 414+ cases across 29+ modules
-- **Coverage:** Models, services, UI integration, export pipeline, i18n, Whisper cancel/crash
+- **Test count:** 744+ cases across 35+ modules
+- **Coverage:** Models, services, UI integration, export pipeline, i18n, Whisper cancel/crash, controllers, export presets
 - **Controller tests:** `tests/test_controllers.py` — AppContext 및 PlaybackController를 mock AppContext로 단위 테스트 (Qt 부담 최소)
-- **Run:** `python -m pytest tests/ -v` (GUI 의존 테스트는 플랫폼별로 제한될 수 있음)
+- **Run:** `pytest tests/ -q --ignore=tests/test_tts_dialog_gui.py --ignore=tests/test_tts_ui_integration.py --ignore=tests/test_multi_source_playback.py`
+- **GUI-only tests** (macOS Qt widget 초기화 이슈로 별도 실행): `test_tts_dialog_gui.py`, `test_tts_ui_integration.py`, `test_multi_source_playback.py`

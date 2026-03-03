@@ -475,6 +475,8 @@ class MainWindow(QMainWindow):
     def _toggle_magnetic_snap(self) -> None:
         enabled = self._snap_toggle_btn.isChecked()
         self._timeline.set_magnetic_snap(enabled)
+        msg = tr("Frame Snap ON") if enabled else tr("Frame Snap OFF")
+        self.statusBar().showMessage(msg, 2000)
 
     def _toggle_ripple_mode(self) -> None:
         enabled = self._ripple_toggle_btn.isChecked()

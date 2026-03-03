@@ -184,6 +184,7 @@ def export_video(
     mix_with_original_audio: bool = False,
     video_volume: float = 1.0,
     audio_volume: float = 1.0,
+    audio_bitrate: str = "192k",
 ) -> None:
     """Burn subtitles into video using FFmpeg's subtitles filter.
 
@@ -242,7 +243,7 @@ def export_video(
         if output_path.suffix.lower() == ".webm":
             video_encoder = "libvpx-vp9"
             encoder_flags = ["-crf", str(crf), "-b:v", "0"]
-            audio_codec_flags = ["-c:a", "libvorbis", "-b:a", "128k"]
+            audio_codec_flags = ["-c:a", "libvorbis", "-b:a", audio_bitrate]
         else:
             # Determine encoder and flags based on GPU preference
             if use_gpu:
@@ -282,7 +283,7 @@ def export_video(
                 ]
 
             encoder_flags.extend(["-pix_fmt", "yuv420p"])
-            audio_codec_flags = ["-c:a", "aac", "-b:a", "192k"]
+            audio_codec_flags = ["-c:a", "aac", "-b:a", audio_bitrate]
 
         # Determine if overlay / PIP is used
         use_overlay = overlay_path and overlay_path.exists()

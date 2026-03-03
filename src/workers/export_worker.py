@@ -42,6 +42,7 @@ class ExportWorker(QObject):
         mix_with_original_audio: bool = False,
         video_volume: float = 1.0,
         audio_volume: float = 1.0,
+        audio_bitrate: str = "192k",
     ):
         super().__init__()
         self._video_path = video_path
@@ -61,6 +62,7 @@ class ExportWorker(QObject):
         self._mix_with_original_audio = mix_with_original_audio
         self._video_volume = video_volume
         self._audio_volume = audio_volume
+        self._audio_bitrate = audio_bitrate
 
     def run(self) -> None:
         try:
@@ -82,6 +84,7 @@ class ExportWorker(QObject):
                 mix_with_original_audio=self._mix_with_original_audio,
                 video_volume=self._video_volume,
                 audio_volume=self._audio_volume,
+                audio_bitrate=self._audio_bitrate,
             )
             self.finished.emit(str(self._output_path))
         except Exception as e:

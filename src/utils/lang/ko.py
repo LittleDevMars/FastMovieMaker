@@ -537,6 +537,8 @@ STRINGS: dict[str, str] = {
     "Ripple Edit Mode": "리플 편집 모드",
     "Ripple Edit ON": "리플 편집 켜짐",
     "Ripple Edit OFF": "리플 편집 꺼짐",
+    "Frame Snap ON": "프레임 스냅 켜짐",
+    "Frame Snap OFF": "프레임 스냅 꺼짐",
     "When enabled, deleting or trimming clips will move subsequent clips and subtitles.": "활성화 시, 클립을 삭제하거나 조절하면 뒤에 있는 클립과 자막이 함께 이동합니다.",
     "Edit Transition...": "트랜지션 편집...",
     "Add Transition...": "트랜지션 추가...",
@@ -603,6 +605,17 @@ STRINGS: dict[str, str] = {
     "Reset All Shortcuts":     "모든 단축키 초기화",
     "Action":                  "동작",
     "Shortcut":                "단축키",
+
+    # ── Export preset ──
+    "Export Preset:":              "내보내기 프리셋:",
+    "Save Preset...":              "프리셋 저장...",
+    "Delete Preset":               "프리셋 삭제",
+    "Audio Bitrate:":              "오디오 비트레이트:",
+    "Container:":                  "컨테이너:",
+    "Preset name:":                "프리셋 이름:",
+    "Export preset saved":         "내보내기 프리셋 저장됨",
+    "Cannot delete built-in preset": "기본 프리셋은 삭제할 수 없습니다",
+    "Cannot save over built-in preset": "기본 프리셋 이름으로 저장할 수 없습니다",
 
     # ── Export preview ──
     "Source Preview":          "소스 미리보기",
