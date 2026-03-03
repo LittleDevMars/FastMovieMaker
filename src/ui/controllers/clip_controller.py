@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from src.models.video_clip import VideoClipTrack
 from src.ui.commands import (
     AddVideoClipCommand,
     DeleteClipCommand,
+    EditColorCorrectionCommand,
     EditColorLabelCommand,
     EditSpeedCommand,
     EditTransitionCommand,
@@ -164,6 +166,56 @@ class ClipController:
 
         ctx.refresh_all()
         ctx.status_bar().showMessage(f"{tr('Deleted clip')} {clip_index + 1}", 3000)
+
+    # ---- 멀티 클립 삭제 ----
+
+    def on_delete_selected_clips(self) -> None:
+        """선택된 클립들을 역순으로 삭제 (인덱스 오프셋 보정). macro Undo."""
+        ctx = self.ctx
+        if not ctx.project:
+            return
+        selected = ctx.timeline.get_selected_clips()
+        if not selected:
+            return
+
+        # 마지막 1개 보호: 각 트랙에서 삭제 후 클립이 0개가 되면 삭제 불가
+        track_delete_counts = Counter(ti for ti, _ in selected)
+        deletable = []
+        for track_idx, clip_idx in selected:
+            if track_idx >= len(ctx.project.video_tracks):
+                continue
+            vt = ctx.project.video_tracks[track_idx]
+            if len(vt.clips) - track_delete_counts[track_idx] >= 1:
+                deletable.append((track_idx, clip_idx))
+
+        if not deletable:
+            ctx.status_bar().showMessage(tr("Cannot delete the last clip"), 3000)
+            return
+
+        # 역순 정렬 (트랙별 내림차순 clip_idx → 이전 인덱스 유지)
+        deletable.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+        ctx.undo_stack.beginMacro(tr("Delete %d Clips") % len(deletable))
+        ripple = ctx.timeline.is_ripple_mode()
+        for track_idx, clip_idx in deletable:
+            vt = ctx.project.video_tracks[track_idx]
+            if clip_idx >= len(vt.clips):
+                continue
+            clip = vt.clips[clip_idx]
+            clip_start = vt.clip_timeline_start(clip_idx)
+            clip_end = clip_start + clip.duration_ms
+            cmd = DeleteClipCommand(
+                ctx.project, track_idx, clip_idx, clip,
+                ctx.project.subtitle_track,
+                ctx.project.image_overlay_track,
+                clip_start, clip_end,
+                ripple=ripple,
+            )
+            ctx.undo_stack.push(cmd)
+        ctx.undo_stack.endMacro()
+
+        ctx.timeline._clear_selection()
+        ctx.refresh_all()
 
     # ---- 클립 트림 ----
 
@@ -338,32 +390,33 @@ class ClipController:
     def on_edit_clip_color(self, track_idx: int, clip_idx: int) -> None:
         """컬러 보정 다이얼로그 열기."""
         ctx = self.ctx
-        if not ctx.project:
+        if not ctx.project or track_idx < 0 or track_idx >= len(ctx.project.video_tracks):
             return
-        from src.ui.dialogs.color_correction_dialog import ColorCorrectionDialog
-        from src.ui.commands import EditClipPropertiesCommand
         vt = ctx.project.video_tracks[track_idx]
+        if clip_idx < 0 or clip_idx >= len(vt.clips):
+            return
         clip = vt.clips[clip_idx]
+        from src.ui.dialogs.color_correction_dialog import ColorCorrectionDialog
         dialog = ColorCorrectionDialog(
             ctx.window,
             initial_brightness=clip.brightness,
             initial_contrast=clip.contrast,
             initial_saturation=clip.saturation,
         )
-        if dialog.exec():
-            new_vals = dialog.get_values()
-            old_vals = {
-                "brightness": clip.brightness,
-                "contrast": clip.contrast,
-                "saturation": clip.saturation,
-                "volume": clip.volume,
-            }
-            if any(new_vals[k] != old_vals[k] for k in new_vals):
-                new_vals["volume"] = clip.volume
-                cmd = EditClipPropertiesCommand(clip, old_vals, new_vals)
-                ctx.undo_stack.push(cmd)
-                ctx.project_ctrl.on_document_edited()
-                ctx.refresh_all()
+        if not dialog.exec():
+            return
+        vals = dialog.get_values()
+        new_br, new_ct, new_sat = vals["brightness"], vals["contrast"], vals["saturation"]
+        if new_br == clip.brightness and new_ct == clip.contrast and new_sat == clip.saturation:
+            return
+        ctx.undo_stack.push(EditColorCorrectionCommand(
+            clip, clip.brightness, clip.contrast, clip.saturation,
+            new_br, new_ct, new_sat,
+        ))
+        ctx.project_ctrl.on_document_edited()
+        ctx.timeline._invalidate_static_cache()
+        ctx.timeline.update()
+        ctx.status_bar().showMessage(tr("Color correction applied"), 3000)
 
     # ---- 트랙 관리 ----
 
@@ -385,12 +438,40 @@ class ClipController:
 
     def on_rename_video_track(self, index: int) -> None:
         """Rename a video track."""
-        # Currently VideoClipTrack doesn't have a name field in the model, 
-        # but TrackHeaderPanel displays "Video N".
-        # If we want to support renaming, we need to add a name field to VideoClipTrack.
-        # For now, let's assume we can't rename video tracks as the model doesn't support it yet,
-        # or we just show a message.
-        pass
+        from PySide6.QtWidgets import QInputDialog
+        ctx = self.ctx
+        if not ctx.project or index < 0 or index >= len(ctx.project.video_tracks):
+            return
+        current_name = ctx.project.video_tracks[index].name
+        name, ok = QInputDialog.getText(
+            None, tr("Rename Track"), tr("Track name:"),
+            text=current_name,
+        )
+        if ok and name.strip():
+            ctx.project.video_tracks[index].name = name.strip()
+            ctx.track_header.set_project(ctx.project)
+
+    def on_track_settings_requested(self, index: int) -> None:
+        """비디오 트랙 블렌드 모드 / 크로마키 설정 다이얼로그를 연다."""
+        from src.ui.commands import EditTrackBlendModeCommand
+        from src.ui.dialogs.track_settings_dialog import TrackSettingsDialog
+        ctx = self.ctx
+        if not ctx.project or index < 0 or index >= len(ctx.project.video_tracks):
+            return
+        vt = ctx.project.video_tracks[index]
+        dlg = TrackSettingsDialog(
+            vt.blend_mode, vt.chroma_color,
+            vt.chroma_similarity, vt.chroma_blend,
+        )
+        if dlg.exec():
+            cmd = EditTrackBlendModeCommand(
+                vt, dlg.blend_mode, dlg.chroma_color,
+                dlg.chroma_similarity, dlg.chroma_blend,
+            )
+            ctx.undo_stack.push(cmd)
+            ctx.project_ctrl.on_document_edited()
+            ctx.timeline._invalidate_static_cache()
+            ctx.timeline.update()
 
     def on_set_color_label(self, track_idx: int, clip_idx: int, label: str) -> None:
         """클립 컬러 레이블 변경. Undo/Redo 지원."""

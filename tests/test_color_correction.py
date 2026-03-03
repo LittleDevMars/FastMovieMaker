@@ -96,6 +96,53 @@ class TestEqFilter:
         assert "eq=" not in full
 
 
+# ── EditColorCorrectionCommand 테스트 ─────────────────────────────────────────
+
+class TestEditColorCorrectionCommand:
+    def test_edit_color_correction_redo(self):
+        from src.ui.commands import EditColorCorrectionCommand
+        clip = VideoClip(0, 1000)
+        clip.brightness = 1.0
+        clip.contrast = 1.0
+        clip.saturation = 1.0
+        cmd = EditColorCorrectionCommand(clip, 1.0, 1.0, 1.0, 1.5, 0.8, 2.0)
+        cmd.redo()
+        assert clip.brightness == pytest.approx(1.5)
+        assert clip.contrast == pytest.approx(0.8)
+        assert clip.saturation == pytest.approx(2.0)
+
+    def test_edit_color_correction_undo(self):
+        from src.ui.commands import EditColorCorrectionCommand
+        clip = VideoClip(0, 1000)
+        clip.brightness = 1.0
+        clip.contrast = 1.0
+        clip.saturation = 1.0
+        cmd = EditColorCorrectionCommand(clip, 1.0, 1.0, 1.0, 1.5, 0.8, 2.0)
+        cmd.redo()
+        cmd.undo()
+        assert clip.brightness == pytest.approx(1.0)
+        assert clip.contrast == pytest.approx(1.0)
+        assert clip.saturation == pytest.approx(1.0)
+
+    def test_has_correction_flag_true(self):
+        clip = VideoClip(0, 1000)
+        clip.brightness = 1.5
+        clip.contrast = 1.0
+        clip.saturation = 1.0
+        has_correction = (
+            clip.brightness != 1.0 or clip.contrast != 1.0 or clip.saturation != 1.0
+        )
+        assert has_correction is True
+
+    def test_has_correction_flag_false(self):
+        clip = VideoClip(0, 1000)
+        # 기본값
+        has_correction = (
+            clip.brightness != 1.0 or clip.contrast != 1.0 or clip.saturation != 1.0
+        )
+        assert has_correction is False
+
+
 # ── i18n 키 존재 확인 ──────────────────────────────────────────────────────────
 
 class TestI18nKeys:
@@ -105,3 +152,10 @@ class TestI18nKeys:
         assert "Brightness" in STRINGS
         assert "Contrast" in STRINGS
         assert "Saturation" in STRINGS
+
+    def test_phase_d3_i18n_keys(self):
+        assert "Edit color correction" in STRINGS
+        assert "Color correction applied" in STRINGS
+        assert "Add marker" in STRINGS
+        assert "Remove marker" in STRINGS
+        assert "Rename marker" in STRINGS

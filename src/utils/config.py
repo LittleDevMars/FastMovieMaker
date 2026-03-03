@@ -9,14 +9,9 @@ APP_NAME = "FastMovieMaker"
 APP_VERSION = "0.4.1"
 ORG_NAME = "FastMovieMaker"
 
-# FFmpeg
-import sys
-if sys.platform == "darwin":
-    FFMPEG_PATH = "/opt/homebrew/bin/ffmpeg"
-elif sys.platform == "win32":
-    FFMPEG_PATH = r"E:\Python\Scripts\ffmpeg.exe"
-else:
-    FFMPEG_PATH = "ffmpeg"
+# FFmpeg — 빈 문자열로 두면 find_ffmpeg()이 PATH → imageio-ffmpeg 순서로 탐색
+# APP_VERSION 과 pyproject.toml version 은 수동으로 동기화할 것
+FFMPEG_PATH = ""
 
 
 def find_ffmpeg() -> str | None:

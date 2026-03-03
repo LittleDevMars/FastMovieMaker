@@ -31,6 +31,7 @@ from src.ui.controllers.subtitle_controller import SubtitleController
 from src.ui.dialogs.preferences_dialog import PreferencesDialog
 from src.utils.config import APP_NAME, APP_VERSION, find_ffmpeg
 from src.utils.i18n import tr
+from src.utils.resource_path import get_resource_path
 
 
 class MainWindow(QMainWindow):
@@ -44,7 +45,7 @@ class MainWindow(QMainWindow):
         self.resize(1440, 950)
 
         # App icon
-        icon_path = Path(__file__).resolve().parent.parent.parent / "resources" / "icon.png"
+        icon_path = get_resource_path("resources/icon.png")
         if icon_path.is_file():
             self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -217,8 +218,13 @@ class MainWindow(QMainWindow):
 
     def _on_delete_pressed(self) -> None:
         """Handle delete key press: delete selected item from timeline or subtitle panel."""
+        # 멀티 클립 선택 시 일괄 삭제
+        if len(self._timeline.get_selected_clips()) > 1:
+            self._clip.on_delete_selected_clips()
+            return
+
         item_type, track_idx, item_idx = self._timeline.get_selected_item()
-        
+
         if item_type == "clip":
             self._clip.on_delete_clip(track_idx, item_idx)
         elif item_type == "image":
@@ -310,9 +316,16 @@ class MainWindow(QMainWindow):
         self._timeline.clip_color_requested.connect(self._clip.on_edit_clip_color)
         self._timeline.clip_color_label_requested.connect(self._clip.on_set_color_label)
         self._timeline.clip_double_clicked.connect(self._clip.on_edit_clip_properties)
+        self._timeline.clips_delete_requested.connect(self._clip.on_delete_selected_clips)
+        self._timeline.clip_copy_requested.connect(self._clip.copy_selected_clip)
+        self._timeline.clip_paste_requested.connect(self._clip.paste_clip)
+        self._timeline.add_marker_requested.connect(self._on_add_marker)
+        self._timeline.remove_marker_requested.connect(self._on_remove_marker)
+        self._timeline.rename_marker_requested.connect(self._on_rename_marker)
         self._track_headers.track_add_requested.connect(self._clip.on_add_video_track)
         self._track_headers.track_remove_requested.connect(self._clip.on_remove_video_track)
         self._track_headers.track_rename_requested.connect(self._clip.on_rename_video_track)
+        self._track_headers.track_settings_requested.connect(self._clip.on_track_settings_requested)
         self._track_headers.subtitle_rename_requested.connect(self._subtitle_ctrl.on_rename_active_track)
         self._timeline.status_message_requested.connect(lambda msg, t=0: self.statusBar().showMessage(msg, t))
 
@@ -386,6 +399,7 @@ class MainWindow(QMainWindow):
             self._controls.set_output_duration(self._project.duration_ms)
 
         self._timeline.set_project(self._project)
+        self._track_headers.set_active_track(self._ctx.current_track_index)
         self._autosave.notify_edit()
 
     def _ensure_timeline_duration(self) -> None:
@@ -528,6 +542,124 @@ class MainWindow(QMainWindow):
             f"{APP_NAME} v{APP_VERSION}\n\n"
             f"{tr('Video subtitle editor with Whisper-based automatic subtitle generation.')}",
         )
+
+    # ------------------------------------------------------------ UX2 handlers
+
+    def _apply_template_and_notify(self, tmpl) -> None:
+        """템플릿을 적용하고 상태바 메시지를 표시한다."""
+        from src.services.template_manager import TemplateManager
+        TemplateManager.apply_to_project(tmpl, self._project)
+        self._refresh_all_widgets()
+        self.statusBar().showMessage(
+            tr("Template applied: %s (%s)") % (tmpl.display_name, tmpl.aspect_label),
+            3000,
+        )
+
+    def _on_new_from_template(self) -> None:
+        """템플릿으로 새 프로젝트를 생성한다."""
+        from src.ui.dialogs.welcome_dialog import TemplatePickerDialog
+        dlg = TemplatePickerDialog(parent=self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        tmpl = dlg.selected_template()
+        if not tmpl:
+            return
+        self._apply_template_and_notify(tmpl)
+
+    def show_welcome_dialog(self) -> None:
+        """앱 시작 시 웰컴 다이얼로그를 표시한다."""
+        from src.ui.dialogs.welcome_dialog import WelcomeDialog
+
+        recent = self._ctx.autosave.get_recent_files()
+        dlg = WelcomeDialog(recent_files=recent, parent=self)
+        result = dlg.exec()
+
+        if result == dlg.DialogCode.Accepted:
+            path = dlg.selected_recent()
+            tmpl = dlg.selected_template()
+            if path:
+                self._ctx.project_ctrl.on_load_project(path=path)
+            elif tmpl:
+                self._apply_template_and_notify(tmpl)
+        elif result == WelcomeDialog.RESULT_OPEN_FILE:
+            self._ctx.project_ctrl.on_load_project()
+        # RESULT_NEW_EMPTY or rejected → 기본 빈 프로젝트
+
+    # ------------------------------------------------------------ P2 handlers
+
+    def _on_verify_tts_timing(self) -> None:
+        """Whisper 역방향 검증으로 TTS 타이밍을 보정한다."""
+        track = self._project.subtitle_track
+        if not track or not track.audio_path:
+            QMessageBox.information(
+                self,
+                tr("No TTS Audio"),
+                tr("No TTS audio segments found.\nGenerate TTS first via Subtitles > Generate Speech."),
+            )
+            return
+
+        from src.ui.dialogs.tts_verify_dialog import TtsVerifyDialog
+        from src.ui.commands import ApplyTTSVerificationCommand
+
+        dlg = TtsVerifyDialog(track, self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+
+        corrections = dlg.get_corrections()
+        if not corrections:
+            return
+
+        self._undo_stack.push(ApplyTTSVerificationCommand(track, corrections))
+        self._refresh_all_widgets()
+        self.statusBar().showMessage(
+            tr("%d segments corrected") % len(corrections), 3000
+        )
+
+    def _on_batch_tts(self) -> None:
+        """배치 TTS 생성 다이얼로그를 연다."""
+        from src.ui.dialogs.batch_tts_dialog import BatchTtsDialog
+        dlg = BatchTtsDialog(self)
+        dlg.exec()
+
+    # ------------------------------------------------------------ Marker handlers
+
+    def _refresh_timeline_after_edit(self) -> None:
+        """마커/편집 후 타임라인을 갱신한다."""
+        self._project_ctrl.on_document_edited()
+        self._timeline._invalidate_static_cache()
+        self._timeline.update()
+
+    def _on_add_marker(self, ms: int) -> None:
+        """플레이헤드 위치에 마커 추가."""
+        from src.models.timeline_marker import TimelineMarker
+        from src.ui.commands import AddMarkerCommand
+        marker = TimelineMarker(ms=ms)
+        self._undo_stack.push(AddMarkerCommand(self._project, marker))
+        self._refresh_timeline_after_edit()
+        self.statusBar().showMessage(tr("Marker added"), 2000)
+
+    def _on_remove_marker(self, marker_idx: int) -> None:
+        """마커 삭제."""
+        if marker_idx < 0 or marker_idx >= len(self._project.markers):
+            return
+        from src.ui.commands import RemoveMarkerCommand
+        marker = self._project.markers[marker_idx]
+        self._undo_stack.push(RemoveMarkerCommand(self._project, marker))
+        self._refresh_timeline_after_edit()
+        self.statusBar().showMessage(tr("Marker removed"), 2000)
+
+    def _on_rename_marker(self, marker_idx: int, new_name: str) -> None:
+        """마커 이름 변경."""
+        if marker_idx < 0 or marker_idx >= len(self._project.markers):
+            return
+        from src.ui.commands import RenameMarkerCommand
+        marker = self._project.markers[marker_idx]
+        old_name = marker.name
+        if old_name == new_name:
+            return
+        self._undo_stack.push(RenameMarkerCommand(marker, old_name, new_name))
+        self._refresh_timeline_after_edit()
+        self.statusBar().showMessage(tr("Marker renamed"), 2000)
 
     # ------------------------------------------------------------ Lifecycle
 

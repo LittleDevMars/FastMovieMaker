@@ -9,10 +9,11 @@ from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
 from src.models.project import ProjectState
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleSegment, SubtitleTrack
+from src.models.timeline_marker import TimelineMarker
 from src.models.video_clip import VideoClip, VideoClipTrack
 from src.models.text_overlay import TextOverlay, TextOverlayTrack
 
-PROJECT_VERSION = 9
+PROJECT_VERSION = 11
 
 
 def _style_to_dict(style: SubtitleStyle) -> dict:
@@ -118,7 +119,7 @@ def save_project(project: ProjectState, path: Path) -> None:
         "items": [ov.to_dict() for ov in project.image_overlay_track]
     }
 
-    # Video tracks (v6)
+    # Video tracks (v6, blend_mode/chroma_key from v11)
     video_tracks_data = []
     for vt in project.video_tracks:
         video_tracks_data.append({
@@ -126,6 +127,10 @@ def save_project(project: ProjectState, path: Path) -> None:
             "muted": vt.muted,
             "hidden": vt.hidden,
             "name": vt.name,
+            "blend_mode": vt.blend_mode,
+            "chroma_color": vt.chroma_color,
+            "chroma_similarity": vt.chroma_similarity,
+            "chroma_blend": vt.chroma_blend,
             "items": [c.to_dict() for c in vt.clips]
         })
 
@@ -143,7 +148,8 @@ def save_project(project: ProjectState, path: Path) -> None:
             "locked": project.text_overlay_track.locked,
             "hidden": project.text_overlay_track.hidden,
             "items": [ov.to_dict() for ov in project.text_overlay_track]
-        }
+        },
+        "markers": [m.to_dict() for m in project.markers],
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -221,6 +227,10 @@ def load_project(path: Path) -> ProjectState:
             vt.muted = vt_data.get("muted", False)
             vt.hidden = vt_data.get("hidden", False)
             vt.name = vt_data.get("name", "")
+            vt.blend_mode = vt_data.get("blend_mode", "normal")
+            vt.chroma_color = vt_data.get("chroma_color", "#00FF00")
+            vt.chroma_similarity = vt_data.get("chroma_similarity", 0.3)
+            vt.chroma_blend = vt_data.get("chroma_blend", 0.1)
             vt.clips = [VideoClip.from_dict(c) for c in vt_data.get("items", [])]
             video_tracks.append(vt)
     else:
@@ -250,5 +260,8 @@ def load_project(path: Path) -> ProjectState:
         for ov_data in to_data.get("items", []):
             to_track.add_overlay(TextOverlay.from_dict(ov_data))
     project.text_overlay_track = to_track
+
+    # Markers (v10)
+    project.markers = [TimelineMarker.from_dict(m) for m in data.get("markers", [])]
 
     return project

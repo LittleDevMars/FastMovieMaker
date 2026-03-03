@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 29 완료 (2026-03-02)
+**현재 상태:** Day 36 완료 (2026-03-03)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -46,6 +46,13 @@
 | **Phase SD — FFmpeg 장면 감지** — `SceneDetectionService`(PySceneDetect), `SceneDetectDialog`(임계값 슬라이더+결과 리스트), `SceneDetectWorker`, 메뉴 통합, 단위 테스트 13개 (534/534 passed) | **완료 (Day 28)** |
 | **Phase D1 — UX 개선** — 내보내기 프리뷰(`_ThumbWorker`+소스/출력 정보 패널), 단축키 커스터마이징(`settings_manager` 단축키 API, Preferences "Shortcuts" 탭 `QKeySequenceEdit`), 자막 자동 정렬(`AutoAlignSubtitlesCommand`, Ctrl+Shift+A), 자막 애니메이션, 컬러 보정 기반 구현, 테스트 36개 (570/570 passed) | **완료 (Day 28)** |
 | **Phase D2 — UX/품질 개선** — 자막 자동 줄바꿈(`WrapSubtitlesCommand`, `textwrap.fill`, Ctrl+Shift+W), 클립 컬러 레이블(`VideoClip.color_label`, `EditColorLabelCommand`, `_LABEL_COLORS` 8색), Undo 히스토리 패널(`QUndoView` 4번째 탭), PROJECT_VERSION 9, 테스트 15개 (585/585 passed) | **완료 (Day 29)** |
+| **Phase D3 — UX/품질 개선** — 컬러 보정 타임라인 인디케이터(노란 원형 뱃지), `EditColorCorrectionCommand` 전용화, BGM 클립 선택 하이라이트 버그 수정(`_selected_bgm_track_index`/`_clip_index` 연결), 타임라인 마커(`TimelineMarker`, M 키, 우클릭 rename/delete, Add Marker 메뉴, undo/redo 4개 커맨드, 직렬화 v10), PROJECT_VERSION 10, 테스트 21개 신규 (606/606 passed) | **완료 (Day 30)** |
+| **Phase P2 — Whisper 역방향 검증 + 배치 TTS** — `TtsVerifier.verify_and_align()`(difflib SequenceMatcher), `TtsVerifyWorker`(QObject+moveToThread), `TtsVerifyDialog`(모델 선택+진행률+결과), `ApplyTTSVerificationCommand`(Undo/Redo), Edit 메뉴 "Verify TTS Timing…"; `BatchTtsJob/Result`, `BatchTtsWorker`(per-job TTS+SRT 출력), `BatchTtsDialog`(파일 그룹+설정+결과 테이블), Edit 메뉴 "Batch TTS…"; i18n 30개 키 추가, 테스트 26개 신규 (632/632 passed) | **완료 (Day 31)** |
+| **Phase Q — 로깅 & 크래시 리포트** — `src/utils/logger.py`(RotatingFileHandler 5MB×3, `get_logger()`), `src/utils/crash_reporter.py`(`setup_excepthook()`, 크래시 파일 저장), `src/ui/dialogs/crash_report_dialog.py`(스택 트레이스+클립보드 복사+로그 폴더 열기), `main.py` 통합(`setup_excepthook` + `_logger.info`), i18n 5개 키, 테스트 11개 신규 (643/643 passed) | **완료 (Day 32)** |
+| **Phase UX2 — 프로젝트 템플릿 + 웰컴 다이얼로그** — `src/models/project_template.py`(`ProjectTemplate`, `aspect_label`), `src/services/template_manager.py`(3종 내장 템플릿 YT Shorts/Commentary/IG Reels, 사용자 템플릿 QSettings 저장/로드/삭제, `apply_to_project()`), `src/ui/dialogs/welcome_dialog.py`(`WelcomeDialog` 최근파일+템플릿카드+빠른시작, `TemplatePickerDialog`), File 메뉴 "New from Template…", `main.py` 시작 시 웰컴 다이얼로그, i18n 12개 키, 테스트 15개 신규 (658/658 passed) | **완료 (Day 33)** |
+| **Phase E — PyInstaller 배포 패키징** — `pyproject.toml`(프로젝트 메타데이터/버전 단일 소스), `src/utils/resource_path.py`(`get_resource_path()` frozen/dev 환경 분기), `src/utils/config.py` FFmpeg 하드코딩 제거(빈 문자열 → PATH 탐색), `src/ui/main_window.py` + `src/services/template_service.py` 아이콘/템플릿 경로 헬퍼 적용, `FastMovieMaker.spec`(PySide6+torch+faster-whisper 전체 번들, macOS .app + Windows --onedir), `build_macos.sh` / `build_windows.bat`, `.github/workflows/build.yml`(태그 푸시 → macOS/Windows 자동 빌드 → Releases 업로드), 테스트 5개 신규 (663/663 passed) | **완료 (Day 34)** |
+| **Phase MV — 다중 비디오 트랙 레이어 합성** — `VideoClipTrack`에 `blend_mode`/`chroma_color`/`chroma_similarity`/`chroma_blend` 필드 추가, `project_io.py` v11 직렬화(하위호환 .get() 기본값), `video_exporter.py` 블렌드 모드(screen/multiply/lighten/darken)/크로마키(chromakey FFmpeg 필터)/hidden 트랙 제외/muted 트랙 오디오 제외, `timeline_painter.py` 캐시 키 버그 2개 수정(`clip_count` → 전 트랙 튜플, `selected_clip_track_index` 추가), `TrackSettingsDialog`(신규 블렌드모드+크로마키 다이얼로그), `TrackHeaderPanel` 활성 트랙 인디케이터+`track_settings_requested` 시그널+"Track Settings…" 우클릭 메뉴, `EditTrackBlendModeCommand`(Undo/Redo), `on_rename_video_track` 실제 동작(QInputDialog), `on_track_settings_requested` 추가, `main_window.py` 신호 연결+`set_active_track()` 호출, i18n 15개 키, 테스트 18개 신규 (681/681 passed) | **완료 (Day 35)** |
+| **Phase CLIP2 — 클립 편집 UX 고도화** — `_selected_clips: set[tuple[int,int]]` 멀티 선택 집합 추가, Ctrl+클릭 토글/Shift+클릭 범위 선택, `get_selected_clips()` API, 시그널 3개 신규(`clips_delete_requested`/`clip_copy_requested`/`clip_paste_requested`), `keyPressEvent` Delete·Ctrl+C·V 처리, 우클릭 메뉴 Copy·Paste·Delete N Clips 항목, `timeline_painter.py` `is_selected` 판정 `_selected_clips` 기반 변경 + 캐시 키 `frozenset` 추가, `ClipController.on_delete_selected_clips()` macro Undo(역순 삭제, 마지막 클립 보호), `main_window._on_delete_pressed()` 멀티 선택 분기, 시그널 연결 3개, i18n 5개 키, 테스트 25개 신규 (706/706 passed) | **완료 (Day 36)** |
 
 ---
 
@@ -60,9 +67,9 @@
 #### P2 — 고급 기능
 | 항목 | 설명 |
 |------|------|
-| Whisper 역방향 검증 | 생성된 TTS를 Whisper로 재전사하여 타이밍 자동 보정 |
+| ~~Whisper 역방향 검증~~ | 완료 (Day 31) |
 | GPT 대본 자동 생성 | OpenAI API로 대본 자동 작성 |
-| 배치 TTS 생성 | 여러 대본 파일 일괄 TTS 변환 |
+| ~~배치 TTS 생성~~ | 완료 (Day 31) |
 
 #### 미실행 — 수동 GUI 테스트
 - Day 6 수동 테스트 체크리스트 항목 다수 미확인 (PROGRESS.md Day 6 섹션 참조)

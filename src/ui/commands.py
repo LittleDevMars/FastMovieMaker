@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from src.models.project import ProjectState
     from src.models.style import SubtitleStyle
     from src.models.subtitle import SubtitleSegment, SubtitleTrack
+    from src.models.timeline_marker import TimelineMarker
     from src.models.video_clip import VideoClip, VideoClipTrack
     from src.models.video_clip import VideoClipTrack  # Runtime import for AddVideoTrackCommand
     from src.models.image_overlay import ImageOverlay, ImageOverlayTrack
@@ -1409,3 +1410,119 @@ class EditColorLabelCommand(QUndoCommand):
 
     def undo(self) -> None:
         self._clip.color_label = self._old
+
+
+class EditColorCorrectionCommand(QUndoCommand):
+    """클립 컬러 보정 (brightness/contrast/saturation) 전용 커맨드."""
+
+    def __init__(self, clip: VideoClip,
+                 old_br: float, old_ct: float, old_sat: float,
+                 new_br: float, new_ct: float, new_sat: float):
+        super().__init__(tr("Edit color correction"))
+        self._clip = clip
+        self._old = (old_br, old_ct, old_sat)
+        self._new = (new_br, new_ct, new_sat)
+
+    def redo(self) -> None:
+        self._clip.brightness, self._clip.contrast, self._clip.saturation = self._new
+
+    def undo(self) -> None:
+        self._clip.brightness, self._clip.contrast, self._clip.saturation = self._old
+
+
+class AddMarkerCommand(QUndoCommand):
+    """타임라인 마커 추가."""
+
+    def __init__(self, project: ProjectState, marker: TimelineMarker):
+        super().__init__(tr("Add marker"))
+        self._project = project
+        self._marker = marker
+
+    def redo(self) -> None:
+        self._project.insert_marker(self._marker)
+
+    def undo(self) -> None:
+        self._project.markers.remove(self._marker)
+
+
+class RemoveMarkerCommand(QUndoCommand):
+    """타임라인 마커 삭제."""
+
+    def __init__(self, project: ProjectState, marker: TimelineMarker):
+        super().__init__(tr("Remove marker"))
+        self._project = project
+        self._marker = marker
+
+    def redo(self) -> None:
+        self._project.markers.remove(self._marker)
+
+    def undo(self) -> None:
+        self._project.insert_marker(self._marker)
+
+
+class RenameMarkerCommand(QUndoCommand):
+    """타임라인 마커 이름 변경."""
+
+    def __init__(self, marker: TimelineMarker, old_name: str, new_name: str):
+        super().__init__(tr("Rename marker"))
+        self._marker = marker
+        self._old = old_name
+        self._new = new_name
+
+    def redo(self) -> None:
+        self._marker.name = self._new
+
+    def undo(self) -> None:
+        self._marker.name = self._old
+
+
+class EditTrackBlendModeCommand(QUndoCommand):
+    """비디오 트랙의 블렌드 모드 및 크로마키 설정을 변경한다."""
+
+    def __init__(self, track: VideoClipTrack,
+                 new_blend_mode: str, new_chroma_color: str,
+                 new_chroma_similarity: float, new_chroma_blend: float) -> None:
+        super().__init__(tr("Edit Track Blend Mode"))
+        self._track = track
+        self._old = (track.blend_mode, track.chroma_color,
+                     track.chroma_similarity, track.chroma_blend)
+        self._new = (new_blend_mode, new_chroma_color,
+                     new_chroma_similarity, new_chroma_blend)
+
+    def redo(self) -> None:
+        bm, cc, cs, cb = self._new
+        self._track.blend_mode = bm
+        self._track.chroma_color = cc
+        self._track.chroma_similarity = cs
+        self._track.chroma_blend = cb
+
+    def undo(self) -> None:
+        bm, cc, cs, cb = self._old
+        self._track.blend_mode = bm
+        self._track.chroma_color = cc
+        self._track.chroma_similarity = cs
+        self._track.chroma_blend = cb
+
+
+class ApplyTTSVerificationCommand(QUndoCommand):
+    """Whisper 역방향 검증 결과를 자막 트랙에 적용한다."""
+
+    def __init__(self, track: SubtitleTrack, corrections: list) -> None:
+        """
+        Args:
+            track:       보정 대상 자막 트랙.
+            corrections: list[CorrectionResult] — 보정 목록.
+        """
+        super().__init__(tr("Apply TTS verification"))
+        self._track = track
+        self._corrections = list(corrections)
+
+    def redo(self) -> None:
+        for c in self._corrections:
+            if 0 <= c.seg_index < len(self._track.segments):
+                self._track.update_segment_time(c.seg_index, c.new_start_ms, c.new_end_ms)
+
+    def undo(self) -> None:
+        for c in self._corrections:
+            if 0 <= c.seg_index < len(self._track.segments):
+                self._track.update_segment_time(c.seg_index, c.old_start_ms, c.old_end_ms)

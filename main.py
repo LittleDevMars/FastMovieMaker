@@ -22,9 +22,13 @@ from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor, QPalette
 
 from src.utils.config import APP_NAME, ORG_NAME
+from src.utils.crash_reporter import setup_excepthook
 from src.utils.i18n import init_language
+from src.utils.logger import get_logger
 from src.services.settings_manager import SettingsManager
 from src.ui.main_window import MainWindow
+
+_logger = get_logger(__name__)
 
 
 def _apply_dark_theme(app: QApplication) -> None:
@@ -66,11 +70,14 @@ def _apply_dark_theme(app: QApplication) -> None:
 
 
 def main() -> None:
+    setup_excepthook()
+
     QApplication.setOrganizationName(ORG_NAME)
     QApplication.setApplicationName(APP_NAME)
 
     app = QApplication(sys.argv)
     _apply_dark_theme(app)
+    _logger.info("Application started")
 
     # Initialize UI language from settings
     _settings = SettingsManager()
@@ -91,6 +98,9 @@ def main() -> None:
         video_path = Path(sys.argv[1])
         if video_path.is_file():
             window._load_video(video_path)
+    else:
+        # 커맨드라인 인수 없을 때 웰컴 다이얼로그 표시
+        window.show_welcome_dialog()
 
     sys.exit(app.exec())
 

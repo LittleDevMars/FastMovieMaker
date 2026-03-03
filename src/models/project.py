@@ -8,6 +8,7 @@ from pathlib import Path
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.style import SubtitleStyle
 from src.models.subtitle import SubtitleTrack
+from src.models.timeline_marker import TimelineMarker
 from src.models.video_clip import VideoClipTrack
 from src.models.text_overlay import TextOverlayTrack
 from src.models.audio import AudioTrack
@@ -27,6 +28,7 @@ class ProjectState:
     video_tracks: list[VideoClipTrack] = field(default_factory=lambda: [VideoClipTrack()])
     text_overlay_track: TextOverlayTrack = field(default_factory=TextOverlayTrack)
     bgm_tracks: list[AudioTrack] = field(default_factory=lambda: [AudioTrack()])
+    markers: list[TimelineMarker] = field(default_factory=list)
 
     @property
     def video_clip_track(self) -> VideoClipTrack:
@@ -81,6 +83,11 @@ class ProjectState:
                     paths.add(Path(clip.source_path))
         return sorted(paths)
 
+    def insert_marker(self, marker: TimelineMarker) -> None:
+        """시간 순서를 유지하며 마커를 삽입한다."""
+        import bisect
+        bisect.insort(self.markers, marker, key=lambda m: m.ms)
+
     def reset(self) -> None:
         self.video_path = None
         self.subtitle_tracks = [SubtitleTrack(name="Default")]
@@ -91,3 +98,4 @@ class ProjectState:
         self.video_tracks = [VideoClipTrack()]
         self.text_overlay_track = TextOverlayTrack()
         self.bgm_tracks = [AudioTrack()]
+        self.markers = []

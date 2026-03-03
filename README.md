@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
-[![Tests](https://img.shields.io/badge/tests-414%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-706%20passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
@@ -27,12 +27,13 @@
 - **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
 - 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
 - 끊김 없는 클립 간 자동 소스 전환
-- **414개의 유닛 테스트**로 검증된 견고한 재생 시스템
+- **706개의 유닛 테스트**로 검증된 견고한 재생 시스템
 - **GPU 가속 인코딩** — NVENC, QSV, AMF 내보내기 가속 지원
 - **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 - **자석 스냅 (Magnetic Snap)** — 클립 이동 시 인접 클립 및 플레이헤드에 자동 정렬 (Toggle: `S`)
 - **타임라인 썸네일** — 비디오 트랙에 연속된 썸네일(필름스트립) 표시로 시각적 편집 강화
 - **BGM 트랙 및 오디오 믹싱** — 독립적인 BGM 트랙 관리, 트리밍, 자석 스냅 및 볼륨 제어 지원 (Day 18)
+- **타임라인 마커** — `M` 키로 현재 재생 위치에 마커 추가, 좌클릭으로 해당 위치 이동, 우클릭 메뉴로 이름 변경 / 삭제, 5가지 컬러 지원 (yellow/red/green/blue/white), Undo/Redo 완벽 지원
 
 ### ⚡️ 성능 및 안정성
 - **알고리즘 최적화** — 핵심 모델 조회(`segment_at`, `clip_at_timeline`, `overlays_at`)를 O(log n) 이진 탐색으로 교체
@@ -46,7 +47,7 @@
 
 ### 🎨 전문적인 비디오 미리보기
 - **비동기 비디오 로드** — 대용량 파일도 즉시 로딩 (UI 멈춤 없음)
-- **비디오 필터 (Video Filters)** — 클립별 밝기(Brightness), 대비(Contrast), 채도(Saturation) 실시간 조절 및 수출 적용
+- **비디오 필터 (Video Filters)** — 클립별 밝기(Brightness), 대비(Contrast), 채도(Saturation) 실시간 조절 및 수출 적용; 보정값이 적용된 클립은 타임라인에 **노란 뱃지**로 즉시 구분
 - **프레임 캐시 시스템** — FFmpeg 프레임 추출을 통한 즉각적인 스크럽 미리보기
 - **광범위한 자막 지원** — SRT 뿐만 아니라 SMI 자막 파일 가져오기 지원
 - 커스터마이징 가능한 실시간 자막 오버레이
@@ -60,6 +61,12 @@
 - 세그먼트별 TTS 생성 및 오디오 믹싱
 - 비디오 및 TTS 오디오 개별 볼륨 제어
 - **AI 자막 번역** — Google/GPT 엔진 연동을 통한 자동 자막 번역 및 트랙 관리
+
+### ✂️ 멀티 클립 선택 및 편집 (Phase CLIP2)
+- **멀티 선택** — `Ctrl+클릭`으로 여러 클립 개별 토글, `Shift+클릭`으로 같은 트랙 내 범위 선택
+- **일괄 삭제** — `Delete` 키로 선택된 모든 클립을 macro Undo 단위로 삭제 (마지막 클립 보호)
+- **복사/붙여넣기** — `Ctrl+C`/`Ctrl+V` 단축키 및 우클릭 메뉴 지원
+- **우클릭 컨텍스트 메뉴** — Copy Clip, Paste Clip, Delete N Clips 항목 추가
 
 ### 🎬 영상 전환 효과 (Transitions) - 신규! (v0.9.5)
 - **시각적 효과:** `xfade` 기반의 다양한 전환 (Fade, Wipe, Slide, Dissolve, Pixelize 등)
@@ -150,8 +157,9 @@
 src/
 ├── models/              # 순수 Python 데이터 모델 (Qt 종속성 없음, __slots__ 적용)
 │   ├── project.py
-│   ├── subtitle.py       # bisect 기반 O(log n) 탐색
-│   ├── video_clip.py     # 접두사 합 기반 타임라인 계산
+│   ├── subtitle.py          # bisect 기반 O(log n) 탐색
+│   ├── video_clip.py        # 접두사 합 기반 타임라인 계산
+│   ├── timeline_marker.py   # 타임라인 마커 (ms, name, color)
 │   ├── image_overlay.py
 │   ├── text_overlay.py
 │   └── style.py
@@ -244,11 +252,14 @@ python main.py
 
 ### 포괄적인 테스트 스위트
 ```bash
-# 전체 테스트 실행 (29개 모듈에 걸친 414개 테스트 케이스)
-pytest tests/ -v
+# 전체 테스트 실행 (50개 모듈에 걸친 606개 테스트 케이스, GUI 전용 3개 제외)
+pytest tests/ -q --ignore=tests/test_tts_dialog_gui.py \
+    --ignore=tests/test_tts_ui_integration.py \
+    --ignore=tests/test_multi_source_playback.py
 
 # 주요 테스트 모듈:
-pytest tests/test_multi_source_playback.py -v   # 멀티 소스 재생 (43개)
+pytest tests/test_timeline_marker.py -v          # 타임라인 마커 (12개)
+pytest tests/test_color_correction.py -v         # 컬러 보정 (13개)
 pytest tests/test_time_utils.py -v               # 시간 변환 (46개)
 pytest tests/test_video_clip.py -v               # 비디오 클립 (44개)
 pytest tests/test_cancel_crash.py -v             # 취소 크래시 방지 (8개)
@@ -311,6 +322,8 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 ## 🎯 로드맵
 
 - [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
+- [x] 타임라인 마커 시스템 — M 키, 컬러 레이블, Undo/Redo (Phase D3)
+- [x] 컬러 보정 타임라인 인디케이터 — 보정된 클립 뱃지 표시 (Phase D3)
 - [ ] 커스텀 TTS 제공자를 위한 플러그인 시스템
 - [ ] 클라우드 프로젝트 동기화 (협업 편집)
 - [ ] 오디오 더킹 (Audio Ducking) 고도화

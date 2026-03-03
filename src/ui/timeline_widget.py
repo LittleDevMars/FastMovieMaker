@@ -18,7 +18,7 @@ from PySide6.QtGui import (
 )
 
 
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QInputDialog, QMenu, QWidget
 
 from src.models.image_overlay import ImageOverlayTrack
 from src.models.subtitle import SubtitleTrack
@@ -84,6 +84,12 @@ class TimelineWidget(QWidget):
     clip_volume_requested = Signal(int, int)   # (track_index, clip_index)
     clip_color_requested = Signal(int, int)    # (track_index, clip_index)
     clip_color_label_requested = Signal(int, int, str)  # (track_index, clip_index, label)
+    clips_delete_requested = Signal()          # 선택된 클립들 삭제 요청 (멀티)
+    clip_copy_requested = Signal()             # 클립 복사 요청
+    clip_paste_requested = Signal()            # 클립 붙여넣기 요청
+    add_marker_requested = Signal(int)         # (ms) — M 키 또는 메뉴
+    remove_marker_requested = Signal(int)      # (marker_index)
+    rename_marker_requested = Signal(int, str) # (marker_index, new_name)
 
     # ---- 색상 상수는 TimelinePainter로 이동됨 (src/ui/timeline_painter.py) ----
     # 아래는 비-페인팅 코드(히트테스트, 레이아웃 계산)에서도 사용되어 유지하는 상수들
@@ -152,6 +158,7 @@ class TimelineWidget(QWidget):
         self._clip_track: VideoClipTrack | None = None
         self._selected_clip_track_index: int = -1
         self._selected_clip_index: int = -1
+        self._selected_clips: set[tuple[int, int]] = set()  # 멀티 선택 집합 {(track_idx, clip_idx)}
 
         # BGM 트랙 상태
         self._bgm_tracks: list = []  # AudioTrack list
@@ -440,8 +447,16 @@ class TimelineWidget(QWidget):
     def select_clip(self, track_index: int, clip_index: int) -> None:
         self._selected_clip_track_index = track_index
         self._selected_clip_index = clip_index
+        if track_index >= 0 and clip_index >= 0:
+            self._selected_clips = {(track_index, clip_index)}
+        else:
+            self._selected_clips = set()
         self._invalidate_static_cache()
         self.update()
+
+    def get_selected_clips(self) -> list[tuple[int, int]]:
+        """현재 선택된 (track_idx, clip_idx) 목록 반환."""
+        return list(self._selected_clips)
 
     # -------------------------------------------------------- 줌 API
 
@@ -594,6 +609,7 @@ class TimelineWidget(QWidget):
         return "none", -1, -1
 
     def _clear_selection(self) -> None:
+        self._selected_clips = set()
         self._selected_index = -1
         self._audio_selected = False
         self._selected_overlay_index = -1
@@ -621,13 +637,37 @@ class TimelineWidget(QWidget):
         y = event.position().y()
         dm = self._drag_mgr
 
-        # Shift + 클릭 드래그: 뷰 팬 또는 볼륨 포인트 토글
+        # Shift + 클릭: 범위 선택 / 볼륨 포인트 토글 / 뷰 팬
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             seg_idx, hit, v_idx = self._hit_test(x, y)
-            if hit in ("clip_body", "volume_point"):
+            if hit == "volume_point":
                 dm.handle_volume_point_shift_click(v_idx, seg_idx, x, y)
                 return
+            if hit == "clip_body" and self._project:
+                # Shift+클릭: 같은 트랙 내 primary → 현재 클립까지 범위 선택
+                if self._selected_clip_track_index == v_idx and self._selected_clip_index >= 0:
+                    lo = min(self._selected_clip_index, seg_idx)
+                    hi = max(self._selected_clip_index, seg_idx)
+                    for i in range(lo, hi + 1):
+                        self._selected_clips.add((v_idx, i))
+                else:
+                    # 다른 트랙 또는 선택 없음: 단일 선택으로 초기화
+                    self._selected_clips = {(v_idx, seg_idx)}
+                    self._selected_clip_track_index = v_idx
+                    self._selected_clip_index = seg_idx
+                self._invalidate_static_cache()
+                self.update()
+                return
             dm.start_pan_view(x)
+            return
+
+        # 마커 좌클릭 → 플레이헤드 이동
+        marker_idx = self._hit_test_marker(x)
+        if marker_idx >= 0 and self._project and self._project.markers:
+            ms = self._project.markers[marker_idx].ms
+            self._playhead_ms = ms
+            self.update()
+            self.seek_requested.emit(ms)
             return
 
         seg_idx, hit, v_idx = self._hit_test(x, y)
@@ -651,11 +691,36 @@ class TimelineWidget(QWidget):
                 self.update()
                 return
             if hit == "clip_body":
-                self._clear_selection()
-                self._selected_clip_track_index = v_idx
-                self._selected_clip_index = seg_idx
-                dm.start_clip(DragMode.CLIP_MOVE, v_idx, seg_idx, x, y)
-                self.clip_selected.emit(v_idx, seg_idx)
+                modifiers = event.modifiers()
+                if modifiers & Qt.KeyboardModifier.ControlModifier:
+                    # Ctrl+클릭: 멀티 선택 토글
+                    key = (v_idx, seg_idx)
+                    if key in self._selected_clips:
+                        self._selected_clips.discard(key)
+                        # primary 갱신: 제거된 항목이 primary면 다른 항목으로 이동
+                        if (self._selected_clip_track_index == v_idx
+                                and self._selected_clip_index == seg_idx):
+                            remaining = list(self._selected_clips)
+                            if remaining:
+                                self._selected_clip_track_index, self._selected_clip_index = remaining[-1]
+                            else:
+                                self._selected_clip_track_index = -1
+                                self._selected_clip_index = -1
+                    else:
+                        self._selected_clips.add(key)
+                        self._selected_clip_track_index = v_idx
+                        self._selected_clip_index = seg_idx
+                    self._invalidate_static_cache()
+                    self.update()
+                    return
+                else:
+                    # 일반 클릭: 단일 선택 + 드래그 시작
+                    self._clear_selection()
+                    self._selected_clips = {(v_idx, seg_idx)}
+                    self._selected_clip_track_index = v_idx
+                    self._selected_clip_index = seg_idx
+                    dm.start_clip(DragMode.CLIP_MOVE, v_idx, seg_idx, x, y)
+                    self.clip_selected.emit(v_idx, seg_idx)
             elif hit == "clip_right_edge":
                 self._clear_selection()
                 self._selected_clip_track_index = v_idx
@@ -795,10 +860,32 @@ class TimelineWidget(QWidget):
         y = event.pos().y()
         menu = QMenu(self)
 
+        # 마커 히트 테스트 (ruler 영역 포함 전체 높이)
+        marker_idx = self._hit_test_marker(x)
+        if marker_idx >= 0:
+            rename_act = menu.addAction(tr("Rename Marker\u2026"))
+            remove_act = menu.addAction(tr("Remove Marker"))
+            action = menu.exec(event.globalPos())
+            if action == rename_act:
+                marker = self._project.markers[marker_idx]
+                new_name, ok = QInputDialog.getText(
+                    self, tr("Rename Marker\u2026"), tr("Marker name:"),
+                    text=marker.name
+                )
+                if ok:
+                    self.rename_marker_requested.emit(marker_idx, new_name)
+            elif action == remove_act:
+                self.remove_marker_requested.emit(marker_idx)
+            return
+
         # 비디오 클립 트랙 영역 우클릭
         seg_idx, hit, v_idx = self._hit_test(x, y)
         if hit.startswith("clip_"):
             vt = self._project.video_tracks[v_idx] if self._project else None
+            # 복사/붙여넣기 메뉴
+            copy_act = menu.addAction(tr("Copy Clip\tCtrl+C"))
+            paste_act = menu.addAction(tr("Paste Clip\tCtrl+V"))
+            menu.addSeparator()
             split_act = menu.addAction(tr("Split at Playhead (Ctrl+B)"))
             delete_act = None
             if vt and len(vt.clips) > 1:
@@ -837,11 +924,23 @@ class TimelineWidget(QWidget):
                 _act.setChecked(_lbl == _current_label)
                 _label_actions[_act] = _lbl
 
+            # 멀티 선택 시 일괄 삭제 메뉴
+            delete_multi_act = None
+            if len(self._selected_clips) > 1:
+                menu.addSeparator()
+                delete_multi_act = menu.addAction(tr("Delete %d Clips") % len(self._selected_clips))
+
             action = menu.exec(event.globalPos())
-            if action == split_act:
+            if action == copy_act:
+                self.clip_copy_requested.emit()
+            elif action == paste_act:
+                self.clip_paste_requested.emit()
+            elif action == split_act:
                 self.clip_split_requested.emit(v_idx, self._playhead_ms)
             elif delete_act and action == delete_act:
                 self.clip_deleted.emit(v_idx, seg_idx)
+            elif delete_multi_act and action == delete_multi_act:
+                self.clips_delete_requested.emit()
             elif trans_act and action == trans_act:
                 self.transition_requested.emit(v_idx, seg_idx)
             elif remove_trans_act and action == remove_trans_act:
@@ -1108,3 +1207,47 @@ class TimelineWidget(QWidget):
         event.acceptProposedAction()
 
         self.update()
+
+    # -------------------------------------------------------- 마커
+
+    def add_marker_at_playhead(self) -> None:
+        """플레이헤드 위치에 마커 추가 (M 키 / 메뉴 동작)."""
+        if not self._project:
+            return
+        # undo_stack은 부모(MainWindow)가 소유 — Signal로 요청을 위임한다.
+        self.add_marker_requested.emit(self._playhead_ms)
+
+    def _hit_test_marker(self, x: float) -> int:
+        """x 픽셀 위치에서 마커 히트 테스트. 인덱스 반환, 없으면 -1."""
+        if not self._project or not self._project.markers:
+            return -1
+        for i, marker in enumerate(self._project.markers):
+            mx = self._ms_to_x(marker.ms)
+            if abs(mx - x) <= 5:
+                return i
+        return -1
+
+    def keyPressEvent(self, event) -> None:
+        """M 키 → 마커 추가. Delete → 멀티 클립 삭제. Ctrl+C/V → 복사/붙여넣기."""
+        key = event.key()
+        modifiers = event.modifiers()
+        if key == Qt.Key.Key_M and not event.isAutoRepeat():
+            self.add_marker_at_playhead()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Delete and not event.isAutoRepeat():
+            if self._selected_clips:
+                self.clips_delete_requested.emit()
+            elif self._selected_clip_index >= 0:
+                self.clip_deleted.emit(self._selected_clip_track_index, self._selected_clip_index)
+            event.accept()
+            return
+        if key == Qt.Key.Key_C and modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.clip_copy_requested.emit()
+            event.accept()
+            return
+        if key == Qt.Key.Key_V and modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.clip_paste_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)

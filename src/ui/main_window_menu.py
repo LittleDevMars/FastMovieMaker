@@ -44,6 +44,11 @@ def build_main_window_menu(window) -> None:
 
     file_menu.addSeparator()
 
+    new_template_action = QAction(tr("New from &Template\u2026"), window)
+    new_template_action.triggered.connect(window._on_new_from_template)
+    file_menu.addAction(new_template_action)
+    file_menu.addSeparator()
+
     save_action = QAction(tr("&Save Project..."), window)
     save_action.setShortcut(QKeySequence("Ctrl+S"))
     save_action.triggered.connect(window._project_ctrl.on_save_project)
@@ -102,6 +107,23 @@ def build_main_window_menu(window) -> None:
     scene_detect_action = QAction(tr("Detect &Scenes..."), window)
     scene_detect_action.triggered.connect(window._on_scene_detect)
     edit_menu.addAction(scene_detect_action)
+    edit_menu.addSeparator()
+
+    marker_action = QAction(tr("Add &Marker"), window)
+    marker_action.setShortcut(QKeySequence("M"))
+    marker_action.triggered.connect(lambda: window._timeline.add_marker_at_playhead())
+    edit_menu.addSeparator()
+    edit_menu.addAction(marker_action)
+    edit_menu.addSeparator()
+
+    verify_tts_action = QAction(tr("Verify TTS Timing\u2026"), window)
+    verify_tts_action.triggered.connect(window._on_verify_tts_timing)
+    window._verify_tts_action = verify_tts_action
+    edit_menu.addAction(verify_tts_action)
+
+    batch_tts_action = QAction(tr("Batch TTS\u2026"), window)
+    batch_tts_action.triggered.connect(window._on_batch_tts)
+    edit_menu.addAction(batch_tts_action)
     edit_menu.addSeparator()
 
     preferences_action = QAction(tr("&Preferences..."), window)

@@ -239,6 +239,10 @@ class VideoClipTrack:
     muted: bool = False
     hidden: bool = False
     name: str = ""
+    blend_mode: str = "normal"       # "normal"|"screen"|"multiply"|"lighten"|"darken"|"chroma_key"
+    chroma_color: str = "#00FF00"    # 크로마키 키 컬러 (hex)
+    chroma_similarity: float = 0.3   # 0.01 – 1.0
+    chroma_blend: float = 0.1        # 0.0 – 1.0
 
     def _build_prefix(self) -> list[int]:
         """접두사 합 배열을 구축한다. O(n).

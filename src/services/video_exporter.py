@@ -367,11 +367,16 @@ def export_video(
                 if norm_w <= 0 or norm_h <= 0:
                     norm_w, norm_h = 1920, 1080
 
-            if video_tracks:
-                for t_idx, vt in enumerate(video_tracks):
+            # hidden 트랙 제외
+            effective_tracks = [
+                (i, vt) for i, vt in enumerate(video_tracks or []) if not vt.hidden
+            ]
+
+            if effective_tracks:
+                for t_idx, vt in effective_tracks:
                     if not vt.clips:
                         continue
-                    
+
                     # Concat clips in this track
                     prefix = f"t{t_idx}"
                     parts, v_label, a_label = _build_concat_filter(
@@ -381,33 +386,55 @@ def export_video(
                     # Rename labels to avoid collisions between tracks
                     new_v = f"[{prefix}v]"
                     new_a = f"[{prefix}a]"
-                    # We need to manually adjust label names in parts or just wrap
-                    # Actually _build_concat_filter uses [concatv][concata] at the end.
                     for p in parts:
                         p_mod = p.replace("[concatv]", new_v).replace("[concata]", new_a)
                         fc_parts.append(p_mod)
-                    
+
                     track_v_labels.append(new_v)
                     track_a_labels.append(new_a)
             else:
                 fc_parts.append(f"[0:v]scale={norm_w}:{norm_h}:force_original_aspect_ratio=decrease,pad={norm_w}:{norm_h}:(ow-iw)/2:(oh-ih)/2[basev]")
                 track_v_labels.append("[basev]")
                 track_a_labels.append("[0:a]")
+                effective_tracks = []
 
-            # 2. Composite video tracks (overlay)
+            # 2. Composite video tracks (블렌드 모드 + 크로마키 지원)
             current = track_v_labels[0]
             for i in range(1, len(track_v_labels)):
+                _, vt = effective_tracks[i] if effective_tracks else (None, None)
                 next_label = f"[comp{i}]"
-                fc_parts.append(f"{current}{track_v_labels[i]}overlay=format=auto{next_label}")
+                bm = getattr(vt, "blend_mode", "normal") if vt else "normal"
+                if bm == "chroma_key" and vt:
+                    keyed = f"[keyed{i}]"
+                    color = vt.chroma_color.lstrip("#")
+                    fc_parts.append(
+                        f"{track_v_labels[i]}chromakey=color=0x{color}"
+                        f":similarity={vt.chroma_similarity:.2f}:blend={vt.chroma_blend:.2f}{keyed}"
+                    )
+                    fc_parts.append(f"{current}{keyed}overlay=format=auto{next_label}")
+                elif bm in ("screen", "multiply", "lighten", "darken"):
+                    fc_parts.append(
+                        f"{current}{track_v_labels[i]}blend=all_mode={bm}{next_label}"
+                    )
+                else:  # "normal"
+                    fc_parts.append(f"{current}{track_v_labels[i]}overlay=format=auto{next_label}")
                 current = next_label
 
-            # 3. Mix audio tracks
-            if len(track_a_labels) > 1:
-                amix_in = "".join(track_a_labels)
-                fc_parts.append(f"{amix_in}amix=inputs={len(track_a_labels)}[track_outa]")
+            # 3. Mix audio tracks (muted 트랙 제외)
+            unmuted_a_labels = [
+                track_a_labels[i]
+                for i, (_, vt) in enumerate(effective_tracks)
+                if not vt.muted
+            ] if effective_tracks else track_a_labels
+            if not unmuted_a_labels:
+                unmuted_a_labels = track_a_labels[:1]  # 최소 1개 유지
+
+            if len(unmuted_a_labels) > 1:
+                amix_in = "".join(unmuted_a_labels)
+                fc_parts.append(f"{amix_in}amix=inputs={len(unmuted_a_labels)}[track_outa]")
                 final_a_label = "[track_outa]"
             else:
-                final_a_label = track_a_labels[0]
+                final_a_label = unmuted_a_labels[0]
 
             # Template overlay — scale to fill canvas exactly (template is designed for this ratio)
             if template_idx >= 0:

@@ -18,6 +18,7 @@ class TrackHeaderPanel(QWidget):
     track_add_requested = Signal()
     track_remove_requested = Signal(int)
     track_rename_requested = Signal(int)
+    track_settings_requested = Signal(int)   # track_index
     subtitle_rename_requested = Signal()
     
     # Constants matching TimelineWidget
@@ -48,6 +49,12 @@ class TrackHeaderPanel(QWidget):
         self.setFixedWidth(120)
         self._timeline = timeline
         self._project = None
+        self._active_track_index: int = 0
+
+    def set_active_track(self, index: int) -> None:
+        """활성 비디오 트랙 인덱스를 설정하고 헤더를 갱신한다."""
+        self._active_track_index = index
+        self.update()
 
     def set_project(self, project):
         self._project = project
@@ -165,7 +172,11 @@ class TrackHeaderPanel(QWidget):
 
     def _draw_track_header(self, painter, info):
         y, h, name = info["y"], info["h"], info["name"]
-        
+
+        # 활성 비디오 트랙 인디케이터 (4px 파란 좌측 막대)
+        if info.get("track_type") == "video" and info.get("index") == self._active_track_index:
+            painter.fillRect(0, int(y), 4, int(h), self._ACTIVE_COLOR)
+
         # BG for track
         painter.setPen(self._BORDER_COLOR)
         painter.drawLine(0, int(y + h), self.width(), int(y + h))
@@ -237,10 +248,10 @@ class TrackHeaderPanel(QWidget):
     def _show_context_menu(self, event):
         menu = QMenu(self)
         add_act = menu.addAction(tr("Add Video Track"))
-        
+
         y = event.position().y()
         clicked_index = -1
-        
+
         for info in self._get_tracks_layout():
             if info["track_type"] == "video":
                 ty = info["y"]
@@ -248,16 +259,21 @@ class TrackHeaderPanel(QWidget):
                 if ty <= y < ty + th:
                     clicked_index = info["index"]
                     break
-        
+
         remove_act = None
-        if clicked_index >= 0 and len(self._project.video_tracks) > 1:
-            remove_act = menu.addAction(tr("Remove Video Track"))
-            
+        settings_act = None
+        if clicked_index >= 0:
+            if len(self._project.video_tracks) > 1:
+                remove_act = menu.addAction(tr("Remove Video Track"))
+            settings_act = menu.addAction(tr("Track Settings…"))
+
         action = menu.exec(event.globalPos())
         if action == add_act:
             self.track_add_requested.emit()
         elif remove_act and action == remove_act:
             self.track_remove_requested.emit(clicked_index)
+        elif settings_act and action == settings_act:
+            self.track_settings_requested.emit(clicked_index)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if not self._project:

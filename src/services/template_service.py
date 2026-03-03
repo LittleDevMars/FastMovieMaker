@@ -8,11 +8,12 @@ import uuid
 from pathlib import Path
 
 from src.models.overlay_template import OverlayTemplate
+from src.utils.resource_path import get_resource_path
 
 
 def _get_builtin_dir() -> Path:
     """Return the built-in templates directory."""
-    return Path(__file__).resolve().parent.parent.parent / "resources" / "templates"
+    return get_resource_path("resources/templates")
 
 
 def _get_user_dir() -> Path:
