@@ -43,10 +43,14 @@ class VideoLoadWorker(QObject):
         """Execute video preparation logic."""
         try:
             playback_path = self._source_path
-            
+
             # 1. Check if conversion is needed
-            if sys.platform == "darwin" and self._source_path.suffix.lower() in self._NEEDS_CONVERT:
-                self.progress.emit(f"Converting {self._source_path.name} to MP4...")
+            convert_reason = self._get_conversion_reason(self._source_path)
+            if convert_reason:
+                if convert_reason == "apv":
+                    self.progress.emit(f"APV codec detected. Converting {self._source_path.name} to MP4...")
+                else:
+                    self.progress.emit(f"Converting {self._source_path.name} to MP4...")
                 converted = self._convert_to_mp4(self._source_path)
                 
                 if self._cancelled:
@@ -80,6 +84,35 @@ class VideoLoadWorker(QObject):
                 # Cleanup temp file if error occurred
                 if self._temp_path is not None and self._temp_path.is_file():
                     self._temp_path.unlink(missing_ok=True)
+
+    def _get_conversion_reason(self, source: Path) -> str | None:
+        """Return conversion reason: 'apv' | 'container' | None."""
+        if self._is_apv_codec(source):
+            return "apv"
+        if sys.platform == "darwin" and source.suffix.lower() in self._NEEDS_CONVERT:
+            return "container"
+        return None
+
+    def _is_apv_codec(self, source: Path) -> bool:
+        """Detect APV codec using ffprobe video stream codec_name."""
+        runner = get_ffmpeg_runner()
+        if not runner.is_available():
+            return False
+        try:
+            result = runner.run_ffprobe(
+                [
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(source),
+                ],
+                timeout=10,
+            )
+            codec_name = (result.stdout or "").strip().lower()
+            return codec_name == "apv"
+        except Exception:
+            return False
 
     def _convert_to_mp4(self, source: Path) -> Path | None:
         """Convert a non-MP4 video to a temp MP4 file using FFmpeg.
