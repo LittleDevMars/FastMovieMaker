@@ -44,6 +44,28 @@ class TestExportIntegration:
         assert call_kwargs["audio_path"] == audio_path
         assert call_kwargs["video_volume"] == 0.5
         assert call_kwargs["audio_volume"] == 1.2
+        assert call_kwargs["use_gpu"] is False
+
+    @patch("src.workers.export_worker.export_video")
+    def test_export_worker_passes_gpu_flag_and_status_callback(self, mock_export):
+        """Verify ExportWorker forwards use_gpu and status callback."""
+        def _fake_export(*args, **kwargs):
+            kwargs["on_status"]("GPU export failed, retrying with software encoder...")
+
+        mock_export.side_effect = _fake_export
+        worker = ExportWorker(
+            video_path=Path("video.mp4"),
+            track=SubtitleTrack(),
+            output_path=Path("out.mp4"),
+            use_gpu=True,
+        )
+        status_messages: list[str] = []
+        worker.status.connect(status_messages.append)
+        worker.run()
+        kwargs = mock_export.call_args[1]
+        assert kwargs["use_gpu"] is True
+        assert callable(kwargs["on_status"])
+        assert any("retrying with software" in m.lower() for m in status_messages)
 
     @patch("src.services.audio_regenerator.AudioRegenerator.regenerate_track_audio")
     @patch("src.workers.export_worker.export_video")

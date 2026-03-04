@@ -20,6 +20,7 @@ class ExportWorker(QObject):
     """
 
     progress = Signal(float, float)
+    status = Signal(str)
     finished = Signal(str)
     error = Signal(str)
 
@@ -71,6 +72,7 @@ class ExportWorker(QObject):
                 self._track,
                 self._output_path,
                 on_progress=lambda total, cur: self.progress.emit(total, cur),
+                on_status=lambda message: self.status.emit(message),
                 audio_path=self._audio_path,
                 overlay_path=self._overlay_path,
                 image_overlays=self._image_overlays,
@@ -81,6 +83,7 @@ class ExportWorker(QObject):
                 crf=self._crf,
                 scale_width=self._scale_width,
                 scale_height=self._scale_height,
+                use_gpu=self._use_gpu,
                 mix_with_original_audio=self._mix_with_original_audio,
                 video_volume=self._video_volume,
                 audio_volume=self._audio_volume,

@@ -165,11 +165,76 @@ def _build_concat_filter(
     return parts, "[concatv]", "[concata]"
 
 
+def _resolve_encoder(
+    codec: str,
+    preset: str,
+    crf: int,
+    use_gpu: bool,
+    output_suffix: str,
+) -> tuple[str, list[str], bool]:
+    """Resolve video encoder and flags.
+
+    Returns:
+        (video_encoder, encoder_flags, is_hardware_encoder)
+    """
+    # WebM uses VP9 software path for compatibility.
+    if output_suffix == ".webm":
+        return "libvpx-vp9", ["-crf", str(crf), "-b:v", "0"], False
+
+    if use_gpu:
+        from src.utils.hw_accel import get_hw_encoder
+
+        hw_encoder, _ = get_hw_encoder(codec)
+        video_encoder = hw_encoder
+        if "videotoolbox" in hw_encoder:
+            # VideoToolbox quality is 0-100 where higher is better.
+            quality = int(max(0, min(100, 100 - (crf * 1.5))))
+            encoder_flags = ["-q:v", str(quality), "-realtime", "0"]
+        elif "nvenc" in hw_encoder:
+            encoder_flags = ["-preset", "p4", "-cq", str(crf)]
+        elif "qsv" in hw_encoder:
+            encoder_flags = ["-global_quality", str(crf), "-look_ahead", "1"]
+        elif "amf" in hw_encoder:
+            encoder_flags = ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
+        elif "vaapi" in hw_encoder:
+            encoder_flags = ["-rc_mode", "CQP", "-global_quality", str(crf)]
+        else:
+            # Unknown encoder from helper -> software fallback profile.
+            video_encoder = "libx265" if codec == "hevc" else "libx264"
+            encoder_flags = ["-preset", preset, "-crf", str(crf)]
+        encoder_flags.extend(["-pix_fmt", "yuv420p"])
+        return video_encoder, encoder_flags, "libx" not in video_encoder
+
+    sw_encoder = "libx265" if codec == "hevc" else "libx264"
+    sw_flags = ["-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    return sw_encoder, sw_flags, False
+
+
+def _looks_like_hw_failure(stderr: str) -> bool:
+    """Best-effort detection of hardware encoder init/device failures."""
+    text = (stderr or "").lower()
+    needles = (
+        "nvenc",
+        "videotoolbox",
+        "qsv",
+        "amf",
+        "vaapi",
+        "device",
+        "no capable devices found",
+        "cannot load",
+        "failed to initialise",
+        "error initializing output stream",
+        "invalid argument",
+    )
+    return any(n in text for n in needles)
+
+
 def export_video(
     video_path: Path,
     track: SubtitleTrack,
     output_path: Path,
     on_progress: callable | None = None,
+    on_status: callable | None = None,
     audio_path: Path | None = None,
     scale_width: int = 0,
     scale_height: int = 0,
@@ -193,6 +258,7 @@ def export_video(
         track: Subtitle track to burn.
         output_path: Destination video file.
         on_progress: Optional callback(duration_sec, current_sec) for progress.
+        on_status: Optional callback(message) for export status updates.
         audio_path: Optional path to replacement audio file (e.g. TTS mixed audio).
         scale_width: Target width in pixels (0 = keep original).
         scale_height: Target height in pixels (0 = keep original).
@@ -203,6 +269,7 @@ def export_video(
         image_overlays: Optional list of ImageOverlay objects.
         video_tracks: Optional list of video tracks to composite.
         text_overlays: Optional list of TextOverlay objects to render.
+        use_gpu: Prefer hardware encoder when available.
         mix_with_original_audio: If True, mix audio_path with video audio instead of replacing it.
         video_volume: Volume multiplier for the original video audio (0.0-1.0+).
         audio_volume: Volume multiplier for the external audio_path (0.0-1.0+).
@@ -237,52 +304,17 @@ def export_video(
             # ASS filter syntax: ass=path
             subs_filter = f"ass={subs_str}"
 
-        # Determine encoder based on output container
-        from src.utils.hw_accel import get_hw_encoder
-
-        if output_path.suffix.lower() == ".webm":
-            video_encoder = "libvpx-vp9"
-            encoder_flags = ["-crf", str(crf), "-b:v", "0"]
+        output_suffix = output_path.suffix.lower()
+        video_encoder, encoder_flags, is_hw_encoder = _resolve_encoder(
+            codec=codec,
+            preset=preset,
+            crf=crf,
+            use_gpu=use_gpu,
+            output_suffix=output_suffix,
+        )
+        if output_suffix == ".webm":
             audio_codec_flags = ["-c:a", "libvorbis", "-b:a", audio_bitrate]
         else:
-            # Determine encoder and flags based on GPU preference
-            if use_gpu:
-                hw_encoder, hw_flags = get_hw_encoder(codec)
-                video_encoder = hw_encoder
-                encoder_flags = hw_flags
-                
-                # If using HW, we might need to adjust flags based on specific encoder
-                if "videotoolbox" in hw_encoder:
-                    # VideoToolbox quality is 0-100, where 100 is best.
-                    # CRF 23 is roughly 65-70 quality.
-                    quality = int(max(0, min(100, 100 - (crf * 1.5)))) # Very loose mapping
-                    encoder_flags = ["-q:v", str(int(quality)), "-realtime", "0"]
-                elif "nvenc" in hw_encoder:
-                    # NVENC supports -cq and -preset
-                    encoder_flags = ["-preset", "p4", "-cq", str(crf)]
-                elif "qsv" in hw_encoder:
-                    # QSV supports -global_quality for ICQ (Intelligent Constant Quality)
-                    encoder_flags = ["-global_quality", str(crf), "-look_ahead", "1"]
-                elif "amf" in hw_encoder:
-                    # AMF CQP mode
-                    encoder_flags = ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
-                elif "vaapi" in hw_encoder:
-                    # VAAPI CQP mode
-                    encoder_flags = ["-rc_mode", "CQP", "-global_quality", str(crf)]
-            else:
-                if codec == "h264":
-                    video_encoder = "libx264"
-                elif codec == "hevc":
-                    video_encoder = "libx265"
-                else:
-                    video_encoder = "libx264"
-                
-                encoder_flags = [
-                    "-preset", preset,
-                    "-crf", str(crf),
-                ]
-
-            encoder_flags.extend(["-pix_fmt", "yuv420p"])
             audio_codec_flags = ["-c:a", "aac", "-b:a", audio_bitrate]
 
         # Determine if overlay / PIP is used
@@ -623,55 +655,87 @@ def export_video(
                     str(output_path),
                 ]
 
-        log_ffmpeg_command(args)
-
-        process = runner.run_async(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-
-        # Drain stderr in a background thread
-        stderr_chunks: list[str] = []
-
-        def _drain_stderr():
+        def _replace_video_encoder_args(
+            command: list[str],
+            new_encoder: str,
+            new_flags: list[str],
+        ) -> list[str]:
+            updated = list(command)
+            idx = updated.index("-c:v")
+            updated[idx + 1] = new_encoder
             try:
-                for line in process.stderr:
-                    log_ffmpeg_line(line)
-                    stderr_chunks.append(line)
-            except Exception:
-                pass
+                end_idx = updated.index("-c:a", idx + 2)
+            except ValueError:
+                end_idx = updated.index("-y", idx + 2)
+            updated[idx + 2:end_idx] = new_flags
+            return updated
 
-        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-        stderr_thread.start()
-
-        # Parse -progress output for duration tracking
+        # Parse -progress output against target duration
         if multi_track and video_tracks:
             total_duration = max((vt.output_duration_ms for vt in video_tracks), default=0) / 1000.0
         else:
             total_duration = _get_video_duration(runner, video_path)
 
-        if process.stdout:
-            for line in process.stdout:
-                line = line.strip()
-                if line.startswith("out_time_us="):
-                    try:
-                        us = int(line.split("=")[1])
-                        current_sec = us / 1_000_000
-                        if on_progress and total_duration > 0:
-                            on_progress(total_duration, current_sec)
-                    except (ValueError, IndexError):
-                        pass
+        def _run_once(command: list[str]) -> tuple[int, str]:
+            log_ffmpeg_command(command)
+            process = runner.run_async(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
 
-        process.wait()
-        stderr_thread.join(timeout=10)
+            stderr_chunks: list[str] = []
 
-        if process.returncode != 0:
-            stderr = "".join(stderr_chunks)
-            raise RuntimeError(f"FFmpeg failed (code {process.returncode}): {stderr[:500]}")
+            def _drain_stderr():
+                try:
+                    for line in process.stderr:
+                        log_ffmpeg_line(line)
+                        stderr_chunks.append(line)
+                except Exception:
+                    pass
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            if process.stdout:
+                for line in process.stdout:
+                    line = line.strip()
+                    if line.startswith("out_time_us="):
+                        try:
+                            us = int(line.split("=")[1])
+                            current_sec = us / 1_000_000
+                            if on_progress and total_duration > 0:
+                                on_progress(total_duration, current_sec)
+                        except (ValueError, IndexError):
+                            pass
+
+            process.wait()
+            stderr_thread.join(timeout=10)
+            return process.returncode, "".join(stderr_chunks)
+
+        return_code, stderr = _run_once(args)
+
+        if return_code != 0 and use_gpu and is_hw_encoder and _looks_like_hw_failure(stderr):
+            fallback_msg = "GPU export failed, retrying with software encoder..."
+            log_ffmpeg_line(fallback_msg)
+            if on_status:
+                on_status(fallback_msg)
+            output_path.unlink(missing_ok=True)
+            sw_encoder, sw_flags, _ = _resolve_encoder(
+                codec=codec,
+                preset=preset,
+                crf=crf,
+                use_gpu=False,
+                output_suffix=output_suffix,
+            )
+            fallback_args = _replace_video_encoder_args(args, sw_encoder, sw_flags)
+            return_code, stderr = _run_once(fallback_args)
+
+        if return_code != 0:
+            raise RuntimeError(f"FFmpeg failed (code {return_code}): {stderr[:500]}")
 
     finally:
         tmp_subs.unlink(missing_ok=True)

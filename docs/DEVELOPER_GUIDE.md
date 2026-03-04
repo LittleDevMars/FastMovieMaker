@@ -70,6 +70,11 @@ scripts/install_git_hooks.sh
 - 배포 워크플로 대상 변경점 확인(`build_macos.sh`, `build_windows.bat`, workflow)
 - 사용자 영향 기능은 수동 시나리오 1회 이상 검증
 
+## GPU Export 정책 (MVP)
+- ExportDialog의 GPU 체크 시 하드웨어 인코더를 우선 시도합니다.
+- 하드웨어 인코더 실패 시 소프트웨어 인코더로 자동 fallback 1회 재시도합니다.
+- CRF는 인코더별 근사 매핑값을 사용하며(예: NVENC `-cq`, VideoToolbox `-q:v`), 품질 완전 동등성은 보장하지 않습니다.
+
 ## PR 체크리스트
 - 기능 변경에 대한 테스트가 추가/수정되었는가?
 - `README.md`, `TODO.md`, `PROGRESS.md`의 수치/상태가 최신인가?

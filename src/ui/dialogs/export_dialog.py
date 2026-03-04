@@ -566,6 +566,7 @@ class ExportDialog(QDialog):
 
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
+        self._worker.status.connect(self._on_worker_status)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._cleanup_thread)
@@ -614,6 +615,11 @@ class ExportDialog(QDialog):
             self._status_label.setText(
                 f"Exporting: {current_sec:.1f}s / {total_sec:.1f}s ({pct}%)"
             )
+
+    def _on_worker_status(self, message: str) -> None:
+        """Handle status updates from ExportWorker/export_video."""
+        if message:
+            self._status_label.setText(message)
 
     def _on_finished(self, output_path: str) -> None:
         self._progress_bar.setValue(100)
