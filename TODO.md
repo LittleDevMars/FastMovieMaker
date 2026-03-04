@@ -15,7 +15,7 @@
 - [x] ~~영상 두 개 이상일 때 클립 분할 안 되는 문제~~ (수정 완료)
 
 ### 중요 (High)
-- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 762/762 통과)
+- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 800/800 통과)
 
 ### 보통 (Medium)
 - [x] ~~프레임 스냅 활성화 시 UI 피드백~~ (완료 Day 38)
@@ -41,14 +41,16 @@
 - [x] ~~README.md 작성~~ (완료)
 - [x] ~~TTS 사용 가이드 (한/영)~~ (완료)
 - [x] ~~MIT License 추가~~ (완료)
-- [ ] 개발자 가이드 (아키텍처, 기여 방법)
+- [x] ~~개발자 가이드 (아키텍처, 기여 방법)~~ (`docs/DEVELOPER_GUIDE.md`, Day 42)
 - [ ] 비디오 튜토리얼
 
 ---
 
 ## 📌 최근 완료 / Recently Completed
 
-- ✅ 테스트 수치 검증 + 문서 재동기화 — `pytest --collect-only` 기준 800 tests collected 확인, README 수치/배지 갱신 - 2026-03-04
+- ✅ CI 문서-테스트 수치 검증 자동화 — `scripts/sync_test_counts.py` 추가(update/check 모드), `.github/workflows/test-count-sync.yml`로 PR/푸시 시 수치 불일치 차단 - 2026-03-04
+- ✅ 개발자 가이드 착수 — `docs/DEVELOPER_GUIDE.md` 신규 작성(로컬 셋업, 아키텍처 원칙, 테스트/PR 체크리스트) - 2026-03-04
+- ✅ 테스트 수치 검증 + 문서 재동기화 — `pytest --collect-only` 기준 800 tests collected, `pytest -q` 기준 800/800 passed 확인, README 수치/배지 갱신 - 2026-03-04
 - ✅ 문서 동기화 + 테스트 안정화 — README/PROGRESS/TODO 최신화, TTS 진행률 GUI 테스트 픽스, pytest slow 마커 등록 (762 테스트) - 2026-03-04
 - ✅ Phase PERF/UX3 — gzip 프로젝트 압축(50-70% 파일 크기 감소), 중복 비디오 로드 제거, import 최적화 (744 테스트) - 2026-03-03
 - ✅ Phase ANIM2+CC2 — 자막 애니메이션 인디케이터·일괄 적용, Hue 슬라이더, 트랙 일괄 색보정 (731 테스트) - 2026-03-03
@@ -68,4 +70,4 @@
 
 ---
 
-**Last Updated**: 2026-03-04 (Day 41)
+**Last Updated**: 2026-03-04 (Day 42)
