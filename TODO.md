@@ -48,6 +48,7 @@
 
 ## 📌 최근 완료 / Recently Completed
 
+- ✅ 테스트 수치 검증 + 문서 재동기화 — `pytest --collect-only` 기준 800 tests collected 확인, README 수치/배지 갱신 - 2026-03-04
 - ✅ 문서 동기화 + 테스트 안정화 — README/PROGRESS/TODO 최신화, TTS 진행률 GUI 테스트 픽스, pytest slow 마커 등록 (762 테스트) - 2026-03-04
 - ✅ Phase PERF/UX3 — gzip 프로젝트 압축(50-70% 파일 크기 감소), 중복 비디오 로드 제거, import 최적화 (744 테스트) - 2026-03-03
 - ✅ Phase ANIM2+CC2 — 자막 애니메이션 인디케이터·일괄 적용, Hue 슬라이더, 트랙 일괄 색보정 (731 테스트) - 2026-03-03
@@ -67,4 +68,4 @@
 
 ---
 
-**Last Updated**: 2026-03-04 (Day 40)
+**Last Updated**: 2026-03-04 (Day 41)

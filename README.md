@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
-[![Tests](https://img.shields.io/badge/tests-762%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-800%20collected-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
@@ -27,7 +27,7 @@
 - **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
 - 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
 - 끊김 없는 클립 간 자동 소스 전환
-- **762개의 유닛 테스트**로 검증된 견고한 재생 시스템
+- **800개 테스트(collect 기준)**로 검증된 견고한 재생 시스템
 - **GPU 가속 인코딩** — NVENC, QSV, AMF 내보내기 가속 지원
 - **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 - **자석 스냅 (Magnetic Snap)** — 클립 이동 시 인접 클립 및 플레이헤드에 자동 정렬 (Toggle: `S`)
@@ -252,7 +252,7 @@ python main.py
 
 ### 포괄적인 테스트 스위트
 ```bash
-# 전체 테스트 실행 (현재 기준 762개 통과)
+# 전체 테스트 실행 (현재 기준 800개 수집 확인)
 QT_QPA_PLATFORM=offscreen pytest tests/ -q
 
 # 주요 테스트 모듈:
