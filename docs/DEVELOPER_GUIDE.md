@@ -1,7 +1,7 @@
 # FastMovieMaker Developer Guide
 
 ## 목적
-이 문서는 FastMovieMaker에 기여할 때 필요한 최소 개발 흐름, 아키텍처 규칙, 테스트 규칙을 정리합니다.
+이 문서는 FastMovieMaker 기여 시 필요한 개발 흐름과 품질 기준을 정의합니다.
 
 ## 로컬 개발 환경
 ```bash
@@ -23,25 +23,52 @@ python3 main.py
 - 워커 시그널은 컨트롤러(QObject)에서 받아 메인 스레드에서 UI를 갱신합니다.
 - 시간 단위는 내부적으로 `milliseconds(int)`를 사용합니다.
 
-## 코드 변경 가이드
-- 작은 단위로 커밋합니다: `feat:`, `fix:`, `docs:`, `chore:`.
+## 브랜치 및 커밋 규칙
+- 기능/수정 브랜치는 `codex/<short-topic>` 형식을 사용합니다.
+- 커밋 타입은 `feat:`, `fix:`, `test:`, `docs:`, `chore:`를 사용합니다.
+- 커밋은 가능한 작은 단위로 분리합니다(기능/리팩터/문서 혼합 금지).
 - 런타임 산출물(`.fastmoviemaker/`, 로그, 캐시)은 커밋하지 않습니다.
-- 새 기능에는 가능하면 단위 테스트를 함께 추가합니다.
 
-## 테스트 가이드
+## 테스트 전략
+### Unit
+- 모델/서비스 로직은 Qt 의존성 없이 단위 테스트를 우선 작성합니다.
+
+### Integration
+- 컨트롤러, export, 프로젝트 I/O 등 계층 연동 동작을 테스트합니다.
+
+### GUI
+- `pytest-qt`로 위젯 상태 변경/시그널 흐름을 검증합니다.
+- GUI 테스트는 `QT_QPA_PLATFORM=offscreen` 환경에서 실행합니다.
+
+기본 명령:
 ```bash
-# 빠른 전체 검증
+# 전체 테스트
 QT_QPA_PLATFORM=offscreen pytest tests/ -q
 
 # 테스트 수 수집 확인
 QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only
-```
 
-문서 테스트 수치 동기화:
-```bash
+# 문서 테스트 수치 동기화(운영 모드: Day 자동 갱신 없음)
 python3 scripts/sync_test_counts.py
 python3 scripts/sync_test_counts.py --check
 ```
+
+## Pre-push 루틴
+권장 실행:
+```bash
+scripts/pre_push_checks.sh
+```
+
+Git hook 자동 설정:
+```bash
+scripts/install_git_hooks.sh
+```
+
+## 릴리즈 체크리스트
+- 전체 테스트 통과 (`pytest tests/ -q`)
+- 문서 테스트 수치 동기화 확인 (`sync_test_counts.py --check`)
+- 배포 워크플로 대상 변경점 확인(`build_macos.sh`, `build_windows.bat`, workflow)
+- 사용자 영향 기능은 수동 시나리오 1회 이상 검증
 
 ## PR 체크리스트
 - 기능 변경에 대한 테스트가 추가/수정되었는가?

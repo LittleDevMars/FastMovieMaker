@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -55,6 +56,7 @@ class WhisperDialog(QDialog):
         self._worker: WhisperWorker | None = None
         self._segment_count = 0
         self._cancelling = False
+        self._preview_lines: list[str] = []
 
         self._build_ui()
 
@@ -83,6 +85,16 @@ class WhisperDialog(QDialog):
         # Status
         self._status_label = QLabel(tr("Ready"))
         layout.addWidget(self._status_label)
+
+        # Live subtitle preview
+        self._preview_label = QLabel(tr("Live Preview"))
+        layout.addWidget(self._preview_label)
+        self._preview_text = QPlainTextEdit()
+        self._preview_text.setReadOnly(True)
+        self._preview_text.setPlaceholderText(tr("Whisper segments will appear here in real time."))
+        self._preview_text.setMaximumBlockCount(8)
+        self._preview_text.setFixedHeight(120)
+        layout.addWidget(self._preview_text)
 
         # Progress bar
         self._progress_bar = QProgressBar()
@@ -120,6 +132,8 @@ class WhisperDialog(QDialog):
         self._progress_bar.setVisible(True)
         self._progress_bar.setRange(0, 0)
         self._segment_count = 0
+        self._preview_lines.clear()
+        self._preview_text.clear()
 
         model_name = self._model_combo.currentText()
         language = self._lang_combo.currentText()
@@ -234,6 +248,14 @@ class WhisperDialog(QDialog):
         self._status_label.setText(
             f"{tr('Transcribing audio (faster-whisper)...')} — {tr('Segments')}: {self._segment_count}"
         )
+        text = getattr(segment, "text", "").strip()
+        if text:
+            self._preview_lines.append(text)
+            self._preview_lines = self._preview_lines[-8:]
+            self._preview_text.setPlainText("\n".join(self._preview_lines))
+            self._preview_text.verticalScrollBar().setValue(
+                self._preview_text.verticalScrollBar().maximum()
+            )
         self.segment_ready.emit(segment)
 
     def _on_progress(self, current: int, total: int) -> None:

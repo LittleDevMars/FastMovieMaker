@@ -4,12 +4,15 @@
 Usage:
   python scripts/sync_test_counts.py          # update docs in-place
   python scripts/sync_test_counts.py --check  # fail if docs are out of sync
+
+Operational mode:
+- Does NOT auto-increment Day counters.
+- Only updates test-count related text blocks.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import os
 import re
 import subprocess
@@ -65,7 +68,6 @@ def _replace(text: str, pattern: str, repl: str, *, expected_min: int = 1) -> st
 
 
 def build_updated_text(path: Path, text: str, passed: int, collected: int) -> str:
-    today = dt.date.today().isoformat()
     if path == README:
         badge = (
             f"[![Tests](https://img.shields.io/badge/tests-{passed}%20passed%20%2F%20"
@@ -84,16 +86,11 @@ def build_updated_text(path: Path, text: str, passed: int, collected: int) -> st
         text = _replace(
             text,
             r"# 전체 테스트 실행 \(현재 기준 .+\)",
-            f"# 전체 테스트 실행 (현재 기준 {passed} passed / {collected} collected, {today})",
+            f"# 전체 테스트 실행 (현재 기준 {passed} passed / {collected} collected)",
         )
         return text
 
     if path == PROGRESS:
-        text = _replace(
-            text,
-            r"\*\*현재 상태:\*\* Day \d+ 완료 \(\d{4}-\d{2}-\d{2}\)",
-            f"**현재 상태:** Day 42 완료 ({today})",
-        )
         text = _replace(
             text,
             r"전체 테스트 \*\*\d+/\d+ passed\*\*",
@@ -101,15 +98,15 @@ def build_updated_text(path: Path, text: str, passed: int, collected: int) -> st
         )
         text = _replace(
             text,
-            r"\| \*\*테스트 수치 검증 \+ 문서 재동기화\*\* — .+\| \*\*완료 \(Day \d+\)\*\*",
+            r"(\| \*\*테스트 수치 검증 \+ 문서 재동기화\*\* — ).+?(\| \*\*완료 \(Day \d+\)\*\*)",
             (
-                "| **테스트 수치 검증 + 문서 재동기화** — "
+                r"\1"
                 "`QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only` 실행으로 "
                 f"**{collected} tests collected** 확인, "
                 "`QT_QPA_PLATFORM=offscreen pytest tests/ -q` 실행으로 "
                 f"**{passed}/{collected} passed** 확인, "
-                "`README.md` 현재 수치/배지 문구 동기화"
-                " | **완료 (Day 42)**"
+                "`README.md` 현재 수치/배지 문구 동기화 "
+                r"\2"
             ),
         )
         return text
@@ -122,20 +119,15 @@ def build_updated_text(path: Path, text: str, passed: int, collected: int) -> st
         )
         text = _replace(
             text,
-            r"- ✅ 테스트 수치 검증 \+ 문서 재동기화 — .+ - \d{4}-\d{2}-\d{2}",
+            r"(- ✅ 테스트 수치 검증 \+ 문서 재동기화 — ).+( - \d{4}-\d{2}-\d{2})",
             (
-                "- ✅ 테스트 수치 검증 + 문서 재동기화 — "
+                r"\1"
                 "`pytest --collect-only` 기준 "
                 f"{collected} tests collected, "
                 f"`pytest -q` 기준 {passed}/{collected} passed 확인, "
                 "README 수치/배지 갱신"
-                f" - {today}"
+                r"\2"
             ),
-        )
-        text = _replace(
-            text,
-            r"\*\*Last Updated\*\*: \d{4}-\d{2}-\d{2} \(Day \d+\)",
-            f"**Last Updated**: {today} (Day 42)",
         )
         return text
 
