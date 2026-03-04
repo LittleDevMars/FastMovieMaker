@@ -98,6 +98,7 @@ class ExportDialog(QDialog):
         self._temp_audio_path: Path | None = None
         self._thumb_tmp_path: str | None = None
         self._preset_manager = ExportPresetManager()
+        self._hw_info = get_hw_info()
 
         # Check if track has TTS audio segments
         self._has_tts = any(seg.audio_file for seg in track.segments)
@@ -321,16 +322,23 @@ class ExportDialog(QDialog):
 
         # GPU Acceleration
         self._gpu_checkbox = QCheckBox(tr("Use Hardware Acceleration (GPU)"))
-        hw_info = get_hw_info()
-        has_hw = hw_info.get("recommended") is not None and hw_info.get("recommended") != "software"
+        has_hw = any("libx" not in c for c in self._hw_info.get("candidates", []))
         self._gpu_checkbox.setChecked(has_hw)
         if has_hw:
             self._gpu_checkbox.setToolTip(tr("Hardware acceleration is available on this system."))
         else:
             self._gpu_checkbox.setEnabled(False)
-            self._gpu_checkbox.setToolTip(tr("No hardware encoder detected."))
-        
+            reason_map = self._hw_info.get("unavailable_reasons", {})
+            if reason_map:
+                reason_text = "; ".join(f"{k}: {v}" for k, v in reason_map.items())
+                self._gpu_checkbox.setToolTip(f"{tr('No hardware encoder detected.')}\n{reason_text}")
+            else:
+                self._gpu_checkbox.setToolTip(tr("No hardware encoder detected."))
+
         video_layout.addWidget(self._gpu_checkbox)
+        self._encoder_label = QLabel(f"{tr('Planned encoder:')} —")
+        self._encoder_label.setStyleSheet("color: gray; font-size: 11px;")
+        video_layout.addWidget(self._encoder_label)
 
         layout.addWidget(self._video_group)
 
@@ -338,7 +346,10 @@ class ExportDialog(QDialog):
         self._codec_combo.currentIndexChanged.connect(self._update_output_info)
         self._res_combo.currentIndexChanged.connect(self._update_output_info)
         self._crf_slider.valueChanged.connect(self._update_output_info)
+        self._codec_combo.currentIndexChanged.connect(self._update_encoder_hint)
+        self._gpu_checkbox.toggled.connect(self._update_encoder_hint)
         self._update_output_info()
+        self._update_encoder_hint()
 
         # --- Progress section (hidden initially) ---
         self._progress_section = QGroupBox(tr("Export Progress"))
@@ -440,6 +451,32 @@ class ExportDialog(QDialog):
         self._output_info_label.setText(
             f"Output: {out_w}×{out_h}  {size_str}  {codec_txt}"
         )
+
+    def _selected_codec_key(self) -> str:
+        codec_txt = self._codec_combo.currentText().lower()
+        return "hevc" if "hevc" in codec_txt else "h264"
+
+    def _update_encoder_hint(self) -> None:
+        codec = self._selected_codec_key()
+        planned = "libx265" if codec == "hevc" else "libx264"
+        if self._gpu_checkbox.isChecked():
+            candidates = self._hw_info.get("candidates", [])
+            if codec == "hevc":
+                # Convert h264 candidates to hevc equivalents for hint display.
+                mapped = []
+                for enc in candidates:
+                    if enc.startswith("h264_"):
+                        mapped.append(enc.replace("h264_", "hevc_"))
+                    elif enc == "libx264":
+                        mapped.append("libx265")
+                    else:
+                        mapped.append(enc)
+                candidates = mapped
+            if candidates:
+                planned = candidates[0]
+            if planned.startswith("libx"):
+                planned = f"{planned} ({tr('software fallback')})"
+        self._encoder_label.setText(f"{tr('Planned encoder:')} {planned}")
 
     def _on_thumbnail_ready(self, path: str) -> None:
         """썸네일 추출 완료 콜백 — QPixmap을 라벨에 표시한다."""

@@ -3,11 +3,34 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
 from src.models.subtitle import SubtitleTrack
 from src.services.video_exporter import export_video
+
+
+STATUS_EVENT_PROBE = "probe"
+STATUS_EVENT_RETRY = "retry"
+STATUS_EVENT_FINAL_ENCODER = "final_encoder"
+
+
+def format_export_status(payload: dict[str, Any] | str) -> str:
+    """Convert structured export status payload to user-facing text."""
+    if isinstance(payload, str):
+        return payload
+
+    event_type = payload.get("type", "")
+    if event_type == STATUS_EVENT_PROBE:
+        return f"Trying GPU encoder: {payload.get('encoder', 'unknown')}"
+    if event_type == STATUS_EVENT_RETRY:
+        reason = payload.get("reason", "unknown error")
+        next_encoder = payload.get("next_encoder", "software encoder")
+        return f"GPU failed ({reason}), retrying with {next_encoder}..."
+    if event_type == STATUS_EVENT_FINAL_ENCODER:
+        return f"Export completed with {payload.get('encoder', 'unknown')}"
+    return payload.get("message", "")
 
 
 class ExportWorker(QObject):
@@ -67,12 +90,20 @@ class ExportWorker(QObject):
 
     def run(self) -> None:
         try:
+            def _on_status(payload: dict[str, Any] | str) -> None:
+                message = format_export_status(payload)
+                if message:
+                    self.status.emit(message)
+
+            # Marker for export_video to send structured payloads.
+            setattr(_on_status, "__fmm_status_format__", "structured")
+
             export_video(
                 self._video_path,
                 self._track,
                 self._output_path,
                 on_progress=lambda total, cur: self.progress.emit(total, cur),
-                on_status=lambda message: self.status.emit(message),
+                on_status=_on_status,
                 audio_path=self._audio_path,
                 overlay_path=self._overlay_path,
                 image_overlays=self._image_overlays,
