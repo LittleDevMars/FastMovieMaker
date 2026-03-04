@@ -30,3 +30,9 @@ Desktop.ini
 # PyTorch / Whisper cache
 *.pt
 *.bin
+
+# Local app/runtime state
+.fastmoviemaker/
+
+# Local agent/editor state
+.claude/settings.json

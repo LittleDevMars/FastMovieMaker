@@ -4,7 +4,7 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 36 완료 (2026-03-03)
+**현재 상태:** Day 40 완료 (2026-03-04)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
@@ -57,6 +57,7 @@
 | **코드 품질 개선 (Simplify)** — `SubtitleAnimation.is_active` 프로퍼티 추가(subtitle_panel/timeline_painter 중복 체크 제거), `timeline_painter.py` 배지 draw 시 `painter.save()/restore()` 추가(상태 누수 수정), `TemplateService._user_dir` 캐싱(`__init__`에서 1회 결정 → 4개 내부 `_get_user_dir()` 호출 교체), `TODO.md` 현행화(Day 21 잔여물 제거, Day 37 기준 갱신) | **완료 (Day 37)** |
 | **TECHSPEC.md 갱신 + Phase EXPORT2** — TECHSPEC.md 전체 재작성(v0.4.0→v0.10.0, Day 37 기준: 프로젝트 파일 v12, 731→744 테스트, VideoClip/VideoClipTrack/ProjectState 모델 완전 반영, 다이얼로그 9→24개, services 목록 확장, 워커 목록 확장); `ExportPreset` 모델에 `crf: int = 23` + `speed_preset: str = "medium"` 필드 + `to_dict()/from_dict()` 추가; `ExportPresetManager` 신규(QSettings Group `"ExportPresets"`, save/load/delete/list/exists/get_all 메서드); `ExportDialog` 확장(Video Options 상단에 프리셋 툴바[QComboBox+Save…+Delete], Audio Bitrate[96k/128k/192k/320k], Container[MP4/MKV/WebM] 행 추가, 컨테이너 변경 시 파일 저장 필터·확장자 자동 연동, `_on_export_preset_selected()` 전체 UI 세팅); ko.py i18n 8개 키 추가; `tests/test_export2.py` 신규 13개 테스트(744/744 passed) | **완료 (Day 38)** |
 | **Phase PERF/UX3 — 프로젝트 로드 속도 개선** — `project_io.py`: `gzip.compress()` 저장 + magic byte `\x1f\x8b` 자동 감지 해제(기존 평문 JSON 하위호환 완전 보장), `SubtitleAnimation` import 모듈 상단으로 이동(세그먼트마다 반복 로컬 import 제거); `project_controller.py`: `on_load_project()` 중복 비디오 로드 블록 제거(미디어 플레이어 초기화 2회→1회), 파일 대화상자 필터 `*.fmm *.fmm.json`으로 확장; `test_project_io.py`: gzip 인식 직접 파싱 테스트 3개 수정(`import gzip` 추가); 신규 테스트 없음(744/744 passed 유지) | **완료 (Day 39)** |
+| **문서 동기화 + 테스트 안정화** — `src/services/ffmpeg_logger.py`/`src/services/template_service.py` writable fallback 추가(권한 제한 환경 대응), `src/ui/dialogs/tts_dialog.py` ElevenLabs rate 변수 버그 수정, `tests/test_tts_dialog_gui.py` visibility 테스트 픽스(dialog.show), `pyproject.toml` pytest `slow` 마커 등록, `README.md`/`TODO.md`/`PROGRESS.md` 현행화; 전체 테스트 **762/762 passed** | **완료 (Day 40)** |
 
 ---
 
