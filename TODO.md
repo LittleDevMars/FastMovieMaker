@@ -2,7 +2,9 @@
 
 ## 🚧 진행 중 / In Progress
 
-없음 — Phase ANIM2+CC2 완료 (Day 37)
+- [ ] APV 실파일 수동 검증 (샘플 파일 확보 후)
+  - 조건: `ffprobe` 결과 `codec_name=apv`
+  - 검증: Open Video → APV 감지 메시지 → MP4 변환 → 재생/오디오 정상
 
 ---
 
@@ -26,7 +28,7 @@
 ## 📋 백로그 / Backlog
 
 ### 기능 추가
-- [ ] GPU 가속 비디오 렌더링
+- [x] ~~GPU 가속 비디오 렌더링~~ (GPU2 다단계 폴백 + structured status 완료, Day 44)
 - [x] ~~AI 기반 자막 번역 (DeepL/GPT)~~ (완료, Phase 4 Week 2)
 - [x] ~~실시간 자막 프리뷰 (Whisper 진행 중)~~ (`WhisperDialog` 라이브 프리뷰, Day 43)
 - [ ] 플러그인 시스템 (커스텀 TTS 제공자)
@@ -48,6 +50,8 @@
 
 ## 📌 최근 완료 / Recently Completed
 
+- ✅ Phase GPU2 — 내보내기 GPU 다단계 폴백 + structured status 이벤트 정리 (`probe/retry/final_encoder`), ExportDialog 인코더 힌트/사유 tooltip 강화, 회귀 테스트 보강 - 2026-03-04
+- ✅ APV 재생 변환 지원 — `VideoLoadWorker`에서 `ffprobe codec_name=apv` 감지 시 플랫폼 무관 MP4 변환 경로 적용, 변환 체인(remux→HW→SW) 테스트 고정 - 2026-03-04
 - ✅ pre-push 품질 루틴 정착 — `scripts/pre_push_checks.sh`(pytest + sync check), `.githooks/pre-push`, `scripts/install_git_hooks.sh` 추가 - 2026-03-04
 - ✅ 실시간 자막 프리뷰 MVP — `WhisperDialog`에 최근 8개 세그먼트 라이브 표시, GUI 테스트 `tests/test_whisper_dialog_preview.py` 추가 - 2026-03-04
 - ✅ CI 문서-테스트 수치 검증 자동화 — `scripts/sync_test_counts.py` 추가(update/check 모드), `.github/workflows/test-count-sync.yml`로 PR/푸시 시 수치 불일치 차단 - 2026-03-04
@@ -72,4 +76,4 @@
 
 ---
 
-**Last Updated**: 2026-03-04 (Day 43)
+**Last Updated**: 2026-03-04 (Day 44)

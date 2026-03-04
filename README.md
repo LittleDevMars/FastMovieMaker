@@ -42,6 +42,7 @@
 - **HW 가속 미디어 임포트** — MKV→MP4 변환 시 VideoToolbox(macOS)/NVENC(Windows) 자동 활용
 - **프록시 미디어 (Proxy Media)** — 고해상도(4K 등) 영상의 부드러운 편집을 위한 저해상도 프록시 자동 생성 및 전환 기능
 - **MKV 지원 (macOS)** — macOS 환경에서 MKV 파일의 자동 프록시 변환 및 재생 지원
+- **APV 재생 지원** — APV 코덱 입력 감지 시 재생 호환 MP4로 자동 변환 후 로드
 - **재생 동기화 개선** — 스크럽, 분할(Split) 후 재생 재개 시 끊김 없는 경험 제공
 - **스레드 안전성** — `MediaController(QObject)` 기반으로 worker→UI signal이 메인 스레드에서만 실행됨
 

@@ -12,6 +12,16 @@ This document provides a comprehensive manual testing checklist for all features
 2. Test video: Use any MP4 or MKV file with audio
    - For MKV testing, use a file with audio track
    - For drag-and-drop testing, have a video file ready
+   - For APV testing, prepare one APV sample file (Galaxy APV recording)
+
+3. Verify FFmpeg APV decode support:
+   ```bash
+   ffmpeg -decoders | rg -i "apv|oapv"
+   ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
+     -of default=noprint_wrappers=1:nokey=1 /path/to/sample_apv.mp4
+   ```
+   - Decoder list should include `apv`
+   - `ffprobe` codec_name should be `apv` for the APV sample
 
 ---
 
@@ -27,6 +37,12 @@ This document provides a comprehensive manual testing checklist for all features
   - Should show conversion dialog
   - Should convert to MP4 with audio
   - Should load converted file
+
+- [ ] **Load APV video via File → Open Video**
+  - APV codec should be detected via ffprobe
+  - Should auto-convert to MP4 for playback
+  - Status should show APV conversion progress
+  - Converted file should play normally (video + audio)
 
 - [ ] **Drag and Drop Video**
   - Drag a video file onto the window

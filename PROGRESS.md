@@ -4,9 +4,78 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 43 완료 (2026-03-04)
+**현재 상태:** Day 44 완료 (2026-03-04)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
+
+---
+
+## 2026-03-04 (Day 44) 작업 요약
+
+**GPU2+APV 마감 스프린트 — 머지 준비 상태 고정**
+
+### 1. GPU 내보내기 폴백 체인 고도화
+- `src/services/video_exporter.py`
+  - 단일 GPU→SW 재시도에서 다단계 체인으로 확장:
+    - HW 후보 1 실패 → HW 후보 2 → ... → SW
+  - 상태 이벤트 구조화:
+    - `probe`, `retry`, `final_encoder`
+  - `on_status` 하위호환 유지:
+    - legacy 문자열 콜백 지원
+    - structured dict 이벤트도 지원
+- `src/workers/export_worker.py`
+  - structured 이벤트를 UI 문자열로 표준 포맷 후 `Signal(str)` 유지
+- `src/ui/dialogs/export_dialog.py`
+  - 예정 인코더 라벨 추가
+  - 하드웨어 비활성 시 이유 tooltip 노출
+
+### 2. HW 인코더 탐지 정보 확장
+- `src/utils/hw_accel.py`
+  - `ffmpeg -h encoder=<name>` 기반 최소 실행 가능성 검증 추가
+  - `get_hw_info()` 반환 확장:
+    - `recommended: str | None`
+    - `candidates: list[str]`
+    - `unavailable_reasons: dict[str, str]`
+
+### 3. APV 재생 변환 지원
+- `src/workers/video_load_worker.py`
+  - `ffprobe` `codec_name=apv` 감지 시 플랫폼 독립적으로 MP4 변환 경로 진입
+  - 기존 macOS 컨테이너 변환 규칙은 유지
+- `tests/test_video_load_worker.py`
+  - APV 감지/미감지 분기
+  - macOS 컨테이너 분기
+  - 변환 체인(remux→HW→SW) 인자 검증
+
+### 4. 문서/체크리스트 동기화
+- `README.md` APV 지원 문구 반영 (감지 후 MP4 변환 재생 범위로 제한)
+- `TESTING.md` APV 사전검증(`ffprobe`) + 수동 검증 항목 추가
+- `TODO.md`:
+  - GPU2 완료 반영
+  - APV 실파일 수동검증 pending 항목 명시
+
+### 5. 필수 비-GUI 테스트 게이트
+- 실행 대상:
+  - `tests/test_video_export.py`
+  - `tests/test_export_integration.py`
+  - `tests/test_video_load_worker.py`
+  - `tests/test_controllers.py`
+- 결과:
+  - 비-GUI 세트 통과 기준 유지
+- 환경 제약:
+  - `pytest-qt` GUI 테스트는 현재 로컬 환경에서 abort 가능성 있어,
+    이번 스프린트 게이트는 **비-GUI 자동 테스트 통과 + GUI 수동 체크리스트 유지**로 고정
+
+### 커밋 메시지 초안
+1. `feat(export): multi-stage gpu fallback with structured status`
+2. `feat(playback): detect apv codec and auto-convert for playback`
+3. `test/docs: add APV regression tests and manual checklist`
+
+### PR 설명 템플릿 포함 항목
+- 문제(Problem)
+- 해결(Solution)
+- 리스크(Risks)
+- 검증(Validation scope)
+- 미해결/후속(Open items: APV 실파일 수동 검증 대기)
 
 ---
 
