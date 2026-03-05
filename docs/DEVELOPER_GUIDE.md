@@ -22,6 +22,11 @@ python3 main.py
 - 모델/서비스 레이어에 Qt 객체를 넣지 않습니다.
 - 워커 시그널은 컨트롤러(QObject)에서 받아 메인 스레드에서 UI를 갱신합니다.
 - 시간 단위는 내부적으로 `milliseconds(int)`를 사용합니다.
+- TTS Worker 입력 계약은 `speed(float)` 단일값을 사용하고, 엔진별 변환은 provider에서만 처리합니다.
+- TTS 오류 문자열 계약은 `TTS_ERROR::<CODE>::<detail>`이며, 코드→사용자 메시지 매핑은 `src/services/tts_error_presenter.py` 단일 모듈에서 관리합니다.
+- UI는 presenter가 반환한 친화 메시지만 노출하고, raw detail은 tooltip/로그 디버깅 용도로만 사용합니다.
+- TTS provider 레지스트리는 내장 provider를 항상 유지하고, 외부 플러그인(`register_tts_providers`)은 실패 격리 후 선택적으로 병합합니다.
+- 플러그인 경로는 `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수를 병합해 로드합니다.
 
 ## 브랜치 및 커밋 규칙
 - 기능/수정 브랜치는 `codex/<short-topic>` 형식을 사용합니다.

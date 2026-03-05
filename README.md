@@ -59,6 +59,10 @@
 - **다양한 TTS 엔진:**
   - Edge-TTS (Microsoft Azure 음성)
   - ElevenLabs API 통합
+- **Provider 플러그인 로딩 (Phase 1)**:
+  - `register_tts_providers()` 계약 기반 외부 provider 동적 로딩
+  - 플러그인 실패 격리 + 내장 Edge/ElevenLabs provider 항상 유지
+  - 경로 소스: `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수
 - 세그먼트별 TTS 생성 및 오디오 믹싱
 - 비디오 및 TTS 오디오 개별 볼륨 제어
 - **AI 자막 번역** — Google/GPT 엔진 연동을 통한 자동 자막 번역 및 트랙 관리
@@ -280,6 +284,11 @@ pytest tests/test_whisper_integration.py -v      # Whisper 통합 (5개)
 | **테스트** | pytest, pytest-qt |
 | **국제화** | 커스텀 번역 시스템 |
 
+TTS 구현 참고:
+- Worker 입력 계약은 `speed(float)` 단일 입력을 사용합니다 (`rate` 문자열 미사용).
+- Provider 경계에서만 엔진별 변환(Edge `rate` 포맷 등)을 처리합니다.
+- 오류 전달 표준은 `TTS_ERROR::<CODE>::<detail>` 형식이며, UI는 CODE 기반으로 사용자 문구를 매핑합니다.
+
 ---
 
 ## 📖 사용 방법
@@ -301,6 +310,11 @@ pytest tests/test_whisper_integration.py -v      # Whisper 통합 (5개)
 - **[TTS 사용 가이드 (한국어)](docs/TTS_USAGE.md)**
 - **[TTS Usage Guide (English)](docs/TTS_USAGE_EN.md)**
 - **[개발자 가이드 (아키텍처/기여)](docs/DEVELOPER_GUIDE.md)**
+- **[Software Quality Decision Tree](DECISION_TREE.md)** — State Mode / Decision Mode 기반 품질 의사결정 기준
+- **[Decision Log Template](docs/DECISION_LOG.md)** — 실제 의사결정 이력 기록 템플릿/예시
+- **[Orchestration Template](docs/ORCHESTRATION_TEMPLATE.md)** — 작업 위임/실행용 프롬프트 템플릿
+- **[Orchestration Commands](docs/ORCHESTRATION_COMMANDS.md)** — `/orchestrate`, `/plan`, `/verify` 운영 가이드
+- **[Orchestration Examples](docs/ORCHESTRATION_EXAMPLES.md)** — 기능추가/버그수정/리팩토링 실전 예시
 
 ### 멀티 소스 비디오 편집 예시
 ```python
