@@ -266,6 +266,8 @@ STRINGS: dict[str, str] = {
     "Editing": "편집",
     "Advanced": "고급",
     "API Keys": "API 키",
+    "Default TTS Provider": "기본 TTS 제공자",
+    "Default Provider:": "기본 제공자:",
     "Autosave": "자동 저장",
     "Save Interval:": "저장 간격:",
     "Idle Timeout:": "유휴 시간:",
@@ -324,6 +326,10 @@ STRINGS: dict[str, str] = {
     "ElevenLabs requires an API key.": "ElevenLabs를 사용하려면 API 키가 필요합니다.",
     "Set it in Edit > Preferences > API Keys.":
         "편집 > 환경설정 > API 키에서 설정하세요.",
+    "No voice available for selected provider.": "선택한 제공자에서 사용 가능한 음성이 없습니다.",
+    "Selected provider is unavailable.": "선택한 제공자를 사용할 수 없습니다.",
+    "Invalid TTS speed.": "유효하지 않은 TTS 속도입니다.",
+    "TTS request is invalid.": "유효하지 않은 TTS 요청입니다.",
     "Failed to generate speech": "음성 생성 실패",
 
     # ── Translate dialog ──

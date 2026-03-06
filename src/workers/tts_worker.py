@@ -10,8 +10,14 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 from src.models.subtitle import SubtitleTrack, SubtitleSegment
+from src.services.tts_provider import (
+    TTSRequestError,
+    TTSRequestErrorCode,
+    exception_to_tts_error_text,
+    validate_tts_request,
+)
+from src.services.tts_provider_registry import get_provider
 from src.services.text_splitter import TextSplitter, SplitStrategy
-from src.services.tts_service import TTSService
 from src.services.audio_merger import AudioMerger
 from src.utils.config import TTSEngine
 
@@ -35,8 +41,8 @@ class TTSWorker(QObject):
         self,
         script: str,
         voice: str,
-        rate: str,
         strategy: SplitStrategy,
+        speed: float,
         language: str = "ko",
         video_audio_path: Optional[Path] = None,
         bg_volume: float = 0.5,
@@ -49,7 +55,7 @@ class TTSWorker(QObject):
         Args:
             script: Text script to convert to speech
             voice: TTS voice name or ElevenLabs voice_id
-            rate: Speech rate (e.g., "+0%" for edge-tts, "1.0" for ElevenLabs)
+            speed: Preferred normalized speed multiplier (e.g., 1.0)
             strategy: Text splitting strategy
             language: Language code (e.g., "ko", "en")
             video_audio_path: Optional path to video audio for mixing
@@ -60,7 +66,7 @@ class TTSWorker(QObject):
         super().__init__()
         self._script = script
         self._voice = voice
-        self._rate = rate
+        self._speed = float(speed)
         self._strategy = strategy
         self._language = language
         self._video_audio_path = video_audio_path
@@ -79,7 +85,7 @@ class TTSWorker(QObject):
             asyncio.run(self._run_async())
         except Exception as e:
             if not self._cancelled:
-                self.error.emit(str(e))
+                self.error.emit(exception_to_tts_error_text(e))
 
     async def _run_async(self) -> None:
         """Async TTS generation pipeline."""
@@ -93,7 +99,7 @@ class TTSWorker(QObject):
             text_segments = splitter.split(self._script, self._strategy)
 
             if not text_segments:
-                raise ValueError("Script is empty or produced no segments")
+                raise TTSRequestError(TTSRequestErrorCode.EMPTY_SCRIPT, "script is empty")
 
             if self._cancelled:
                 return
@@ -109,36 +115,24 @@ class TTSWorker(QObject):
                 self.progress.emit(current, total)
 
             segments_data = [(seg.text, seg.index) for seg in text_segments]
-
-            if self._engine == TTSEngine.ELEVENLABS:
-                from src.services.settings_manager import SettingsManager
-                from src.services.elevenlabs_tts_service import ElevenLabsTTSService
-
-                api_key = SettingsManager().get_elevenlabs_api_key()
-                el_service = ElevenLabsTTSService(api_key)
-                speed = 1.0
-                try:
-                    speed = float(self._rate)
-                except ValueError:
-                    pass
-
-                audio_segments = el_service.generate_segments(
-                    segments=segments_data,
-                    voice_id=self._voice,
-                    speed=speed,
-                    output_dir=temp_dir,
-                    on_progress=on_progress,
-                    timeout=60.0,
+            validate_tts_request(
+                voice=self._voice,
+                speed=self._speed,
+                segments=segments_data,
+            )
+            provider = get_provider(self._engine)
+            if provider is None:
+                raise TTSRequestError(
+                    TTSRequestErrorCode.PROVIDER_UNAVAILABLE,
+                    f"provider_id={self._engine}",
                 )
-            else:
-                audio_segments = await TTSService.generate_segments(
-                    segments=segments_data,
-                    voice=self._voice,
-                    rate=self._rate,
-                    output_dir=temp_dir,
-                    on_progress=on_progress,
-                    timeout=30.0,
-                )
+            audio_segments = await provider.generate_segments(
+                segments=segments_data,
+                voice=self._voice,
+                speed=self._speed,
+                output_dir=temp_dir,
+                on_progress=on_progress,
+            )
 
             if self._cancelled:
                 return
@@ -217,7 +211,7 @@ class TTSWorker(QObject):
 
         except Exception as e:
             if not self._cancelled:
-                self.error.emit(f"TTS generation failed: {e}")
+                self.error.emit(exception_to_tts_error_text(e))
 
         finally:
             # Cleanup temporary directory

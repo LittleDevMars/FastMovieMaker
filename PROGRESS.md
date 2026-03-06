@@ -4,9 +4,40 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 44 완료 (2026-03-04)
+**현재 상태:** Day 46 완료 (2026-03-06)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
+
+---
+
+## 2026-03-06 (Day 46) 작업 요약
+
+**TTS Provider 안정화 마감 — 플러그인 로딩 1단계 + 문서/테스트 동기화**
+
+### 1. TTS provider 플러그인 동적 로딩 추가
+- `src/services/tts_plugin_loader.py`
+  - 플러그인 계약: `register_tts_providers() -> list[TTSProvider]`
+  - 플러그인별 실패 격리(전체 로딩 중단 없음)
+  - invalid 객체/중복 provider_id/내장 provider 충돌 무시 + 에러 수집
+- `src/services/tts_provider_registry.py`
+  - `get_all_providers()`, `reload_provider_registry()`, `get_provider_load_errors()` 추가
+  - 플러그인 실패와 무관하게 내장 `edge_tts`/`elevenlabs` 유지
+  - 경로 병합 로딩: 설정(`tts/plugin_paths`) + 환경변수(`FMM_TTS_PLUGIN_PATHS`)
+
+### 2. 설정/테스트 보강
+- `src/services/settings_manager.py`
+  - `get_tts_plugin_paths()`, `set_tts_plugin_paths()` 추가
+  - 비정상 타입/중복/공백 경로 정규화
+- 테스트 추가/확장:
+  - `tests/test_tts_plugin_loader.py`
+  - `tests/test_tts_provider_registry.py`
+  - `tests/test_settings_manager.py`
+
+### 3. 문서/수치 동기화
+- `README.md`, `TODO.md`, `docs/DEVELOPER_GUIDE.md` 갱신
+- 테스트 수치 재검증:
+  - `QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only` → **868 collected**
+  - `QT_QPA_PLATFORM=offscreen pytest tests/ -q` → **868 passed**
 
 ---
 

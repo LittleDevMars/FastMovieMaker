@@ -17,7 +17,7 @@
 - [x] ~~영상 두 개 이상일 때 클립 분할 안 되는 문제~~ (수정 완료)
 
 ### 중요 (High)
-- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 806/806 통과)
+- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 868/868 통과)
 
 ### 보통 (Medium)
 - [x] ~~프레임 스냅 활성화 시 UI 피드백~~ (완료 Day 38)
@@ -31,7 +31,7 @@
 - [x] ~~GPU 가속 비디오 렌더링~~ (GPU2 다단계 폴백 + structured status 완료, Day 44)
 - [x] ~~AI 기반 자막 번역 (DeepL/GPT)~~ (완료, Phase 4 Week 2)
 - [x] ~~실시간 자막 프리뷰 (Whisper 진행 중)~~ (`WhisperDialog` 라이브 프리뷰, Day 43)
-- [ ] 플러그인 시스템 (커스텀 TTS 제공자)
+- [ ] 플러그인 시스템 (커스텀 TTS 제공자, Phase 1 동적 로딩 완료)
 - [ ] 클라우드 프로젝트 동기화
 
 ### 성능 개선
@@ -50,6 +50,8 @@
 
 ## 📌 최근 완료 / Recently Completed
 
+- ✅ TTS Provider 플러그인 1단계 — `register_tts_providers()` 동적 로딩, 실패 격리, Edge/ElevenLabs 내장 폴백 고정, `tts/plugin_paths` + `FMM_TTS_PLUGIN_PATHS` 병합 로딩, 관련 테스트/문서 추가 - 2026-03-06
+- ✅ 테스트 수치 재동기화 — `QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only` 기준 868 tests collected, `QT_QPA_PLATFORM=offscreen pytest tests/ -q` 기준 868/868 passed 확인 - 2026-03-06
 - ✅ Phase GPU2 — 내보내기 GPU 다단계 폴백 + structured status 이벤트 정리 (`probe/retry/final_encoder`), ExportDialog 인코더 힌트/사유 tooltip 강화, 회귀 테스트 보강 - 2026-03-04
 - ✅ APV 재생 변환 지원 — `VideoLoadWorker`에서 `ffprobe codec_name=apv` 감지 시 플랫폼 무관 MP4 변환 경로 적용, 변환 체인(remux→HW→SW) 테스트 고정 - 2026-03-04
 - ✅ pre-push 품질 루틴 정착 — `scripts/pre_push_checks.sh`(pytest + sync check), `.githooks/pre-push`, `scripts/install_git_hooks.sh` 추가 - 2026-03-04
@@ -76,4 +78,4 @@
 
 ---
 
-**Last Updated**: 2026-03-04 (Day 44)
+**Last Updated**: 2026-03-06 (Day 46)

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from src.services.settings_manager import SettingsManager, _SHORTCUT_DEFAULTS
 from src.services.translator import ISO_639_1_CODES
+from src.utils.config import TTSEngine
 from src.utils.i18n import tr
 
 # 단축키 탭에 표시될 (action_key, display_name) 목록
@@ -238,6 +239,15 @@ class PreferencesDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
+        # Default TTS provider
+        provider_group = QGroupBox(tr("Default TTS Provider"))
+        provider_layout = QFormLayout(provider_group)
+        self._tts_provider = QComboBox()
+        self._tts_provider.addItem(tr("Edge-TTS (Free)"), TTSEngine.EDGE_TTS)
+        self._tts_provider.addItem(tr("ElevenLabs (Premium)"), TTSEngine.ELEVENLABS)
+        provider_layout.addRow(tr("Default Provider:"), self._tts_provider)
+        layout.addWidget(provider_group)
+
         # DeepL group
         deepl_group = QGroupBox(tr("DeepL Translation"))
         deepl_layout = QVBoxLayout(deepl_group)
@@ -388,6 +398,10 @@ class PreferencesDialog(QDialog):
         self._whisper_cache.setText(whisper_cache or "")
 
         # API Keys
+        provider = self._settings.get_tts_default_provider()
+        provider_index = self._tts_provider.findData(provider)
+        if provider_index >= 0:
+            self._tts_provider.setCurrentIndex(provider_index)
         self._deepl_key.setText(self._settings.get_deepl_api_key())
         self._openai_key.setText(self._settings.get_openai_api_key())
         self._elevenlabs_key.setText(self._settings.get_elevenlabs_api_key())
@@ -417,6 +431,7 @@ class PreferencesDialog(QDialog):
         self._settings.set_whisper_cache_dir(whisper_cache if whisper_cache else None)
 
         # API Keys
+        self._settings.set_tts_default_provider(self._tts_provider.currentData())
         self._settings.set_deepl_api_key(self._deepl_key.text().strip())
         self._settings.set_openai_api_key(self._openai_key.text().strip())
         self._settings.set_elevenlabs_api_key(self._elevenlabs_key.text().strip())

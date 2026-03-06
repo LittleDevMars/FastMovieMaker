@@ -142,6 +142,21 @@ class TimelinePainter:
         # 웨이브폼 이미지 캐시
         self._waveform_image_cache: QImage | None = None
         self._waveform_cache_key: tuple | None = None
+        # 자주 쓰는 페인터 객체 재사용 (프레임당 생성 비용 감소)
+        self._font_small = QFont("Arial", 8)
+        self._audio_brush = QBrush(self._AUDIO_COLOR_TOP)
+        self._audio_pen = QPen(self._AUDIO_BORDER, 1)
+        self._segment_pen = QPen(self._SEGMENT_BORDER, 1)
+        self._segment_selected_pen = QPen(self._SELECTED_BORDER, 1)
+
+    def _visible_segment_window(self) -> tuple[int, int]:
+        """Return visible segment index window for the current viewport."""
+        tw = self.tw
+        if not tw._track:
+            return 0, 0
+        visible_start = tw._visible_start_ms
+        visible_end = int(visible_start + tw._visible_range_ms())
+        return tw._track.visible_range_indices(visible_start, visible_end)
 
     # ================================================================
     # 메인 페인트 엔트리
@@ -438,9 +453,11 @@ class TimelinePainter:
         tw = self.tw
         if not tw._track:
             return
+        start_idx, end_idx = self._visible_segment_window()
         y = tw._audio_track_y()
         track_h = _AUDIO_H
-        for i, seg in enumerate(tw._track):
+        for i in range(start_idx, end_idx):
+            seg = tw._track[i]
             if not seg.audio_file:
                 continue
             x1 = tw._ms_to_x(seg.start_ms)
@@ -448,8 +465,8 @@ class TimelinePainter:
             if x2 < 0 or x1 > tw.width():
                 continue
             rect = QRectF(x1, y, x2 - x1, track_h)
-            painter.setBrush(QBrush(self._AUDIO_COLOR_TOP))
-            painter.setPen(QPen(self._AUDIO_BORDER, 1))
+            painter.setBrush(self._audio_brush)
+            painter.setPen(self._audio_pen)
             painter.drawRoundedRect(rect, 4, 4)
 
     def _draw_segments(self, painter: QPainter, h: int) -> None:
@@ -457,6 +474,7 @@ class TimelinePainter:
         tw = self.tw
         if not tw._track:
             return
+        start_idx, end_idx = self._visible_segment_window()
         y = tw._subtitle_track_y()
         track_h = _SEG_H
         # 로컬 변수 캐싱 — self.tw._xxx 딕셔너리 룩업 체인 제거
@@ -465,10 +483,9 @@ class TimelinePainter:
         selected_idx = tw._selected_index
         seg_top = self._SEGMENT_COLOR_TOP
         seg_bot = self._SEGMENT_COLOR_BOT
-        seg_border = self._SEGMENT_BORDER
-        sel_border = self._SELECTED_BORDER
         sel_glow = self._SELECTED_GLOW
-        for i, seg in enumerate(tw._track):
+        for i in range(start_idx, end_idx):
+            seg = tw._track[i]
             x1 = ms_to_x(seg.start_ms)
             x2 = ms_to_x(seg.end_ms)
             if x2 < 0 or x1 > widget_w:
@@ -477,19 +494,19 @@ class TimelinePainter:
             is_selected = (selected_idx == i)
             top = seg_top
             bot = seg_bot
-            border = seg_border
+            border_pen = self._segment_pen
             if is_selected:
-                border = sel_border
+                border_pen = self._segment_selected_pen
                 painter.setBrush(QBrush(sel_glow))
                 painter.drawRect(rect.adjusted(-2, -2, 2, 2))
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             grad.setColorAt(0, top)
             grad.setColorAt(1, bot)
             painter.setBrush(grad)
-            painter.setPen(QPen(border, 1))
+            painter.setPen(border_pen)
             painter.drawRoundedRect(rect, 4, 4)
             painter.setPen(Qt.GlobalColor.white)
-            painter.setFont(QFont("Arial", 8))
+            painter.setFont(self._font_small)
             painter.drawText(
                 rect.adjusted(5, 0, -5, 0),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
