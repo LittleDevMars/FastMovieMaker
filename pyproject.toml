@@ -1,6 +1,6 @@
 [project]
 name = "FastMovieMaker"
-version = "0.4.1"
+version = "0.10.0"
 description = "Whisper-based automatic subtitle video editor"
 requires-python = ">=3.10"
 dependencies = [
