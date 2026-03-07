@@ -195,15 +195,15 @@ class SettingsManager:
     def get_tts_default_provider(self) -> str:
         """Get default TTS provider id (default: edge_tts)."""
         value = self._settings.value("tts/default_provider", TTSEngine.EDGE_TTS, str)
-        if value not in (TTSEngine.EDGE_TTS, TTSEngine.ELEVENLABS):
+        if not str(value).strip():
             return TTSEngine.EDGE_TTS
-        return value
+        return str(value)
 
     def set_tts_default_provider(self, provider_id: str) -> None:
         """Set default TTS provider id."""
-        if provider_id not in (TTSEngine.EDGE_TTS, TTSEngine.ELEVENLABS):
+        if not str(provider_id).strip():
             provider_id = TTSEngine.EDGE_TTS
-        self._settings.setValue("tts/default_provider", provider_id)
+        self._settings.setValue("tts/default_provider", str(provider_id))
 
     def get_tts_plugin_paths(self) -> list[str]:
         """Get configured TTS plugin file paths."""

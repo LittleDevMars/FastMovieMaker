@@ -16,4 +16,5 @@ dependencies = [
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow",
+    "apv_smoke: marks APV sample-based smoke tests (requires FMM_APV_SAMPLE)",
 ]

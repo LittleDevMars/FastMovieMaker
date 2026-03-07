@@ -29,18 +29,17 @@ from src.models.subtitle import SubtitleTrack
 from src.utils.i18n import tr
 from src.services.tts_error_presenter import to_user_message
 from src.services.tts_provider import validate_tts_request
-from src.services.tts_provider_registry import get_provider
+from src.services.tts_provider_registry import get_all_providers, get_provider
 from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
 from src.utils.config import (
-    ELEVENLABS_DEFAULT_VOICES,
     TTS_DEFAULT_VOICE,
     TTS_DEFAULT_SPEED,
-    TTS_VOICES,
-    TTSEngine,
 )
 from src.services.tts_preset_manager import TTSPreset, TTSPresetManager
 from src.workers.tts_worker import TTSWorker
+
+_EDGE_PROVIDER_ID = "edge_tts"
 
 
 class TTSPreviewWorker(QObject):
@@ -179,8 +178,7 @@ class TTSDialog(QDialog):
 
         # Engine selector
         self._engine_combo = QComboBox()
-        self._engine_combo.addItem(tr("Edge-TTS (Free)"), TTSEngine.EDGE_TTS)
-        self._engine_combo.addItem(tr("ElevenLabs (Premium)"), TTSEngine.ELEVENLABS)
+        self._populate_engine_options()
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         settings_layout.addRow(tr("Engine:"), self._engine_combo)
 
@@ -193,7 +191,7 @@ class TTSDialog(QDialog):
 
         # Voice selector
         self._voice_combo = QComboBox()
-        self._populate_voices("Korean")
+        self._populate_voices_for_engine(self._engine_combo.currentData(), "Korean")
         settings_layout.addRow(tr("Voice:"), self._voice_combo)
 
         # Speed
@@ -300,7 +298,7 @@ class TTSDialog(QDialog):
             self._engine_combo.setCurrentIndex(engine_idx)
 
         # Language (Edge-TTS 전용)
-        if preset.engine == TTSEngine.EDGE_TTS:
+        if preset.engine == _EDGE_PROVIDER_ID:
             lang_idx = self._lang_combo.findText(preset.language)
             if lang_idx >= 0:
                 self._lang_combo.setCurrentIndex(lang_idx)
@@ -408,57 +406,54 @@ class TTSDialog(QDialog):
             if idx >= 0:
                 self._voice_combo.setCurrentIndex(idx)
 
-    def _populate_voices(self, language: str) -> None:
-        """Populate voice combo with voices for the selected language."""
-        self._voice_combo.clear()
-        provider = get_provider(TTSEngine.EDGE_TTS)
-        if provider is not None:
-            for label, voice in provider.list_voices(language):
-                self._voice_combo.addItem(label, voice)
-        elif language in TTS_VOICES:
-            voices = TTS_VOICES[language]
-            for gender in ["Female", "Male"]:
-                if gender in voices:
-                    for voice_name in voices[gender]:
-                        display = voice_name.split("-")[-1].replace("Neural", "").replace("Multilingual", "")
-                        self._voice_combo.addItem(f"{display} ({gender})", voice_name)
+    def _populate_engine_options(self) -> None:
+        """Populate engine options from provider registry."""
+        self._engine_combo.clear()
+        providers = get_all_providers()
+        for provider in providers.values():
+            self._engine_combo.addItem(provider.display_name, provider.provider_id)
 
-        # Set default
-        default_index = self._voice_combo.findData(TTS_DEFAULT_VOICE)
-        if default_index >= 0:
-            self._voice_combo.setCurrentIndex(default_index)
+    def _populate_voices_for_engine(self, engine: str, language: str | None = None) -> None:
+        """Populate voice combo for any selected provider engine."""
+        self._voice_combo.clear()
+        provider = get_provider(engine)
+        if provider is None:
+            return
+        target_lang = language if engine == _EDGE_PROVIDER_ID else None
+        for label, voice in provider.list_voices(target_lang):
+            self._voice_combo.addItem(label, voice)
+        if engine == _EDGE_PROVIDER_ID:
+            default_index = self._voice_combo.findData(TTS_DEFAULT_VOICE)
+            if default_index >= 0:
+                self._voice_combo.setCurrentIndex(default_index)
 
     def _on_engine_changed(self, index: int) -> None:
         """Handle TTS engine selection change."""
         engine = self._engine_combo.currentData()
-        if engine == TTSEngine.ELEVENLABS:
-            self._lang_combo.setEnabled(False)
-            self._populate_elevenlabs_voices()
-        else:
+        if engine == _EDGE_PROVIDER_ID:
             self._lang_combo.setEnabled(True)
-            self._populate_voices(self._lang_combo.currentText())
-
-    def _populate_elevenlabs_voices(self) -> None:
-        """Populate voice combo with ElevenLabs voices."""
-        self._voice_combo.clear()
-        provider = get_provider(TTSEngine.ELEVENLABS)
-        if provider is not None:
-            for label, voice_id in provider.list_voices(None):
-                self._voice_combo.addItem(label, voice_id)
+            self._populate_voices_for_engine(engine, self._lang_combo.currentText())
             return
-        for display_name, voice_id in ELEVENLABS_DEFAULT_VOICES.items():
-            self._voice_combo.addItem(display_name, voice_id)
+        self._lang_combo.setEnabled(False)
+        self._populate_voices_for_engine(engine, None)
 
     def _apply_default_provider(self) -> None:
         """Set initial engine from preferences without locking user choice."""
         provider_id = SettingsManager().get_tts_default_provider()
         idx = self._engine_combo.findData(provider_id)
+        if idx < 0:
+            idx = self._engine_combo.findData(_EDGE_PROVIDER_ID)
         if idx >= 0:
             self._engine_combo.setCurrentIndex(idx)
+            return
+        if self._engine_combo.count() > 0:
+            self._engine_combo.setCurrentIndex(0)
 
     def _on_language_changed(self, language: str) -> None:
         """Handle language selection change."""
-        self._populate_voices(language)
+        engine = self._engine_combo.currentData()
+        if engine == _EDGE_PROVIDER_ID:
+            self._populate_voices_for_engine(engine, language)
 
     def _on_preview(self) -> None:
         """Handle preview button click."""
@@ -488,16 +483,15 @@ class TTSDialog(QDialog):
                 preview_text = preview_text[:last_space]
 
         engine = self._engine_combo.currentData()
-        api_key = ""
-
-        # Validate API key for ElevenLabs
-        if engine == TTSEngine.ELEVENLABS:
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
             api_key = SettingsManager().get_elevenlabs_api_key()
             if not api_key:
                 QMessageBox.warning(
                     self,
                     tr("API Key Required"),
-                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    tr("Selected provider requires an API key.") + "\n\n"
                     + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
@@ -574,14 +568,15 @@ class TTSDialog(QDialog):
 
         engine = self._engine_combo.currentData()
 
-        # Validate API key for ElevenLabs
-        if engine == TTSEngine.ELEVENLABS:
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
             api_key = SettingsManager().get_elevenlabs_api_key()
             if not api_key:
                 QMessageBox.warning(
                     self,
                     tr("API Key Required"),
-                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    tr("Selected provider requires an API key.") + "\n\n"
                     + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
@@ -686,7 +681,7 @@ class TTSDialog(QDialog):
             self._strategy_combo.setEnabled(True)
         # Re-enable language only if edge-tts is selected
         engine = self._engine_combo.currentData()
-        self._lang_combo.setEnabled(engine != TTSEngine.ELEVENLABS)
+        self._lang_combo.setEnabled(engine == _EDGE_PROVIDER_ID)
         if self._bg_volume_spin:
             self._bg_volume_spin.setEnabled(True)
         if self._tts_volume_spin:

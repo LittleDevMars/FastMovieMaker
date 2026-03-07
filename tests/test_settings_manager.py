@@ -30,11 +30,19 @@ def test_tts_default_provider_roundtrip() -> None:
     assert mgr.get_tts_default_provider() == TTSEngine.ELEVENLABS
 
 
-def test_tts_default_provider_invalid_fallback() -> None:
+def test_tts_default_provider_non_builtin_roundtrip() -> None:
     mgr = _make_manager()
-    mgr.set_tts_default_provider("invalid-provider")
+    mgr.set_tts_default_provider("plugin.provider")
+    assert mgr.get_tts_default_provider() == "plugin.provider"
+    mgr._settings.setValue("tts/default_provider", "plugin.provider")
+    assert mgr.get_tts_default_provider() == "plugin.provider"
+
+
+def test_tts_default_provider_empty_fallback_to_edge() -> None:
+    mgr = _make_manager()
+    mgr.set_tts_default_provider("")
     assert mgr.get_tts_default_provider() == TTSEngine.EDGE_TTS
-    mgr._settings.setValue("tts/default_provider", "invalid-provider")
+    mgr._settings.setValue("tts/default_provider", "")
     assert mgr.get_tts_default_provider() == TTSEngine.EDGE_TTS
 
 

@@ -27,6 +27,7 @@ python3 main.py
 - UI는 presenter가 반환한 친화 메시지만 노출하고, raw detail은 tooltip/로그 디버깅 용도로만 사용합니다.
 - TTS provider 레지스트리는 내장 provider를 항상 유지하고, 외부 플러그인(`register_tts_providers`)은 실패 격리 후 선택적으로 병합합니다.
 - 플러그인 경로는 `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수를 병합해 로드합니다.
+- provider가 `provider_id`/`display_name`/`list_voices`/`requires_api_key` 계약을 만족하면 Preferences/TTS/Batch 엔진 UI에 자동 노출됩니다.
 
 ## 브랜치 및 커밋 규칙
 - 기능/수정 브랜치는 `codex/<short-topic>` 형식을 사용합니다.
@@ -56,7 +57,37 @@ QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only
 # 문서 테스트 수치 동기화(운영 모드: Day 자동 갱신 없음)
 python3 scripts/sync_test_counts.py
 python3 scripts/sync_test_counts.py --check
+
+# APV 파이프라인 스모크 검증 (샘플 없으면 SKIPPED)
+python3 scripts/verify_apv_pipeline.py
+FMM_APV_SAMPLE=/path/to/sample_apv.mov python3 scripts/verify_apv_pipeline.py
 ```
+
+APV 스모크 결과 해석:
+- `PASS`: APV 감지 + MP4 변환 + 비디오/오디오 스트림 검증 완료
+- `SKIPPED`: `FMM_APV_SAMPLE` 미설정(실패 아님)
+- `FAIL`: APV 감지/변환/스트림 검증 중 하나라도 실패
+
+CI APV 잡(`tests.yml`의 `apv-smoke`):
+- 기본 동작은 `SKIPPED` 허용
+- 시크릿 `APV_SAMPLE_B64`(base64 인코딩 APV 샘플)를 설정하면 자동으로 `FMM_APV_SAMPLE` 주입 후 검증 수행
+- 시크릿 decode 실패/빈 샘플은 즉시 `FAIL` 처리
+
+APV CI 시크릿 준비:
+```bash
+# macOS/Linux: base64 한 줄 문자열 생성
+base64 -i /path/to/sample_apv.mov | tr -d '\n'
+```
+- GitHub 저장소 `Settings > Secrets and variables > Actions`에 `APV_SAMPLE_B64` 등록
+- `apv-smoke` 로그에서 단계별 고정 프리픽스 확인:
+  - `[APV][prepare]`
+  - `[APV][verify-script]`
+  - `[APV][pytest]`
+
+트러블슈팅:
+- `FAIL: APV_SAMPLE_B64 decode failed.`: 시크릿 문자열이 base64 형식인지 확인
+- `FAIL: decoded APV sample is empty.`: 빈 문자열/잘못된 복사 여부 확인
+- `FAIL: expected APV codec...`: 샘플이 실제 APV 코덱인지 `ffprobe`로 확인
 
 ## Pre-push 루틴
 권장 실행:

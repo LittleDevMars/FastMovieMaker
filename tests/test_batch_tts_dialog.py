@@ -137,7 +137,10 @@ def test_batch_dialog_blocks_elevenlabs_without_api_key(qtbot, monkeypatch, tmp_
     monkeypatch.setattr(
         batch_module,
         "get_provider",
-        lambda _engine: SimpleNamespace(list_voices=lambda _lang: [("EL One", "el_1")]),
+        lambda _engine: SimpleNamespace(
+            list_voices=lambda _lang: [("EL One", "el_1")],
+            requires_api_key=lambda: True,
+        ),
     )
 
     warning_calls: list[tuple] = []
@@ -152,6 +155,12 @@ def test_batch_dialog_blocks_elevenlabs_without_api_key(qtbot, monkeypatch, tmp_
     class _SpyWorker:
         def __init__(self, **_kwargs):
             called_worker["value"] = True
+
+        def moveToThread(self, _thread) -> None:
+            pass
+
+        def cancel(self) -> None:
+            pass
 
     monkeypatch.setattr(batch_module, "BatchTtsWorker", _SpyWorker)
 
@@ -259,3 +268,69 @@ def test_batch_dialog_worker_error_uses_presenter_message(qtbot, monkeypatch) ->
     assert critical_calls
     msg = critical_calls[0][0][2]
     assert msg == "friendly from presenter"
+
+
+def test_batch_dialog_includes_plugin_provider_from_registry(qtbot, monkeypatch) -> None:
+    providers = {
+        TTSEngine.EDGE_TTS: SimpleNamespace(
+            provider_id=TTSEngine.EDGE_TTS,
+            display_name="Edge-TTS (Free)",
+            list_voices=lambda _lang: [("Edge One", "edge_1")],
+            requires_api_key=lambda: False,
+        ),
+        "plugin.demo": SimpleNamespace(
+            provider_id="plugin.demo",
+            display_name="Plugin Demo",
+            list_voices=lambda _lang: [("Plugin Voice", "plugin_1")],
+            requires_api_key=lambda: False,
+        ),
+    }
+    monkeypatch.setattr(
+        batch_module,
+        "SettingsManager",
+        lambda: _FakeSettingsManager("plugin.demo", elevenlabs_key="dummy"),
+    )
+    monkeypatch.setattr(batch_module, "get_all_providers", lambda: providers)
+    monkeypatch.setattr(batch_module, "get_provider", lambda engine: providers.get(engine))
+
+    dialog = batch_module.BatchTtsDialog(parent=None)
+    qtbot.addWidget(dialog)
+
+    assert dialog._engine_combo.findData("plugin.demo") >= 0
+    assert dialog._engine_combo.currentData() == "plugin.demo"
+    assert dialog._voice_combo.currentData() == "plugin_1"
+
+
+def test_batch_dialog_blocks_provider_requiring_api_key(qtbot, monkeypatch, tmp_path) -> None:
+    provider = SimpleNamespace(
+        provider_id="plugin.requires_key",
+        display_name="Plugin Requires Key",
+        list_voices=lambda _lang: [("Voice", "voice_1")],
+        requires_api_key=lambda: True,
+    )
+    providers = {provider.provider_id: provider}
+    monkeypatch.setattr(
+        batch_module,
+        "SettingsManager",
+        lambda: _FakeSettingsManager("plugin.requires_key", elevenlabs_key=""),
+    )
+    monkeypatch.setattr(batch_module, "get_all_providers", lambda: providers)
+    monkeypatch.setattr(batch_module, "get_provider", lambda engine: providers.get(engine))
+
+    warning_calls: list[tuple] = []
+    monkeypatch.setattr(
+        batch_module.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warning_calls.append((args, kwargs)),
+    )
+
+    dialog = batch_module.BatchTtsDialog(parent=None)
+    qtbot.addWidget(dialog)
+    txt = tmp_path / "a.txt"
+    txt.write_text("hello", encoding="utf-8")
+    dialog._file_list.addItem(str(txt))
+    dialog._output_edit.setText(str(tmp_path))
+    dialog._on_start()
+
+    assert warning_calls
+    assert "API Key Required" in warning_calls[0][0][1]

@@ -31,10 +31,11 @@ from PySide6.QtWidgets import (
 from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
 from src.services.tts_error_presenter import to_user_message
-from src.services.tts_provider_registry import get_provider
-from src.utils.config import TTSEngine
+from src.services.tts_provider_registry import get_all_providers, get_provider
 from src.utils.i18n import tr
 from src.workers.batch_tts_worker import BatchTtsJob, BatchTtsResult, BatchTtsWorker
+
+_EDGE_PROVIDER_ID = "edge_tts"
 
 _STRATEGY_OPTIONS = [
     (SplitStrategy.SENTENCE, "문장 단위"),
@@ -106,8 +107,7 @@ class BatchTtsDialog(QDialog):
         engine_row = QHBoxLayout()
         engine_row.addWidget(QLabel(tr("Engine:")))
         self._engine_combo = QComboBox()
-        self._engine_combo.addItem(tr("Edge-TTS (Free)"), TTSEngine.EDGE_TTS)
-        self._engine_combo.addItem(tr("ElevenLabs (Premium)"), TTSEngine.ELEVENLABS)
+        self._populate_engine_options()
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_row.addWidget(self._engine_combo, 1)
         settings_layout.addLayout(engine_row)
@@ -201,11 +201,20 @@ class BatchTtsDialog(QDialog):
         # Preferences 기반 기본 엔진 적용 후 음성 로드
         default_provider = SettingsManager().get_tts_default_provider()
         idx = self._engine_combo.findData(default_provider)
+        if idx < 0:
+            idx = self._engine_combo.findData(_EDGE_PROVIDER_ID)
         if idx >= 0:
             self._engine_combo.setCurrentIndex(idx)
+        elif self._engine_combo.count() > 0:
+            self._engine_combo.setCurrentIndex(0)
         self._on_engine_changed(self._engine_combo.currentIndex())
 
     # ------------------------------------------------------------------ Slots
+
+    def _populate_engine_options(self) -> None:
+        self._engine_combo.clear()
+        for provider in get_all_providers().values():
+            self._engine_combo.addItem(provider.display_name, provider.provider_id)
 
     def _on_engine_changed(self, _index: int) -> None:
         engine = self._engine_combo.currentData()
@@ -278,13 +287,15 @@ class BatchTtsDialog(QDialog):
             )
             return
 
-        if engine == TTSEngine.ELEVENLABS:
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
             api_key = SettingsManager().get_elevenlabs_api_key()
             if not api_key:
                 QMessageBox.warning(
                     self,
                     tr("API Key Required"),
-                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    tr("Selected provider requires an API key.") + "\n\n"
                     + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
