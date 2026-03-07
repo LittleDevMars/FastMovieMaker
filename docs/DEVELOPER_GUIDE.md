@@ -61,6 +61,12 @@ python3 scripts/sync_test_counts.py --check
 # APV 파이프라인 스모크 검증 (샘플 없으면 SKIPPED)
 python3 scripts/verify_apv_pipeline.py
 FMM_APV_SAMPLE=/path/to/sample_apv.mov python3 scripts/verify_apv_pipeline.py
+
+# APV 운영 준비 상태 검증 (gh 인증/권한 없으면 SKIPPED)
+python3 scripts/verify_apv_secret_ready.py
+
+# 운영 강제 검증 (PASS가 아니면 실패)
+python3 scripts/verify_apv_secret_ready.py --require-pass
 ```
 
 APV 스모크 결과 해석:
@@ -83,16 +89,25 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
   - `[APV][prepare]`
   - `[APV][verify-script]`
   - `[APV][pytest]`
+- 운영 마감 검증:
+  - `python3 scripts/verify_apv_secret_ready.py` 결과가 `PASS`
+  - `apv-smoke` 최근 3회 `PASS`
+  - 증빙 템플릿 `docs/operations/APV_READINESS.md` 갱신
 
 트러블슈팅:
-- `FAIL: APV_SAMPLE_B64 decode failed.`: 시크릿 문자열이 base64 형식인지 확인
-- `FAIL: decoded APV sample is empty.`: 빈 문자열/잘못된 복사 여부 확인
-- `FAIL: expected APV codec...`: 샘플이 실제 APV 코덱인지 `ffprobe`로 확인
+- `result: FAIL` + `reason: APV_SAMPLE_B64 decode failed.`: 시크릿 문자열이 base64 형식인지 확인
+- `result: FAIL` + `reason: decoded APV sample is empty.`: 빈 문자열/잘못된 복사 여부 확인
+- `result: FAIL` + `reason: expected APV codec...`: 샘플이 실제 APV 코덱인지 `ffprobe`로 확인
+- `result: FAIL` + `reason: required secret is missing: APV_SAMPLE_B64`: 저장소 시크릿 등록 누락
+- `result: FAIL` + `reason: recent apv-smoke job ended with ...`: GitHub Actions `apv-smoke` 최근 실행 로그 확인
 
 ## Pre-push 루틴
 권장 실행:
 ```bash
 scripts/pre_push_checks.sh
+
+# 운영 준비 상태를 로컬에서 강제 검증하려면:
+FMM_ENFORCE_APV_READY=1 scripts/pre_push_checks.sh
 ```
 
 Git hook 자동 설정:

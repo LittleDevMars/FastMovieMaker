@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
-[![Tests](https://img.shields.io/badge/tests-877%20passed%20%2F%20878%20collected-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-890%20passed%20%2F%20891%20collected-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
@@ -27,7 +27,7 @@
 - **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
 - 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
 - 끊김 없는 클립 간 자동 소스 전환
-- **877 passed / 878 collected**로 검증된 견고한 재생 시스템
+- **890 passed / 891 collected**로 검증된 견고한 재생 시스템
 - **GPU 가속 인코딩** — NVENC, QSV, AMF 내보내기 가속 지원
 - **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 - **자석 스냅 (Magnetic Snap)** — 클립 이동 시 인접 클립 및 플레이헤드에 자동 정렬 (Toggle: `S`)
@@ -257,7 +257,7 @@ python main.py
 
 ### 포괄적인 테스트 스위트
 ```bash
-# 전체 테스트 실행 (현재 기준 877 passed / 878 collected)
+# 전체 테스트 실행 (현재 기준 890 passed / 891 collected)
 QT_QPA_PLATFORM=offscreen pytest tests/ -q
 
 # 주요 테스트 모듈:
@@ -276,6 +276,9 @@ pytest -m apv_smoke -v
 # APV 샘플이 있을 때
 FMM_APV_SAMPLE=/path/to/sample_apv.mov python3 scripts/verify_apv_pipeline.py
 FMM_APV_SAMPLE=/path/to/sample_apv.mov pytest -m apv_smoke -v
+
+# APV 운영 준비 상태 확인 (gh 인증/권한 없으면 SKIPPED)
+python3 scripts/verify_apv_secret_ready.py
 ```
 
 ### APV CI 시크릿 운영 (`APV_SAMPLE_B64`)
@@ -286,6 +289,7 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
 - GitHub 저장소 `Settings > Secrets and variables > Actions`에 `APV_SAMPLE_B64`로 등록합니다.
 - `apv-smoke` 잡은 시크릿 미설정 시 `SKIPPED`로 통과하고, 설정 시 `PASS`를 기대합니다.
 - 손상/빈 시크릿이면 디코드 단계에서 즉시 `FAIL` 처리됩니다.
+- 운영 마감 기준: `verify_apv_secret_ready.py`가 `PASS`이고 `apv-smoke` 최근 3회가 `PASS`입니다.
 
 ---
 
@@ -352,6 +356,8 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 
 ## 🎯 로드맵
 
+- 🔄 다음 스프린트: **자막 렌더링 최적화** (대용량 프로젝트 프레임 드랍 완화)
+- ⏳ APV 운영 마감: `APV_SAMPLE_B64` 시크릿 등록/최근 `apv-smoke` PASS 확인 대기
 - [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
 - [x] 타임라인 마커 시스템 — M 키, 컬러 레이블, Undo/Redo (Phase D3)
 - [x] 컬러 보정 타임라인 인디케이터 — 보정된 클립 뱃지 표시 (Phase D3)
