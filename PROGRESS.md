@@ -57,6 +57,11 @@
   - soft-check pre-push: 통과
   - enforced pre-push: 인증/권한 미준비 상태에서 의도대로 실패
 
+### 6. 남은 운영 액션(권한 필요)
+- GitHub 저장소 시크릿 `APV_SAMPLE_B64` 등록
+- `apv-smoke` 최근 3회 `PASS` 확인 및 run URL 수집
+- `docs/operations/APV_READINESS.md`에 `result/reason/run_url` 증빙 기록 후 TODO 체크리스트 종료
+
 ---
 
 ## 2026-03-06 (Day 46) 작업 요약

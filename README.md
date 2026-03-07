@@ -279,6 +279,9 @@ FMM_APV_SAMPLE=/path/to/sample_apv.mov pytest -m apv_smoke -v
 
 # APV 운영 준비 상태 확인 (gh 인증/권한 없으면 SKIPPED)
 python3 scripts/verify_apv_secret_ready.py
+
+# 운영 강제 확인 (PASS가 아니면 실패)
+python3 scripts/verify_apv_secret_ready.py --require-pass
 ```
 
 ### APV CI 시크릿 운영 (`APV_SAMPLE_B64`)
@@ -289,6 +292,7 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
 - GitHub 저장소 `Settings > Secrets and variables > Actions`에 `APV_SAMPLE_B64`로 등록합니다.
 - `apv-smoke` 잡은 시크릿 미설정 시 `SKIPPED`로 통과하고, 설정 시 `PASS`를 기대합니다.
 - 손상/빈 시크릿이면 디코드 단계에서 즉시 `FAIL` 처리됩니다.
+- 로컬 기본 pre-push는 soft-check이며, `FMM_ENFORCE_APV_READY=1`일 때만 hard-check로 `PASS`를 강제합니다.
 - 운영 마감 기준: `verify_apv_secret_ready.py`가 `PASS`이고 `apv-smoke` 최근 3회가 `PASS`입니다.
 
 ---
@@ -356,8 +360,8 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 
 ## 🎯 로드맵
 
-- 🔄 다음 스프린트: **자막 렌더링 최적화** (대용량 프로젝트 프레임 드랍 완화)
-- ⏳ APV 운영 마감: `APV_SAMPLE_B64` 시크릿 등록/최근 `apv-smoke` PASS 확인 대기
+- [x] 자막 렌더링 최적화 (Day 47 완료, visible-window/caching 회귀 테스트 고정)
+- 🔄 다음 스프린트: **APV 운영 마감 종료** (`APV_SAMPLE_B64` 시크릿 등록 + 최근 `apv-smoke` PASS 증빙)
 - [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
 - [x] 타임라인 마커 시스템 — M 키, 컬러 레이블, Undo/Redo (Phase D3)
 - [x] 컬러 보정 타임라인 인디케이터 — 보정된 클립 뱃지 표시 (Phase D3)
