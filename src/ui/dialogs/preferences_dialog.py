@@ -238,6 +238,23 @@ class PreferencesDialog(QDialog):
         whisper_layout.addLayout(whisper_cache_layout)
         layout.addWidget(whisper_group)
 
+        # Project sync group
+        sync_group = QGroupBox(tr("Project Sync"))
+        sync_layout = QVBoxLayout(sync_group)
+
+        sync_root_layout = QHBoxLayout()
+        self._project_sync_root = QLineEdit()
+        self._project_sync_root.setPlaceholderText(tr("Select sync folder"))
+        sync_root_layout.addWidget(QLabel(tr("Sync Folder:")))
+        sync_root_layout.addWidget(self._project_sync_root)
+
+        browse_sync = QPushButton(tr("Browse..."))
+        browse_sync.clicked.connect(self._browse_project_sync_root)
+        sync_root_layout.addWidget(browse_sync)
+
+        sync_layout.addLayout(sync_root_layout)
+        layout.addWidget(sync_group)
+
         layout.addStretch()
         return widget
 
@@ -429,6 +446,8 @@ class PreferencesDialog(QDialog):
 
         whisper_cache = self._settings.get_whisper_cache_dir()
         self._whisper_cache.setText(whisper_cache or "")
+        project_sync_root = self._settings.get_project_sync_root_path()
+        self._project_sync_root.setText(project_sync_root or "")
 
         # API Keys
         provider = self._settings.get_tts_default_provider()
@@ -472,6 +491,8 @@ class PreferencesDialog(QDialog):
 
         whisper_cache = self._whisper_cache.text().strip()
         self._settings.set_whisper_cache_dir(whisper_cache if whisper_cache else None)
+        project_sync_root = self._project_sync_root.text().strip()
+        self._settings.set_project_sync_root_path(project_sync_root if project_sync_root else None)
 
         # API Keys
         self._settings.set_tts_default_provider(self._tts_provider.currentData())
@@ -515,6 +536,14 @@ class PreferencesDialog(QDialog):
         )
         if dir_path:
             self._whisper_cache.setText(dir_path)
+
+    def _browse_project_sync_root(self) -> None:
+        """Browse for project sync root directory."""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, tr("Select Sync Folder"), str(Path.home())
+        )
+        if dir_path:
+            self._project_sync_root.setText(dir_path)
 
     def _add_tts_plugin_path(self) -> None:
         """Add a plugin path from file picker."""

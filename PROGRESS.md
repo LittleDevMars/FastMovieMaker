@@ -4,11 +4,51 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 48 완료 (2026-03-07)
+**현재 상태:** Day 49 완료 (2026-03-08)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
 
 ---
+
+## 2026-03-08 (Day 49) 작업 요약
+
+**클라우드 프로젝트 동기화 MVP 마감 (충돌 요약 UX + 결과 모델 구조화)**
+
+### 1. 동기화 엔진/설정 계층 추가
+- `src/services/project_sync_service.py` 신규 추가
+  - `ProjectSyncService.sync(project_path, sync_root, policy)` 구현
+  - `SyncResultCode(SUCCESS/NO_CHANGES/CONFLICT/ERROR)` + `SyncPolicy(AUTO/USE_LOCAL/USE_REMOTE)` 적용
+  - `SyncResult` 구조화 필드 추가(`local_info`, `remote_info`, `conflict_reason`)
+  - 3-way hash 기반 분기: no-op / pull / push / conflict
+- `SettingsManager` 확장
+  - `get/set_project_sync_root_path()`
+  - `get/set_project_sync_state()` (`project_sync/state` JSON 직렬화)
+
+### 2. UI/컨트롤러 연결
+- File 메뉴에 `Sync Now` 액션 추가
+- `ProjectController.on_sync_project()` 추가
+  - 미저장/미로드 프로젝트 차단
+  - sync root 미설정/미접근 차단
+  - conflict 시 로컬/원격 요약(수정시각/크기/해시) + `Use Local / Use Remote / Cancel` 모달 처리
+  - remote 선택 시 pull 이후 현재 프로젝트 리로드
+- Preferences > Advanced에 `Project Sync` 섹션 추가
+  - sync folder 브라우즈/저장/로드 연동
+
+### 3. 테스트 보강
+- 신규:
+  - `tests/test_project_sync_service.py`
+  - `tests/test_project_controller_sync.py`
+- 확장:
+  - `tests/test_settings_manager.py` (sync root/state round-trip)
+  - `tests/test_preferences_tts_provider.py` (project sync root load/save)
+
+### 4. 실행 검증 결과
+- `pytest tests/test_project_sync_service.py -v` → 5 passed
+- `pytest tests/test_project_controller_sync.py -v` → 7 passed
+- `pytest tests/test_settings_manager.py -v` → 7 passed
+- `QT_QPA_PLATFORM=offscreen pytest tests/test_preferences_tts_provider.py -v` → 6 passed
+- `pytest tests/test_controllers.py -v` → 10 passed
+- `pytest tests/test_project_io.py -q` → 14 passed
 
 ## 2026-03-07 (Day 48) 작업 요약
 
@@ -241,8 +281,8 @@
 | **코드 품질 개선 (Simplify)** — `SubtitleAnimation.is_active` 프로퍼티 추가(subtitle_panel/timeline_painter 중복 체크 제거), `timeline_painter.py` 배지 draw 시 `painter.save()/restore()` 추가(상태 누수 수정), `TemplateService._user_dir` 캐싱(`__init__`에서 1회 결정 → 4개 내부 `_get_user_dir()` 호출 교체), `TODO.md` 현행화(Day 21 잔여물 제거, Day 37 기준 갱신) | **완료 (Day 37)** |
 | **TECHSPEC.md 갱신 + Phase EXPORT2** — TECHSPEC.md 전체 재작성(v0.4.0→v0.10.0, Day 37 기준: 프로젝트 파일 v12, 731→744 테스트, VideoClip/VideoClipTrack/ProjectState 모델 완전 반영, 다이얼로그 9→24개, services 목록 확장, 워커 목록 확장); `ExportPreset` 모델에 `crf: int = 23` + `speed_preset: str = "medium"` 필드 + `to_dict()/from_dict()` 추가; `ExportPresetManager` 신규(QSettings Group `"ExportPresets"`, save/load/delete/list/exists/get_all 메서드); `ExportDialog` 확장(Video Options 상단에 프리셋 툴바[QComboBox+Save…+Delete], Audio Bitrate[96k/128k/192k/320k], Container[MP4/MKV/WebM] 행 추가, 컨테이너 변경 시 파일 저장 필터·확장자 자동 연동, `_on_export_preset_selected()` 전체 UI 세팅); ko.py i18n 8개 키 추가; `tests/test_export2.py` 신규 13개 테스트(744/744 passed) | **완료 (Day 38)** |
 | **Phase PERF/UX3 — 프로젝트 로드 속도 개선** — `project_io.py`: `gzip.compress()` 저장 + magic byte `\x1f\x8b` 자동 감지 해제(기존 평문 JSON 하위호환 완전 보장), `SubtitleAnimation` import 모듈 상단으로 이동(세그먼트마다 반복 로컬 import 제거); `project_controller.py`: `on_load_project()` 중복 비디오 로드 블록 제거(미디어 플레이어 초기화 2회→1회), 파일 대화상자 필터 `*.fmm *.fmm.json`으로 확장; `test_project_io.py`: gzip 인식 직접 파싱 테스트 3개 수정(`import gzip` 추가); 신규 테스트 없음(744/744 passed 유지) | **완료 (Day 39)** |
-| **문서 동기화 + 테스트 안정화** — `src/services/ffmpeg_logger.py`/`src/services/template_service.py` writable fallback 추가(권한 제한 환경 대응), `src/ui/dialogs/tts_dialog.py` ElevenLabs rate 변수 버그 수정, `tests/test_tts_dialog_gui.py` visibility 테스트 픽스(dialog.show), `pyproject.toml` pytest `slow` 마커 등록, `README.md`/`TODO.md`/`PROGRESS.md` 현행화; 전체 테스트 **894/895 passed** | **완료 (Day 40)** |
-| **테스트 수치 검증 + 문서 재동기화** — `QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only` 실행으로 **895 tests collected** 확인, `QT_QPA_PLATFORM=offscreen pytest tests/ -q` 실행으로 **894/895 passed** 확인, `README.md` 현재 수치/배지 문구 동기화 | **완료 (Day 42)** |
+| **문서 동기화 + 테스트 안정화** — `src/services/ffmpeg_logger.py`/`src/services/template_service.py` writable fallback 추가(권한 제한 환경 대응), `src/ui/dialogs/tts_dialog.py` ElevenLabs rate 변수 버그 수정, `tests/test_tts_dialog_gui.py` visibility 테스트 픽스(dialog.show), `pyproject.toml` pytest `slow` 마커 등록, `README.md`/`TODO.md`/`PROGRESS.md` 현행화; 전체 테스트 **910/911 passed** | **완료 (Day 40)** |
+| **테스트 수치 검증 + 문서 재동기화** — `QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only` 실행으로 **911 tests collected** 확인, `QT_QPA_PLATFORM=offscreen pytest tests/ -q` 실행으로 **910/911 passed** 확인, `README.md` 현재 수치/배지 문구 동기화 | **완료 (Day 42)** |
 | **문서-테스트 수치 동기화 자동화 + 개발자 가이드 착수** — `scripts/sync_test_counts.py` 추가(update/check 모드), `.github/workflows/test-count-sync.yml` 추가(PR/푸시 시 수치 불일치 실패), `docs/DEVELOPER_GUIDE.md` 신규 작성(셋업/아키텍처/테스트/PR 체크리스트) | **완료 (Day 42)** |
 | **품질 파이프라인 확장 + 실시간 자막 프리뷰 MVP** — `.github/workflows/tests.yml` 추가(PR/푸시 `pytest tests/ -q`), `scripts/sync_test_counts.py`를 Day 비의존 운영 모드로 안정화(테스트 수치 블록만 갱신), `docs/DEVELOPER_GUIDE.md` 확장(브랜치/커밋 규칙·테스트 전략·릴리즈 체크리스트), `WhisperDialog` 라이브 프리뷰(최근 8개 세그먼트) + `tests/test_whisper_dialog_preview.py` 추가, `scripts/pre_push_checks.sh`/`.githooks/pre-push`/`scripts/install_git_hooks.sh`로 pre-push 루틴 도입 | **완료 (Day 43)** |
 

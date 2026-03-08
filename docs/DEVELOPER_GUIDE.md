@@ -28,6 +28,9 @@ python3 main.py
 - TTS provider 레지스트리는 내장 provider를 항상 유지하고, 외부 플러그인(`register_tts_providers`)은 실패 격리 후 선택적으로 병합합니다.
 - 플러그인 경로는 `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수를 병합해 로드합니다.
 - provider가 `provider_id`/`display_name`/`list_voices`/`requires_api_key` 계약을 만족하면 Preferences/TTS/Batch 엔진 UI에 자동 노출됩니다.
+- 프로젝트 동기화(MVP)는 로컬 폴더 백엔드 기준 수동 실행(`File > Sync Now`)만 지원합니다.
+- 동기화 기본 흐름은 `Pull(원격 변경 반영) → 충돌 검사 → Push(로컬 반영)`이며 충돌은 자동 병합하지 않고 `Use Local/Use Remote/Cancel` 선택으로만 처리합니다.
+- 충돌 다이얼로그는 로컬/원격 요약(수정시각, 파일크기, 해시 축약값)을 표시하며, 컨트롤러는 `SyncResult` 구조화 필드(`local_info`, `remote_info`, `conflict_reason`)만 사용해 분기합니다.
 
 ## 브랜치 및 커밋 규칙
 - 기능/수정 브랜치는 `codex/<short-topic>` 형식을 사용합니다.
@@ -70,6 +73,10 @@ python3 scripts/verify_apv_secret_ready.py --require-pass
 
 # 프로젝트 I/O 압축 계측
 python3 scripts/benchmark_project_io.py --segments 2000 --iterations 3 --text-length 80
+
+# 프로젝트 동기화 서비스 단위 테스트
+pytest tests/test_project_sync_service.py -v
+pytest tests/test_project_controller_sync.py -v
 ```
 
 APV 스모크 결과 해석:
@@ -108,6 +115,15 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
 - `compression_ratio_avg`: 작을수록 좋음(권장 기준: `<= 0.50`)
 - `save_ms_avg`/`load_ms_avg`: 로컬 반복 비교용 지표(절대값보다 이전 대비 회귀 여부를 우선 확인)
 - 운영/CI에서는 동일 옵션(`--segments 2000 --iterations 3 --text-length 80`)으로 비교
+
+Cloud Sync MVP 수동 체크리스트:
+- 동일 파일 no-op: `Sync Now` 후 "already up to date" 상태 확인
+- 원격 선행 변경 pull: sync root 파일만 수정 후 `Sync Now` 시 로컬 반영 확인
+- 로컬 선행 변경 push: 프로젝트 편집 후 `Sync Now` 시 sync root 반영 확인
+- 양측 충돌: 로컬/원격 모두 수정 후 `Sync Now`에서 요약 모달 확인
+  - `Use Local` 선택 시 원격이 로컬로 덮이는지 확인
+  - `Use Remote` 선택 시 로컬 reload 후 원격 내용이 반영되는지 확인
+  - `Cancel` 선택 시 로컬/원격 파일이 유지되는지 확인
 
 ## Pre-push 루틴
 권장 실행:

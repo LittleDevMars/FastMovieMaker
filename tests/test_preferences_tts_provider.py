@@ -24,6 +24,7 @@ class _FakeSettingsManager:
             "frame_cache_quality": 5,
             "ffmpeg_path": None,
             "whisper_cache_dir": None,
+            "project_sync_root_path": None,
             "tts_default_provider": TTSEngine.EDGE_TTS,
             "deepl_api_key": "",
             "openai_api_key": "",
@@ -186,3 +187,50 @@ def test_preferences_includes_plugin_provider_in_default_combo(qtbot, monkeypatc
 
     assert dialog._tts_provider.findData("plugin.demo") >= 0
     assert dialog._tts_provider.currentData() == "plugin.demo"
+
+
+def test_preferences_loads_project_sync_root(qtbot, monkeypatch) -> None:
+    shared_settings = _FakeSettingsManager()
+    shared_settings.set_project_sync_root_path("/tmp/fmm-sync")
+    monkeypatch.setattr(pref_module, "SettingsManager", lambda: shared_settings)
+    monkeypatch.setattr(
+        pref_module,
+        "get_all_providers",
+        lambda: {
+            TTSEngine.EDGE_TTS: SimpleNamespace(
+                provider_id=TTSEngine.EDGE_TTS,
+                display_name="Edge-TTS (Free)",
+            ),
+        },
+    )
+    monkeypatch.setattr(pref_module, "reload_provider_registry", lambda: None)
+    monkeypatch.setattr(pref_module, "get_provider_load_errors", lambda: [])
+
+    dialog = pref_module.PreferencesDialog()
+    qtbot.addWidget(dialog)
+
+    assert dialog._project_sync_root.text() == "/tmp/fmm-sync"
+
+
+def test_preferences_saves_project_sync_root(qtbot, monkeypatch) -> None:
+    shared_settings = _FakeSettingsManager()
+    monkeypatch.setattr(pref_module, "SettingsManager", lambda: shared_settings)
+    monkeypatch.setattr(
+        pref_module,
+        "get_all_providers",
+        lambda: {
+            TTSEngine.EDGE_TTS: SimpleNamespace(
+                provider_id=TTSEngine.EDGE_TTS,
+                display_name="Edge-TTS (Free)",
+            ),
+        },
+    )
+    monkeypatch.setattr(pref_module, "reload_provider_registry", lambda: None)
+    monkeypatch.setattr(pref_module, "get_provider_load_errors", lambda: [])
+
+    dialog = pref_module.PreferencesDialog()
+    qtbot.addWidget(dialog)
+    dialog._project_sync_root.setText("/tmp/new-sync")
+    dialog._save_and_accept()
+
+    assert shared_settings.get_project_sync_root_path() == "/tmp/new-sync"

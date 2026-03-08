@@ -1,5 +1,6 @@
 """Settings manager for application preferences."""
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -215,6 +216,36 @@ class SettingsManager:
         normalized = self._normalize_path_list(paths)
         self._settings.setValue("tts/plugin_paths", normalized)
 
+    # ---------------------------------------------------- Project Sync Settings
+
+    def get_project_sync_root_path(self) -> Optional[str]:
+        """Get project sync root folder path."""
+        path = self._settings.value("project_sync/root_path", "", str)
+        token = str(path).strip()
+        return token if token else None
+
+    def set_project_sync_root_path(self, path: Optional[str]) -> None:
+        """Set project sync root folder path."""
+        token = str(path).strip() if path is not None else ""
+        self._settings.setValue("project_sync/root_path", token)
+
+    def get_project_sync_state(self) -> dict[str, dict[str, str]]:
+        """Get per-project sync state map."""
+        raw_value = self._settings.value("project_sync/state", "{}", str)
+        if isinstance(raw_value, dict):
+            return self._normalize_sync_state(raw_value)
+        try:
+            parsed = json.loads(str(raw_value))
+        except Exception:
+            return {}
+        return self._normalize_sync_state(parsed)
+
+    def set_project_sync_state(self, state: dict[str, dict[str, str]]) -> None:
+        """Set per-project sync state map."""
+        normalized = self._normalize_sync_state(state)
+        payload = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        self._settings.setValue("project_sync/state", payload)
+
     # ---------------------------------------------------- Shortcut Settings
 
     def get_shortcut(self, action: str) -> str:
@@ -243,3 +274,20 @@ class SettingsManager:
                 out.append(token)
             return out
         return []
+
+    @staticmethod
+    def _normalize_sync_state(value: Any) -> dict[str, dict[str, str]]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for raw_key, raw_entry in value.items():
+            key = str(raw_key).strip()
+            if not key or not isinstance(raw_entry, dict):
+                continue
+            last_hash = str(raw_entry.get("last_hash", "")).strip()
+            updated_at = str(raw_entry.get("updated_at", "")).strip()
+            out[key] = {
+                "last_hash": last_hash,
+                "updated_at": updated_at,
+            }
+        return out

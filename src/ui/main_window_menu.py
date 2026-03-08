@@ -59,6 +59,10 @@ def build_main_window_menu(window) -> None:
     load_action.triggered.connect(window._project_ctrl.on_load_project)
     file_menu.addAction(load_action)
 
+    sync_action = QAction(tr("Sync Now"), window)
+    sync_action.triggered.connect(window._project_ctrl.on_sync_project)
+    file_menu.addAction(sync_action)
+
     window._recent_menu = QMenu(tr("Recent &Projects"), window)
     file_menu.addMenu(window._recent_menu)
     window._project_ctrl.update_recent_menu()

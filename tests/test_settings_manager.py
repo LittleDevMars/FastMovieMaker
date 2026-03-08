@@ -58,3 +58,38 @@ def test_tts_plugin_paths_normalize_invalid_types() -> None:
     assert mgr.get_tts_plugin_paths() == []
     mgr._settings.setValue("tts/plugin_paths", ["/x.py", "", "  ", "/x.py", "/y.py"])
     assert mgr.get_tts_plugin_paths() == ["/x.py", "/y.py"]
+
+
+def test_project_sync_root_roundtrip() -> None:
+    mgr = _make_manager()
+    assert mgr.get_project_sync_root_path() is None
+    mgr.set_project_sync_root_path("/tmp/fmm_sync")
+    assert mgr.get_project_sync_root_path() == "/tmp/fmm_sync"
+    mgr.set_project_sync_root_path("")
+    assert mgr.get_project_sync_root_path() is None
+
+
+def test_project_sync_state_roundtrip_and_normalize() -> None:
+    mgr = _make_manager()
+    state = {
+        "demo.fmm.json": {
+            "last_hash": "abc123",
+            "updated_at": "2026-03-08T00:00:00+00:00",
+        }
+    }
+    mgr.set_project_sync_state(state)
+    assert mgr.get_project_sync_state() == state
+
+    mgr._settings.setValue(
+        "project_sync/state",
+        '{"demo.fmm.json":{"last_hash":"h1","updated_at":"u1"},"":{"last_hash":"x"}}',
+    )
+    assert mgr.get_project_sync_state() == {
+        "demo.fmm.json": {
+            "last_hash": "h1",
+            "updated_at": "u1",
+        }
+    }
+
+    mgr._settings.setValue("project_sync/state", "not-json")
+    assert mgr.get_project_sync_state() == {}
