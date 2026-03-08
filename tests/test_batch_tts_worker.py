@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.services.tts_provider import TTSRequestErrorCode
 from src.workers.batch_tts_worker import BatchTtsJob, BatchTtsResult, BatchTtsWorker
 from src.services.text_splitter import SplitStrategy
 
@@ -55,9 +55,10 @@ class TestBatchTtsResultFields:
 def _make_worker(
     jobs: list[BatchTtsJob],
     voice: str = "ko-KR-SunHiNeural",
-    rate: str = "+0%",
+    speed: float = 1.0,
+    engine: str = "edge_tts",
 ) -> BatchTtsWorker:
-    return BatchTtsWorker(jobs=jobs, voice=voice, rate=rate)
+    return BatchTtsWorker(jobs=jobs, voice=voice, speed=speed, engine=engine)
 
 
 class TestBatchTtsWorkerSignals:
@@ -82,15 +83,14 @@ class TestBatchTtsWorkerSignals:
         (tmp_path / "seg0.mp3").write_bytes(b"")
 
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                new_callable=AsyncMock,
-                return_value=[mock_audio_seg],
-            ),
+            patch("src.workers.batch_tts_worker.get_provider") as mock_get_provider,
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files"
             ) as mock_merge,
         ):
+            provider = MagicMock()
+            provider.generate_segments = AsyncMock(return_value=[mock_audio_seg])
+            mock_get_provider.return_value = provider
             # merge_audio_files 가 output_path 파일을 만든 것처럼 처리
             def _merge(audio_files, output_path, add_silence_ms=0):
                 output_path.write_bytes(b"")
@@ -101,6 +101,42 @@ class TestBatchTtsWorkerSignals:
         assert len(finished_calls) == 1
         idx, result = finished_calls[0]
         assert idx == 0
+        provider.generate_segments.assert_awaited_once()
+
+    def test_worker_emits_error_for_unknown_provider(self, tmp_path):
+        txt = tmp_path / "hello.txt"
+        txt.write_text("안녕하세요.", encoding="utf-8")
+        job = BatchTtsJob(txt_path=txt, output_dir=tmp_path)
+        worker = _make_worker([job], engine="unknown-provider")
+
+        all_results: list = []
+        worker.all_finished.connect(lambda r: all_results.extend(r))
+
+        with patch("src.workers.batch_tts_worker.get_provider", return_value=None):
+            worker.run()
+
+        assert len(all_results) == 1
+        assert all_results[0].success is False
+        assert f"TTS_ERROR::{TTSRequestErrorCode.PROVIDER_UNAVAILABLE.value}::" in (all_results[0].error or "")
+
+    def test_worker_provider_exception_is_reported(self, tmp_path):
+        txt = tmp_path / "hello.txt"
+        txt.write_text("안녕하세요.", encoding="utf-8")
+        job = BatchTtsJob(txt_path=txt, output_dir=tmp_path)
+        worker = _make_worker([job])
+
+        all_results: list = []
+        worker.all_finished.connect(lambda r: all_results.extend(r))
+
+        provider = MagicMock()
+        provider.generate_segments = AsyncMock(side_effect=RuntimeError("provider boom"))
+
+        with patch("src.workers.batch_tts_worker.get_provider", return_value=provider):
+            worker.run()
+
+        assert len(all_results) == 1
+        assert all_results[0].success is False
+        assert "provider boom" in (all_results[0].error or "")
 
     def test_worker_emits_all_finished(self, tmp_path):
         """all_finished 시그널이 한 번 발송된다."""
@@ -131,16 +167,16 @@ class TestBatchTtsWorkerSignals:
 
         call_count = [0]
 
-        async def _gen_segments(segments, voice, rate, output_dir, on_progress=None, **kw):
+        async def _gen_segments(segments, voice, speed, output_dir, on_progress=None, **kw):
             res = [_fake_seg(t, i, tmp_path) for i, (t, _) in enumerate(segments)]
             call_count[0] += 1
             return res
 
+        provider = MagicMock()
+        provider.generate_segments = AsyncMock(side_effect=_gen_segments)
+
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                side_effect=_gen_segments,
-            ),
+            patch("src.workers.batch_tts_worker.get_provider", return_value=provider),
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files",
                 side_effect=lambda audio_files, output_path, **kw: output_path.write_bytes(b""),
@@ -169,7 +205,7 @@ class TestBatchTtsWorkerSignals:
 
         call_count = [0]
 
-        async def _gen_segments(segments, voice, rate, output_dir, on_progress=None, **kw):
+        async def _gen_segments(segments, voice, speed, output_dir, on_progress=None, **kw):
             # 첫 번째 작업 처리 후 취소
             if call_count[0] == 0:
                 worker.cancel()
@@ -183,15 +219,15 @@ class TestBatchTtsWorkerSignals:
             return [seg]
 
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                side_effect=_gen_segments,
-            ),
+            patch("src.workers.batch_tts_worker.get_provider") as mock_get_provider,
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files",
                 side_effect=lambda audio_files, output_path, **kw: output_path.write_bytes(b""),
             ),
         ):
+            provider = MagicMock()
+            provider.generate_segments = AsyncMock(side_effect=_gen_segments)
+            mock_get_provider.return_value = provider
             worker.run()
 
         # 취소 후에는 1개 이하만 처리됨
@@ -211,6 +247,59 @@ class TestBatchTtsWorkerSignals:
 
         assert len(all_results) == 1
         assert all_results[0].error is not None
+        assert f"TTS_ERROR::{TTSRequestErrorCode.EMPTY_SCRIPT.value}::" in (all_results[0].error or "")
+
+    def test_worker_handles_empty_segments(self, tmp_path):
+        txt = tmp_path / "empty_segments.txt"
+        txt.write_text("non-empty", encoding="utf-8")
+
+        job = BatchTtsJob(txt_path=txt, output_dir=tmp_path)
+        worker = _make_worker([job])
+
+        all_results: list = []
+        worker.all_finished.connect(lambda r: all_results.extend(r))
+        with patch("src.workers.batch_tts_worker.TextSplitter.split", return_value=[]):
+            worker.run()
+
+        assert len(all_results) == 1
+        assert all_results[0].success is False
+        assert f"TTS_ERROR::{TTSRequestErrorCode.EMPTY_SEGMENTS.value}::" in (all_results[0].error or "")
+
+    def test_worker_handles_invalid_speed(self, tmp_path):
+        txt = tmp_path / "invalid_speed.txt"
+        txt.write_text("hello", encoding="utf-8")
+        job = BatchTtsJob(txt_path=txt, output_dir=tmp_path)
+        worker = _make_worker([job], speed=9.9)
+
+        all_results: list = []
+        worker.all_finished.connect(lambda r: all_results.extend(r))
+
+        provider = MagicMock()
+        provider.generate_segments = AsyncMock(return_value=[])
+        with patch("src.workers.batch_tts_worker.get_provider", return_value=provider):
+            worker.run()
+
+        assert len(all_results) == 1
+        assert all_results[0].success is False
+        assert f"TTS_ERROR::{TTSRequestErrorCode.INVALID_SPEED.value}::" in (all_results[0].error or "")
+
+    def test_worker_handles_empty_voice(self, tmp_path):
+        txt = tmp_path / "empty_voice.txt"
+        txt.write_text("hello", encoding="utf-8")
+        job = BatchTtsJob(txt_path=txt, output_dir=tmp_path)
+        worker = _make_worker([job], voice="")
+
+        all_results: list = []
+        worker.all_finished.connect(lambda r: all_results.extend(r))
+
+        provider = MagicMock()
+        provider.generate_segments = AsyncMock(return_value=[])
+        with patch("src.workers.batch_tts_worker.get_provider", return_value=provider):
+            worker.run()
+
+        assert len(all_results) == 1
+        assert all_results[0].success is False
+        assert f"TTS_ERROR::{TTSRequestErrorCode.VOICE_REQUIRED.value}::" in (all_results[0].error or "")
 
     def test_worker_saves_mp3_and_srt(self, tmp_path):
         """성공 시 .mp3 와 .srt 경로가 결과에 포함된다."""
@@ -232,16 +321,15 @@ class TestBatchTtsWorkerSignals:
         mock_seg.text = "안녕하세요."
 
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                new_callable=AsyncMock,
-                return_value=[mock_seg],
-            ),
+            patch("src.workers.batch_tts_worker.get_provider") as mock_get_provider,
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files",
                 side_effect=lambda audio_files, output_path, **kw: output_path.write_bytes(b""),
             ),
         ):
+            provider = MagicMock()
+            provider.generate_segments = AsyncMock(return_value=[mock_seg])
+            mock_get_provider.return_value = provider
             worker.run()
 
         assert len(all_results) == 1
@@ -266,7 +354,7 @@ class TestBatchTtsWorkerSignals:
 
         call_step = [0]
 
-        async def _gen_segments(segments, voice, rate, output_dir, on_progress=None, **kw):
+        async def _gen_segments(segments, voice, speed, output_dir, on_progress=None, **kw):
             segs = []
             for i, (t, idx) in enumerate(segments):
                 p = tmp_path / f"seg_{call_step[0]}_{i}.mp3"
@@ -282,15 +370,15 @@ class TestBatchTtsWorkerSignals:
             return segs
 
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                side_effect=_gen_segments,
-            ),
+            patch("src.workers.batch_tts_worker.get_provider") as mock_get_provider,
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files",
                 side_effect=lambda audio_files, output_path, **kw: output_path.write_bytes(b""),
             ),
         ):
+            provider = MagicMock()
+            provider.generate_segments = AsyncMock(side_effect=_gen_segments)
+            mock_get_provider.return_value = provider
             worker.run()
 
         # progress 시그널이 최소 1번 이상 발송됨
@@ -316,7 +404,7 @@ class TestBatchTtsWorkerSignals:
 
         call_count = [0]
 
-        async def _gen_or_fail(segments, voice, rate, output_dir, on_progress=None, **kw):
+        async def _gen_or_fail(segments, voice, speed, output_dir, on_progress=None, **kw):
             call_count[0] += 1
             if call_count[0] == 2:
                 raise RuntimeError("의도적 실패")
@@ -329,15 +417,15 @@ class TestBatchTtsWorkerSignals:
             return [seg]
 
         with (
-            patch(
-                "src.workers.batch_tts_worker.TTSService.generate_segments",
-                side_effect=_gen_or_fail,
-            ),
+            patch("src.workers.batch_tts_worker.get_provider") as mock_get_provider,
             patch(
                 "src.workers.batch_tts_worker.AudioMerger.merge_audio_files",
                 side_effect=lambda audio_files, output_path, **kw: output_path.write_bytes(b""),
             ),
         ):
+            provider = MagicMock()
+            provider.generate_segments = AsyncMock(side_effect=_gen_or_fail)
+            mock_get_provider.return_value = provider
             worker.run()
 
         assert len(all_results) == 2
@@ -360,6 +448,8 @@ class TestBatchTtsI18nKeys:
             "Browse\u2026",
             "Start Batch TTS",
             "Batch TTS complete",
+            "No voice available for selected provider.",
+            "Selected provider is unavailable.",
         ]
         for key in required_keys:
             assert key in STRINGS, f"Missing i18n key: {key!r}"

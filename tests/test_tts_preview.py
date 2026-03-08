@@ -9,6 +9,7 @@ import pytest
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtMultimedia import QMediaPlayer
 
+from src.services.tts_provider import TTSRequestErrorCode, serialize_tts_error
 from src.ui.dialogs.tts_dialog import TTSDialog, TTSPreviewWorker
 from src.utils.config import TTSEngine
 
@@ -16,14 +17,16 @@ from src.utils.config import TTSEngine
 class TestTTSPreviewWorker:
     """Test TTSPreviewWorker logic."""
 
-    @patch("src.ui.dialogs.tts_dialog.TTSService.generate_speech")
-    def test_worker_run_edge_tts(self, mock_generate):
+    @patch("src.ui.dialogs.tts_dialog.get_provider")
+    def test_worker_run_edge_tts(self, mock_get_provider):
         """Test worker runs Edge-TTS generation."""
+        provider = MagicMock()
+        mock_get_provider.return_value = provider
         worker = TTSPreviewWorker(
             engine=TTSEngine.EDGE_TTS,
             text="Hello",
             voice="en-US-GuyNeural",
-            rate="+0%",
+            speed=1.0,
         )
 
         # Capture signal
@@ -35,17 +38,18 @@ class TestTTSPreviewWorker:
         assert len(results) == 1
         assert "tts_preview_" in results[0]
         assert results[0].endswith(".mp3")
-        mock_generate.assert_called_once()
+        provider.synthesize.assert_called_once()
 
-    @patch("src.services.elevenlabs_tts_service.ElevenLabsTTSService.generate_speech")
-    def test_worker_run_elevenlabs(self, mock_generate):
+    @patch("src.ui.dialogs.tts_dialog.get_provider")
+    def test_worker_run_elevenlabs(self, mock_get_provider):
         """Test worker runs ElevenLabs generation."""
+        provider = MagicMock()
+        mock_get_provider.return_value = provider
         worker = TTSPreviewWorker(
             engine=TTSEngine.ELEVENLABS,
             text="Hello",
             voice="voice_id",
-            rate="1.0",
-            api_key="test_key",
+            speed=1.0,
         )
 
         results = []
@@ -54,7 +58,7 @@ class TestTTSPreviewWorker:
         worker.run()
 
         assert len(results) == 1
-        mock_generate.assert_called_once()
+        provider.synthesize.assert_called_once()
 
 
 class TestTTSDialogPreview:
@@ -101,3 +105,10 @@ class TestTTSDialogPreview:
         # Check player call
         dialog._player.setSource.assert_called_with(QUrl.fromLocalFile(fake_path))
         dialog._player.play.assert_called_once()
+
+    def test_preview_error_shows_friendly_message(self, dialog, qtbot):
+        with patch("src.ui.dialogs.tts_dialog.to_user_message", return_value="friendly from presenter"):
+            dialog._on_preview_error(
+                serialize_tts_error(TTSRequestErrorCode.INVALID_SPEED, "speed must be between 0.1 and 4.0")
+            )
+        assert "friendly from presenter" in dialog._status_label.text()

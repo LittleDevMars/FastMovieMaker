@@ -1,9 +1,12 @@
 """Settings manager for application preferences."""
 
+import os
 from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QSettings
+
+from src.utils.config import TTSEngine
 
 # 커스터마이징 가능한 단축키 기본값
 _SHORTCUT_DEFAULTS: dict[str, str] = {
@@ -187,6 +190,31 @@ class SettingsManager:
         """Set a setting value by key."""
         self._settings.setValue(key, value)
 
+    # ---------------------------------------------------- TTS Settings
+
+    def get_tts_default_provider(self) -> str:
+        """Get default TTS provider id (default: edge_tts)."""
+        value = self._settings.value("tts/default_provider", TTSEngine.EDGE_TTS, str)
+        if not str(value).strip():
+            return TTSEngine.EDGE_TTS
+        return str(value)
+
+    def set_tts_default_provider(self, provider_id: str) -> None:
+        """Set default TTS provider id."""
+        if not str(provider_id).strip():
+            provider_id = TTSEngine.EDGE_TTS
+        self._settings.setValue("tts/default_provider", str(provider_id))
+
+    def get_tts_plugin_paths(self) -> list[str]:
+        """Get configured TTS plugin file paths."""
+        raw_value = self._settings.value("tts/plugin_paths", [])
+        return self._normalize_path_list(raw_value)
+
+    def set_tts_plugin_paths(self, paths: list[str]) -> None:
+        """Set configured TTS plugin file paths."""
+        normalized = self._normalize_path_list(paths)
+        self._settings.setValue("tts/plugin_paths", normalized)
+
     # ---------------------------------------------------- Shortcut Settings
 
     def get_shortcut(self, action: str) -> str:
@@ -198,3 +226,20 @@ class SettingsManager:
     def set_shortcut(self, action: str, key: str) -> None:
         """Persist the key sequence string for the given action."""
         self._settings.setValue(f"shortcuts/{action}", key)
+
+    @staticmethod
+    def _normalize_path_list(value: Any) -> list[str]:
+        if isinstance(value, str):
+            tokens = value.split(os.pathsep) if os.pathsep in value else [value]
+            return [token.strip() for token in tokens if token and token.strip()]
+        if isinstance(value, (list, tuple, set)):
+            seen: set[str] = set()
+            out: list[str] = []
+            for item in value:
+                token = str(item).strip()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                out.append(token)
+            return out
+        return []

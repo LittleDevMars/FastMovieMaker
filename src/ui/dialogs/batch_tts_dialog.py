@@ -28,18 +28,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
-from src.services.tts_service import TTSService
+from src.services.tts_error_presenter import to_user_message
+from src.services.tts_provider_registry import get_all_providers, get_provider
 from src.utils.i18n import tr
 from src.workers.batch_tts_worker import BatchTtsJob, BatchTtsResult, BatchTtsWorker
 
-
-_VOICE_OPTIONS = [
-    ("ko-KR-SunHiNeural", "SunHi (Korean Female)"),
-    ("ko-KR-InJoonNeural", "InJoon (Korean Male)"),
-    ("en-US-JennyNeural", "Jenny (English Female)"),
-    ("en-US-GuyNeural", "Guy (English Male)"),
-]
+_EDGE_PROVIDER_ID = "edge_tts"
 
 _STRATEGY_OPTIONS = [
     (SplitStrategy.SENTENCE, "문장 단위"),
@@ -60,6 +56,7 @@ class BatchTtsDialog(QDialog):
         self._thread: QThread | None = None
         self._worker: BatchTtsWorker | None = None
         self._results: list[BatchTtsResult] = []
+        self._provider_available = True
 
         self._build_ui()
 
@@ -106,14 +103,23 @@ class BatchTtsDialog(QDialog):
         out_row.addWidget(browse_btn)
         settings_layout.addLayout(out_row)
 
+        # 엔진
+        engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel(tr("Engine:")))
+        self._engine_combo = QComboBox()
+        self._populate_engine_options()
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        engine_row.addWidget(self._engine_combo, 1)
+        settings_layout.addLayout(engine_row)
+
         # 음성
         voice_row = QHBoxLayout()
         voice_row.addWidget(QLabel(tr("Voice:")))
         self._voice_combo = QComboBox()
-        for voice_id, display in _VOICE_OPTIONS:
-            self._voice_combo.addItem(display, voice_id)
         voice_row.addWidget(self._voice_combo, 1)
         settings_layout.addLayout(voice_row)
+        self._voice_state_label = QLabel("")
+        settings_layout.addWidget(self._voice_state_label)
 
         # 속도 슬라이더 (0.5x ~ 2.0x, step 0.1)
         speed_row = QHBoxLayout()
@@ -192,7 +198,46 @@ class BatchTtsDialog(QDialog):
         btn_row.addWidget(self._cancel_btn)
         layout.addLayout(btn_row)
 
+        # Preferences 기반 기본 엔진 적용 후 음성 로드
+        default_provider = SettingsManager().get_tts_default_provider()
+        idx = self._engine_combo.findData(default_provider)
+        if idx < 0:
+            idx = self._engine_combo.findData(_EDGE_PROVIDER_ID)
+        if idx >= 0:
+            self._engine_combo.setCurrentIndex(idx)
+        elif self._engine_combo.count() > 0:
+            self._engine_combo.setCurrentIndex(0)
+        self._on_engine_changed(self._engine_combo.currentIndex())
+
     # ------------------------------------------------------------------ Slots
+
+    def _populate_engine_options(self) -> None:
+        self._engine_combo.clear()
+        for provider in get_all_providers().values():
+            self._engine_combo.addItem(provider.display_name, provider.provider_id)
+
+    def _on_engine_changed(self, _index: int) -> None:
+        engine = self._engine_combo.currentData()
+        self._voice_combo.clear()
+
+        provider = get_provider(engine)
+        if provider is None:
+            self._provider_available = False
+            self._voice_state_label.setText(tr("Selected provider is unavailable."))
+            self._start_btn.setEnabled(False)
+            return
+
+        self._provider_available = True
+        for label, voice_id in provider.list_voices(None):
+            self._voice_combo.addItem(label, voice_id)
+        if self._voice_combo.count() == 0:
+            self._voice_state_label.setText(tr("No voice available for selected provider."))
+            self._start_btn.setEnabled(False)
+            return
+
+        self._voice_combo.setCurrentIndex(0)
+        self._voice_state_label.setText("")
+        self._start_btn.setEnabled(True)
 
     def _on_add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -232,6 +277,28 @@ class BatchTtsDialog(QDialog):
             return
 
         output_dir = Path(output_dir_text)
+        engine = self._engine_combo.currentData()
+
+        if not self._provider_available or get_provider(engine) is None:
+            QMessageBox.warning(
+                self,
+                tr("TTS Generation Failed"),
+                tr("Failed to generate speech") + f":\n\n{tr('Selected provider is unavailable.')}",
+            )
+            return
+
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
+            api_key = SettingsManager().get_elevenlabs_api_key()
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    tr("API Key Required"),
+                    tr("Selected provider requires an API key.") + "\n\n"
+                    + tr("Set it in Edit > Preferences > API Keys."),
+                )
+                return
 
         # 작업 목록 생성
         jobs: list[BatchTtsJob] = []
@@ -249,8 +316,14 @@ class BatchTtsDialog(QDialog):
 
         # 설정 수집
         voice_id: str = self._voice_combo.currentData()
+        if not voice_id:
+            QMessageBox.warning(
+                self,
+                tr("TTS Generation Failed"),
+                tr("Failed to generate speech") + f":\n\n{tr('No voice available for selected provider.')}",
+            )
+            return
         speed = self._speed_slider.value() / 10.0
-        rate = TTSService.format_rate(speed)
         strategy: SplitStrategy = self._strategy_combo.currentData()
 
         # UI 전환
@@ -264,7 +337,8 @@ class BatchTtsDialog(QDialog):
         self._worker = BatchTtsWorker(
             jobs=jobs,
             voice=voice_id,
-            rate=rate,
+            speed=speed,
+            engine=engine,
             strategy=strategy,
         )
         self._worker.moveToThread(self._thread)
@@ -333,7 +407,8 @@ class BatchTtsDialog(QDialog):
             )
 
     def _on_worker_error(self, msg: str) -> None:
-        QMessageBox.critical(self, tr("Batch TTS Error"), msg)
+        self._current_file_label.setText(msg)
+        QMessageBox.critical(self, tr("Batch TTS Error"), to_user_message(msg))
         self._start_btn.setEnabled(True)
 
     def _on_cancel(self) -> None:

@@ -70,8 +70,12 @@ def build_main_window_ui(window, player, audio_output, tts_audio_output, wavefor
     window._timeline.set_waveform_service(waveform_service)
     window._track_headers = TrackHeaderPanel(timeline=window._timeline)
     window._track_headers.state_changed.connect(window._on_track_state_changed)
+    # Keep header/timeline container heights in sync with the fixed timeline height.
+    timeline_h = window._timeline.height()
+    window._track_headers.setFixedHeight(timeline_h)
 
     window._timeline_container = QWidget()
+    window._timeline_container.setFixedHeight(timeline_h)
     timeline_outer_layout = QHBoxLayout(window._timeline_container)
     timeline_outer_layout.setContentsMargins(0, 0, 0, 0)
     timeline_outer_layout.setSpacing(0)

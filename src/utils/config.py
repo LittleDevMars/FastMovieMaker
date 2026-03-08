@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 APP_NAME = "FastMovieMaker"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.10.0"
 ORG_NAME = "FastMovieMaker"
 
 # FFmpeg — 빈 문자열로 두면 find_ffmpeg()이 PATH → imageio-ffmpeg 순서로 탐색

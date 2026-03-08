@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QKeySequenceEdit,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -26,8 +27,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.services.settings_manager import SettingsManager, _SHORTCUT_DEFAULTS
+from src.services.tts_provider_registry import (
+    get_all_providers,
+    get_provider_load_errors,
+    reload_provider_registry,
+)
 from src.services.translator import ISO_639_1_CODES
 from src.utils.i18n import tr
+
+_EDGE_PROVIDER_ID = "edge_tts"
 
 # 단축키 탭에 표시될 (action_key, display_name) 목록
 _SHORTCUT_ACTIONS: list[tuple[str, str]] = [
@@ -238,6 +246,39 @@ class PreferencesDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
+        # Default TTS provider
+        provider_group = QGroupBox(tr("Default TTS Provider"))
+        provider_layout = QFormLayout(provider_group)
+        self._tts_provider = QComboBox()
+        self._populate_tts_provider_options()
+        provider_layout.addRow(tr("Default Provider:"), self._tts_provider)
+        layout.addWidget(provider_group)
+
+        # TTS plugins
+        plugin_group = QGroupBox(tr("TTS Plugins"))
+        plugin_layout = QVBoxLayout(plugin_group)
+
+        self._tts_plugin_paths = QListWidget()
+        self._tts_plugin_paths.setToolTip(tr("Plugin Path"))
+        plugin_layout.addWidget(self._tts_plugin_paths)
+
+        plugin_btn_row = QHBoxLayout()
+        add_plugin_btn = QPushButton(tr("Add Plugin..."))
+        add_plugin_btn.clicked.connect(self._add_tts_plugin_path)
+        plugin_btn_row.addWidget(add_plugin_btn)
+        remove_plugin_btn = QPushButton(tr("Remove"))
+        remove_plugin_btn.clicked.connect(self._remove_tts_plugin_path)
+        plugin_btn_row.addWidget(remove_plugin_btn)
+        plugin_btn_row.addStretch()
+        plugin_layout.addLayout(plugin_btn_row)
+
+        self._tts_plugin_status = QLabel(tr("No plugin configured"))
+        self._tts_plugin_status.setStyleSheet("color: gray;")
+        self._tts_plugin_status.setWordWrap(True)
+        plugin_layout.addWidget(self._tts_plugin_status)
+
+        layout.addWidget(plugin_group)
+
         # DeepL group
         deepl_group = QGroupBox(tr("DeepL Translation"))
         deepl_layout = QVBoxLayout(deepl_group)
@@ -356,6 +397,8 @@ class PreferencesDialog(QDialog):
 
     def _load_settings(self):
         """Load current settings into UI."""
+        self._populate_tts_provider_options()
+
         # General
         self._autosave_interval.setValue(self._settings.get_autosave_interval())
         self._autosave_idle.setValue(self._settings.get_autosave_idle_timeout())
@@ -388,9 +431,23 @@ class PreferencesDialog(QDialog):
         self._whisper_cache.setText(whisper_cache or "")
 
         # API Keys
+        provider = self._settings.get_tts_default_provider()
+        provider_index = self._tts_provider.findData(provider)
+        if provider_index < 0:
+            provider_index = self._tts_provider.findData(_EDGE_PROVIDER_ID)
+        if provider_index < 0 and self._tts_provider.count() > 0:
+            provider_index = 0
+        if provider_index >= 0:
+            self._tts_provider.setCurrentIndex(provider_index)
         self._deepl_key.setText(self._settings.get_deepl_api_key())
         self._openai_key.setText(self._settings.get_openai_api_key())
         self._elevenlabs_key.setText(self._settings.get_elevenlabs_api_key())
+
+        # TTS plugins
+        self._tts_plugin_paths.clear()
+        for path in self._settings.get_tts_plugin_paths():
+            self._tts_plugin_paths.addItem(path)
+        self._update_tts_plugin_status([])
 
     def _save_and_accept(self):
         """Save settings and close dialog."""
@@ -417,9 +474,23 @@ class PreferencesDialog(QDialog):
         self._settings.set_whisper_cache_dir(whisper_cache if whisper_cache else None)
 
         # API Keys
+        self._settings.set_tts_default_provider(self._tts_provider.currentData())
         self._settings.set_deepl_api_key(self._deepl_key.text().strip())
         self._settings.set_openai_api_key(self._openai_key.text().strip())
         self._settings.set_elevenlabs_api_key(self._elevenlabs_key.text().strip())
+        self._settings.set_tts_plugin_paths(self._collect_tts_plugin_paths())
+        reload_provider_registry()
+        self._populate_tts_provider_options()
+        selected_provider = self._settings.get_tts_default_provider()
+        provider_idx = self._tts_provider.findData(selected_provider)
+        if provider_idx < 0:
+            provider_idx = self._tts_provider.findData(_EDGE_PROVIDER_ID)
+        if provider_idx < 0 and self._tts_provider.count() > 0:
+            provider_idx = 0
+        if provider_idx >= 0:
+            self._tts_provider.setCurrentIndex(provider_idx)
+            self._settings.set_tts_default_provider(self._tts_provider.currentData())
+        self._update_tts_plugin_status(get_provider_load_errors())
 
         # Shortcuts
         self._save_shortcuts()
@@ -444,3 +515,61 @@ class PreferencesDialog(QDialog):
         )
         if dir_path:
             self._whisper_cache.setText(dir_path)
+
+    def _add_tts_plugin_path(self) -> None:
+        """Add a plugin path from file picker."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Add Plugin..."),
+            str(Path.home()),
+            "Python Files (*.py);;All Files (*)",
+        )
+        if not file_path:
+            return
+        existing = {self._tts_plugin_paths.item(i).text() for i in range(self._tts_plugin_paths.count())}
+        if file_path not in existing:
+            self._tts_plugin_paths.addItem(file_path)
+
+    def _remove_tts_plugin_path(self) -> None:
+        """Remove selected plugin paths."""
+        selected = self._tts_plugin_paths.selectedItems()
+        for item in selected:
+            self._tts_plugin_paths.takeItem(self._tts_plugin_paths.row(item))
+
+    def _collect_tts_plugin_paths(self) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for i in range(self._tts_plugin_paths.count()):
+            raw = self._tts_plugin_paths.item(i).text().strip()
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            paths.append(raw)
+        return paths
+
+    def _populate_tts_provider_options(self) -> None:
+        current = self._tts_provider.currentData() if hasattr(self, "_tts_provider") else None
+        self._tts_provider.clear()
+        for provider in get_all_providers().values():
+            self._tts_provider.addItem(provider.display_name, provider.provider_id)
+        idx = self._tts_provider.findData(current)
+        if idx >= 0:
+            self._tts_provider.setCurrentIndex(idx)
+            return
+        edge_idx = self._tts_provider.findData(_EDGE_PROVIDER_ID)
+        if edge_idx >= 0:
+            self._tts_provider.setCurrentIndex(edge_idx)
+            return
+        if self._tts_provider.count() > 0:
+            self._tts_provider.setCurrentIndex(0)
+
+    def _update_tts_plugin_status(self, errors: list[str]) -> None:
+        if not self._collect_tts_plugin_paths():
+            self._tts_plugin_status.setText(tr("No plugin configured"))
+            return
+        if errors:
+            self._tts_plugin_status.setText(
+                tr("Reload Result: %d error(s)") % len(errors) + "\n" + "\n".join(errors)
+            )
+            return
+        self._tts_plugin_status.setText(tr("Reload Result: Success"))

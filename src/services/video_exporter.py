@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 from src.models.subtitle import SubtitleTrack
 from src.models.style import SubtitleStyle
@@ -165,49 +166,84 @@ def _build_concat_filter(
     return parts, "[concatv]", "[concata]"
 
 
-def _resolve_encoder(
+def _flags_for_encoder(
+    encoder: str,
+    codec: str,
+    preset: str,
+    crf: int,
+    output_suffix: str,
+) -> list[str]:
+    """Resolve encoder flags with export-specific quality values."""
+    if output_suffix == ".webm":
+        return ["-crf", str(crf), "-b:v", "0"]
+
+    if "videotoolbox" in encoder:
+        quality = int(max(0, min(100, 100 - (crf * 1.5))))
+        flags = ["-q:v", str(quality), "-realtime", "0"]
+    elif "nvenc" in encoder:
+        flags = ["-preset", "p4", "-cq", str(crf)]
+    elif "qsv" in encoder:
+        flags = ["-global_quality", str(crf), "-look_ahead", "1"]
+    elif "amf" in encoder:
+        flags = ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
+    elif "vaapi" in encoder:
+        flags = ["-rc_mode", "CQP", "-global_quality", str(crf)]
+    elif encoder in ("libx264", "libx265"):
+        flags = ["-preset", preset, "-crf", str(crf)]
+    elif encoder == "libvpx-vp9":
+        flags = ["-crf", str(crf), "-b:v", "0"]
+    else:
+        # Unknown encoders default to software profile.
+        fallback = "libx265" if codec == "hevc" else "libx264"
+        if encoder != fallback:
+            return _flags_for_encoder(fallback, codec, preset, crf, output_suffix)
+        flags = ["-preset", preset, "-crf", str(crf)]
+
+    if "-pix_fmt" not in flags and encoder != "libvpx-vp9":
+        flags.extend(["-pix_fmt", "yuv420p"])
+    return flags
+
+
+def _is_hardware_encoder(encoder: str) -> bool:
+    return any(token in encoder for token in ("videotoolbox", "nvenc", "qsv", "amf", "vaapi"))
+
+
+def _build_encoder_plan(
     codec: str,
     preset: str,
     crf: int,
     use_gpu: bool,
     output_suffix: str,
-) -> tuple[str, list[str], bool]:
-    """Resolve video encoder and flags.
-
-    Returns:
-        (video_encoder, encoder_flags, is_hardware_encoder)
-    """
-    # WebM uses VP9 software path for compatibility.
+) -> list[tuple[str, list[str], bool]]:
+    """Build ordered encoder attempts (HW candidates -> software fallback)."""
     if output_suffix == ".webm":
-        return "libvpx-vp9", ["-crf", str(crf), "-b:v", "0"], False
+        return [("libvpx-vp9", _flags_for_encoder("libvpx-vp9", codec, preset, crf, output_suffix), False)]
 
-    if use_gpu:
-        from src.utils.hw_accel import get_hw_encoder
+    if not use_gpu:
+        sw_encoder = "libx265" if codec == "hevc" else "libx264"
+        return [(sw_encoder, _flags_for_encoder(sw_encoder, codec, preset, crf, output_suffix), False)]
 
-        hw_encoder, _ = get_hw_encoder(codec)
-        video_encoder = hw_encoder
-        if "videotoolbox" in hw_encoder:
-            # VideoToolbox quality is 0-100 where higher is better.
-            quality = int(max(0, min(100, 100 - (crf * 1.5))))
-            encoder_flags = ["-q:v", str(quality), "-realtime", "0"]
-        elif "nvenc" in hw_encoder:
-            encoder_flags = ["-preset", "p4", "-cq", str(crf)]
-        elif "qsv" in hw_encoder:
-            encoder_flags = ["-global_quality", str(crf), "-look_ahead", "1"]
-        elif "amf" in hw_encoder:
-            encoder_flags = ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
-        elif "vaapi" in hw_encoder:
-            encoder_flags = ["-rc_mode", "CQP", "-global_quality", str(crf)]
-        else:
-            # Unknown encoder from helper -> software fallback profile.
-            video_encoder = "libx265" if codec == "hevc" else "libx264"
-            encoder_flags = ["-preset", preset, "-crf", str(crf)]
-        encoder_flags.extend(["-pix_fmt", "yuv420p"])
-        return video_encoder, encoder_flags, "libx" not in video_encoder
+    from src.utils.hw_accel import get_encoder_candidates
+
+    plan: list[tuple[str, list[str], bool]] = []
+    seen: set[str] = set()
+    for item in get_encoder_candidates(codec):
+        encoder = item["encoder"]
+        if encoder in seen:
+            continue
+        seen.add(encoder)
+        plan.append(
+            (
+                encoder,
+                _flags_for_encoder(encoder, codec, preset, crf, output_suffix),
+                bool(item.get("is_hardware", _is_hardware_encoder(encoder))),
+            )
+        )
 
     sw_encoder = "libx265" if codec == "hevc" else "libx264"
-    sw_flags = ["-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
-    return sw_encoder, sw_flags, False
+    if sw_encoder not in seen:
+        plan.append((sw_encoder, _flags_for_encoder(sw_encoder, codec, preset, crf, output_suffix), False))
+    return plan
 
 
 def _looks_like_hw_failure(stderr: str) -> bool:
@@ -223,10 +259,32 @@ def _looks_like_hw_failure(stderr: str) -> bool:
         "no capable devices found",
         "cannot load",
         "failed to initialise",
+        "failed to initialize",
+        "hardware device",
+        "hardware acceleration",
+        "init_hw_device",
+        "no device",
+        "unsupported device",
         "error initializing output stream",
         "invalid argument",
     )
     return any(n in text for n in needles)
+
+
+def _status_event_to_message(event: dict[str, Any]) -> str:
+    event_type = event.get("type", "")
+    if event_type == "probe":
+        return f"Trying GPU encoder: {event.get('encoder', 'unknown')}"
+    if event_type == "retry":
+        reason = event.get("reason", "unknown error")
+        return (
+            f"GPU failed ({reason}), retrying with {event.get('next_encoder', 'software encoder')}..."
+        )
+    if event_type == "final_encoder":
+        return f"Export completed with {event.get('encoder', 'unknown')}"
+    if event_type == "fallback":
+        return event.get("message", "")
+    return event.get("message", "")
 
 
 def export_video(
@@ -258,7 +316,8 @@ def export_video(
         track: Subtitle track to burn.
         output_path: Destination video file.
         on_progress: Optional callback(duration_sec, current_sec) for progress.
-        on_status: Optional callback(message) for export status updates.
+        on_status: Optional callback(status). Structured dict events are sent when
+            callback declares structured mode; otherwise legacy strings are sent.
         audio_path: Optional path to replacement audio file (e.g. TTS mixed audio).
         scale_width: Target width in pixels (0 = keep original).
         scale_height: Target height in pixels (0 = keep original).
@@ -305,13 +364,14 @@ def export_video(
             subs_filter = f"ass={subs_str}"
 
         output_suffix = output_path.suffix.lower()
-        video_encoder, encoder_flags, is_hw_encoder = _resolve_encoder(
+        encoder_plan = _build_encoder_plan(
             codec=codec,
             preset=preset,
             crf=crf,
             use_gpu=use_gpu,
             output_suffix=output_suffix,
         )
+        video_encoder, encoder_flags, _ = encoder_plan[0]
         if output_suffix == ".webm":
             audio_codec_flags = ["-c:a", "libvorbis", "-b:a", audio_bitrate]
         else:
@@ -670,6 +730,16 @@ def export_video(
             updated[idx + 2:end_idx] = new_flags
             return updated
 
+        def _emit_status(event: dict[str, Any]) -> None:
+            if not on_status:
+                return
+            wants_structured = bool(getattr(on_status, "__fmm_status_format__", "") == "structured")
+            payload: Any = event if wants_structured else _status_event_to_message(event)
+            try:
+                on_status(payload)
+            except Exception:
+                pass
+
         # Parse -progress output against target duration
         if multi_track and video_tracks:
             total_duration = max((vt.output_duration_ms for vt in video_tracks), default=0) / 1000.0
@@ -716,26 +786,47 @@ def export_video(
             stderr_thread.join(timeout=10)
             return process.returncode, "".join(stderr_chunks)
 
-        return_code, stderr = _run_once(args)
+        current_args = list(args)
+        last_stderr = ""
+        return_code = 1
 
-        if return_code != 0 and use_gpu and is_hw_encoder and _looks_like_hw_failure(stderr):
-            fallback_msg = "GPU export failed, retrying with software encoder..."
-            log_ffmpeg_line(fallback_msg)
-            if on_status:
-                on_status(fallback_msg)
+        for idx, (candidate_encoder, candidate_flags, is_hw_encoder) in enumerate(encoder_plan):
+            if idx == 0:
+                current_args = _replace_video_encoder_args(args, candidate_encoder, candidate_flags)
+            else:
+                current_args = _replace_video_encoder_args(current_args, candidate_encoder, candidate_flags)
+
+            if use_gpu and is_hw_encoder:
+                _emit_status({"type": "probe", "encoder": candidate_encoder})
+
+            return_code, stderr = _run_once(current_args)
+            last_stderr = stderr
+            if return_code == 0:
+                _emit_status({"type": "final_encoder", "encoder": candidate_encoder})
+                break
+
+            if not use_gpu or not is_hw_encoder:
+                break
+
+            if not _looks_like_hw_failure(stderr):
+                break
+
             output_path.unlink(missing_ok=True)
-            sw_encoder, sw_flags, _ = _resolve_encoder(
-                codec=codec,
-                preset=preset,
-                crf=crf,
-                use_gpu=False,
-                output_suffix=output_suffix,
-            )
-            fallback_args = _replace_video_encoder_args(args, sw_encoder, sw_flags)
-            return_code, stderr = _run_once(fallback_args)
+            next_encoder = encoder_plan[idx + 1][0] if idx + 1 < len(encoder_plan) else None
+            if next_encoder:
+                _emit_status(
+                    {
+                        "type": "retry",
+                        "encoder": candidate_encoder,
+                        "reason": (stderr or "").splitlines()[0][:120] if stderr else "unknown error",
+                        "next_encoder": next_encoder,
+                    }
+                )
+                continue
+            break
 
         if return_code != 0:
-            raise RuntimeError(f"FFmpeg failed (code {return_code}): {stderr[:500]}")
+            raise RuntimeError(f"FFmpeg failed (code {return_code}): {last_stderr[:500]}")
 
     finally:
         tmp_subs.unlink(missing_ok=True)

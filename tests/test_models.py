@@ -70,6 +70,43 @@ class TestSubtitleTrack:
         track = SubtitleTrack()
         assert track.name == ""
 
+    def test_visible_range_indices_empty(self):
+        track = SubtitleTrack()
+        assert track.visible_range_indices(0, 1000) == (0, 0)
+
+    def test_visible_range_indices_basic(self):
+        track = SubtitleTrack()
+        track.add_segment(SubtitleSegment(0, 1000, "a"))
+        track.add_segment(SubtitleSegment(1000, 2000, "b"))
+        track.add_segment(SubtitleSegment(2500, 3000, "c"))
+        assert track.visible_range_indices(1000, 2200) == (1, 2)
+
+    def test_visible_range_indices_includes_left_overlap(self):
+        track = SubtitleTrack()
+        track.add_segment(SubtitleSegment(500, 1500, "overlap"))
+        track.add_segment(SubtitleSegment(2000, 3000, "next"))
+        # Left segment starts before the view, but overlaps the start boundary.
+        assert track.visible_range_indices(1000, 1800) == (0, 1)
+
+    def test_visible_range_indices_includes_multiple_left_overlaps(self):
+        track = SubtitleTrack()
+        track.add_segment(SubtitleSegment(0, 10000, "long"))
+        track.add_segment(SubtitleSegment(4000, 6000, "mid"))
+        track.add_segment(SubtitleSegment(7000, 9000, "late"))
+        assert track.visible_range_indices(5000, 5500) == (0, 2)
+
+    def test_visible_range_indices_no_overlap(self):
+        track = SubtitleTrack()
+        track.add_segment(SubtitleSegment(1000, 1500, "a"))
+        track.add_segment(SubtitleSegment(2000, 2500, "b"))
+        assert track.visible_range_indices(2600, 3000) == (2, 2)
+
+    def test_visible_range_indices_swapped_inputs(self):
+        track = SubtitleTrack()
+        track.add_segment(SubtitleSegment(1000, 1500, "a"))
+        track.add_segment(SubtitleSegment(2000, 2500, "b"))
+        assert track.visible_range_indices(2400, 1200) == (0, 2)
+
 
 class TestSubtitleStyle:
     def test_defaults(self):

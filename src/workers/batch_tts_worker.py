@@ -19,7 +19,15 @@ from src.models.subtitle import SubtitleSegment, SubtitleTrack
 from src.services.audio_merger import AudioMerger
 from src.services.subtitle_exporter import export_srt
 from src.services.text_splitter import SplitStrategy, TextSplitter
-from src.services.tts_service import TTSService
+from src.services.tts_provider import (
+    TTSRequestError,
+    TTSRequestErrorCode,
+    exception_to_tts_error_text,
+    serialize_tts_error,
+    validate_tts_request,
+)
+from src.services.tts_provider_registry import get_provider
+from src.utils.config import TTSEngine
 
 
 @dataclass(slots=True)
@@ -64,21 +72,24 @@ class BatchTtsWorker(QObject):
     def __init__(
         self,
         jobs: List[BatchTtsJob],
-        voice: str = "ko-KR-SunHiNeural",
-        rate: str = "+0%",
+        voice: str,
+        speed: float,
+        engine: str = TTSEngine.EDGE_TTS,
         strategy: SplitStrategy = SplitStrategy.SENTENCE,
     ) -> None:
         """
         Args:
             jobs:     처리할 작업 목록.
             voice:    TTS 음성 이름.
-            rate:     음성 속도 (edge-tts 형식, e.g. "+0%").
+            speed:    정규화된 속도 배율.
+            engine:   TTS provider id.
             strategy: 텍스트 분할 전략.
         """
         super().__init__()
         self._jobs = jobs
         self._voice = voice
-        self._rate = rate
+        self._speed = float(speed)
+        self._engine = engine
         self._strategy = strategy
         self._cancelled = False
 
@@ -121,13 +132,22 @@ class BatchTtsWorker(QObject):
             # 텍스트 읽기
             text = job.txt_path.read_text(encoding="utf-8")
             if not text.strip():
-                return BatchTtsResult(job=job, error="파일이 비어 있습니다.")
+                return BatchTtsResult(
+                    job=job,
+                    error=serialize_tts_error(TTSRequestErrorCode.EMPTY_SCRIPT, "script is empty"),
+                )
 
             # 텍스트 분할
             splitter = TextSplitter()
             text_segments = splitter.split(text, self._strategy)
             if not text_segments:
-                return BatchTtsResult(job=job, error="분할된 세그먼트가 없습니다.")
+                return BatchTtsResult(
+                    job=job,
+                    error=serialize_tts_error(
+                        TTSRequestErrorCode.EMPTY_SEGMENTS,
+                        "segments must not be empty",
+                    ),
+                )
 
             total_segs = len(text_segments)
             temp_dir = Path(tempfile.mkdtemp(prefix="batch_tts_"))
@@ -139,10 +159,24 @@ class BatchTtsWorker(QObject):
             self.progress.emit(job_idx, total_jobs, 0, total_segs)
 
             segments_data = [(seg.text, seg.index) for seg in text_segments]
-            audio_segments = await TTSService.generate_segments(
+            validate_tts_request(
+                voice=self._voice,
+                speed=self._speed,
+                segments=segments_data,
+            )
+            provider = get_provider(self._engine)
+            if provider is None:
+                return BatchTtsResult(
+                    job=job,
+                    error=serialize_tts_error(
+                        TTSRequestErrorCode.PROVIDER_UNAVAILABLE,
+                        f"provider_id={self._engine}",
+                    ),
+                )
+            audio_segments = await provider.generate_segments(
                 segments=segments_data,
                 voice=self._voice,
-                rate=self._rate,
+                speed=self._speed,
                 output_dir=temp_dir,
                 on_progress=on_seg_progress,
             )
@@ -189,7 +223,7 @@ class BatchTtsWorker(QObject):
             )
 
         except Exception as exc:
-            return BatchTtsResult(job=job, error=str(exc))
+            return BatchTtsResult(job=job, error=exception_to_tts_error_text(exc))
 
         finally:
             if temp_dir and temp_dir.exists():

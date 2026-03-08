@@ -50,7 +50,7 @@ class TestExportIntegration:
     def test_export_worker_passes_gpu_flag_and_status_callback(self, mock_export):
         """Verify ExportWorker forwards use_gpu and status callback."""
         def _fake_export(*args, **kwargs):
-            kwargs["on_status"]("GPU export failed, retrying with software encoder...")
+            kwargs["on_status"]({"type": "retry", "encoder": "h264_nvenc", "reason": "No capable devices found", "next_encoder": "libx264"})
 
         mock_export.side_effect = _fake_export
         worker = ExportWorker(
@@ -65,7 +65,7 @@ class TestExportIntegration:
         kwargs = mock_export.call_args[1]
         assert kwargs["use_gpu"] is True
         assert callable(kwargs["on_status"])
-        assert any("retrying with software" in m.lower() for m in status_messages)
+        assert any("retrying with libx264" in m.lower() for m in status_messages)
 
     @patch("src.services.audio_regenerator.AudioRegenerator.regenerate_track_audio")
     @patch("src.workers.export_worker.export_video")
