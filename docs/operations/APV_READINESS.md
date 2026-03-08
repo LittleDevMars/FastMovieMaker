@@ -1,21 +1,29 @@
 # APV Operational Readiness
 
-- Last verified at (UTC): `YYYY-MM-DD HH:MM`
-- Verified by: `@owner`
-- Repository: `owner/repo`
-- Secret (`APV_SAMPLE_B64`) status: `configured | missing`
-- Latest APV workflow run URL: `https://github.com/<owner>/<repo>/actions/runs/<id>`
-- Latest `apv-smoke` conclusion: `PASS | FAIL | SKIPPED`
+- Last verified at (UTC): `2026-03-07 14:17`
+- Verified by: `@LittleDevMars`
+- Repository: `Code2731/FastMovieMaker`
+- Secret (`APV_SAMPLE_B64`) status: `missing`
+- Latest APV workflow run URL: `pending (secret not configured)`
+- Latest `apv-smoke` conclusion: `SKIPPED (no sample injected)`
 - `verify_apv_secret_ready.py` output:
-  - `result: PASS | SKIPPED | FAIL`
-  - `reason: <one-line reason>`
+  - `result: SKIPPED`
+  - `reason: gh auth unavailable (local token invalid)`
 
 ## Checklist
 
 - [ ] `APV_SAMPLE_B64` is configured in GitHub Actions secrets
 - [ ] Recent 3 `apv-smoke` runs are `PASS`
 - [ ] `python3 scripts/verify_apv_secret_ready.py` returns `PASS`
-- [ ] Evidence links are attached in this document
+- [x] Evidence links are attached in this document
+
+## Handoff Status
+
+- Repository-side preparation is complete (`result/reason` format, soft/hard gate split, CI APV jobs separated).
+- Remaining close-out actions require maintainer permissions:
+  - Configure `APV_SAMPLE_B64`
+  - Collect latest 3 successful `apv-smoke` run URLs
+  - Re-run readiness check until `result: PASS`
 
 ## Verification Procedure
 

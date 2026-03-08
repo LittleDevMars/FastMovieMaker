@@ -3,6 +3,7 @@
 ## 🚧 진행 중 / In Progress
 
 - [ ] APV CI 샘플 시크릿(`APV_SAMPLE_B64`) 운영 마감 체크리스트
+  - [x] 저장소 측 판정/게이트/문서 준비 완료 (`result/reason/run_url`, soft/hard-check 분리)
   - [x] `apv-smoke` CI 잡 + 로컬 스모크 자동화(`verify_apv_pipeline.py`) 완료
   - [x] CI에서 decode 실패/빈 샘플 즉시 `FAIL` 처리
   - [x] CI 단계별 고정 로그(`[APV][prepare]`, `[APV][verify-script]`, `[APV][pytest]`) 적용
@@ -10,6 +11,11 @@
   - [ ] 저장소 시크릿 `APV_SAMPLE_B64` 등록
   - [ ] `apv-smoke` 최근 3회 연속 `PASS` 확인
   - [ ] `python3 scripts/verify_apv_secret_ready.py` 결과 `PASS` 로그 첨부
+- [x] 프로젝트 파일 압축 안정화+계측 스프린트
+  - [x] 대형 시나리오 계측 스크립트(`benchmark_project_io.py`) 기준 수집
+  - [x] round-trip/gzip magic/레거시 평문 하위호환 회귀 테스트 보강
+  - [x] autosave/restore 경로 압축 파일 일관성 검증
+  - [x] 기준값(압축률/저장·로드 시간) 문서화
 - [x] 자막 렌더링 최적화 스프린트
   - [x] 타임라인 자막 렌더 반복 연산 캐시 적용(font/elide/visible window)
   - [x] 플레이어 자막 스타일 변경 감지 캐시 적용(동일 text 다른 style 포함)
@@ -27,7 +33,7 @@
 - [x] ~~영상 두 개 이상일 때 클립 분할 안 되는 문제~~ (수정 완료)
 
 ### 중요 (High)
-- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 890/891 통과)
+- [x] ~~TTS 다이얼로그 진행률 표시 테스트 실패~~ (수정 완료, 894/895 통과)
 
 ### 보통 (Medium)
 - [x] ~~프레임 스냅 활성화 시 UI 피드백~~ (완료 Day 38)
@@ -47,7 +53,7 @@
 ### 성능 개선
 - [ ] 파이썬 코어 로직 Cython 변환
 - [x] ~~자막 렌더링 최적화~~ (Day 47 완료)
-- [ ] 프로젝트 파일 압축
+- [x] ~~프로젝트 파일 압축~~ (안정화+계측 스프린트 완료, Day 48)
 
 ### 문서
 - [x] ~~README.md 작성~~ (완료)
@@ -70,7 +76,7 @@
 - ✅ 실시간 자막 프리뷰 MVP — `WhisperDialog`에 최근 8개 세그먼트 라이브 표시, GUI 테스트 `tests/test_whisper_dialog_preview.py` 추가 - 2026-03-04
 - ✅ CI 문서-테스트 수치 검증 자동화 — `scripts/sync_test_counts.py` 추가(update/check 모드), `.github/workflows/test-count-sync.yml`로 PR/푸시 시 수치 불일치 차단 - 2026-03-04
 - ✅ 개발자 가이드 착수 — `docs/DEVELOPER_GUIDE.md` 신규 작성(로컬 셋업, 아키텍처 원칙, 테스트/PR 체크리스트) - 2026-03-04
-- ✅ 테스트 수치 검증 + 문서 재동기화 — `pytest --collect-only` 기준 891 tests collected, `pytest -q` 기준 890/891 passed 확인, README 수치/배지 갱신 - 2026-03-04
+- ✅ 테스트 수치 검증 + 문서 재동기화 — `pytest --collect-only` 기준 895 tests collected, `pytest -q` 기준 894/895 passed 확인, README 수치/배지 갱신 - 2026-03-04
 - ✅ 문서 동기화 + 테스트 안정화 — README/PROGRESS/TODO 최신화, TTS 진행률 GUI 테스트 픽스, pytest slow 마커 등록 (762 테스트) - 2026-03-04
 - ✅ Phase PERF/UX3 — gzip 프로젝트 압축(50-70% 파일 크기 감소), 중복 비디오 로드 제거, import 최적화 (744 테스트) - 2026-03-03
 - ✅ Phase ANIM2+CC2 — 자막 애니메이션 인디케이터·일괄 적용, Hue 슬라이더, 트랙 일괄 색보정 (731 테스트) - 2026-03-03
@@ -90,4 +96,4 @@
 
 ---
 
-**Last Updated**: 2026-03-07 (Day 47)
+**Last Updated**: 2026-03-07 (Day 48)

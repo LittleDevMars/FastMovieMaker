@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-6.10-green.svg)](https://pypi.org/project/PySide6/)
-[![Tests](https://img.shields.io/badge/tests-890%20passed%20%2F%20891%20collected-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-894%20passed%20%2F%20895%20collected-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
@@ -27,7 +27,7 @@
 - **필름스트립 썸네일** — 비디오 클립 내 연속된 썸네일 표시로 직관적인 편집
 - 커스텀 QPainter 타임라인 위젯으로 프레임 단위 정밀 편집
 - 끊김 없는 클립 간 자동 소스 전환
-- **890 passed / 891 collected**로 검증된 견고한 재생 시스템
+- **894 passed / 895 collected**로 검증된 견고한 재생 시스템
 - **GPU 가속 인코딩** — NVENC, QSV, AMF 내보내기 가속 지원
 - **스마트 화면 비율 조정** — 9:16 (Shorts/Reels) 템플릿 적용 시 자막 레이아웃 자동 최적화
 - **자석 스냅 (Magnetic Snap)** — 클립 이동 시 인접 클립 및 플레이헤드에 자동 정렬 (Toggle: `S`)
@@ -257,7 +257,7 @@ python main.py
 
 ### 포괄적인 테스트 스위트
 ```bash
-# 전체 테스트 실행 (현재 기준 890 passed / 891 collected)
+# 전체 테스트 실행 (현재 기준 894 passed / 895 collected)
 QT_QPA_PLATFORM=offscreen pytest tests/ -q
 
 # 주요 테스트 모듈:
@@ -282,6 +282,9 @@ python3 scripts/verify_apv_secret_ready.py
 
 # 운영 강제 확인 (PASS가 아니면 실패)
 python3 scripts/verify_apv_secret_ready.py --require-pass
+
+# 프로젝트 I/O 압축 계측 (대형 시나리오)
+python3 scripts/benchmark_project_io.py --segments 2000 --iterations 3 --text-length 80
 ```
 
 ### APV CI 시크릿 운영 (`APV_SAMPLE_B64`)
@@ -361,7 +364,9 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 ## 🎯 로드맵
 
 - [x] 자막 렌더링 최적화 (Day 47 완료, visible-window/caching 회귀 테스트 고정)
-- 🔄 다음 스프린트: **APV 운영 마감 종료** (`APV_SAMPLE_B64` 시크릿 등록 + 최근 `apv-smoke` PASS 증빙)
+- ⏳ APV 운영 마감 종료 대기 (운영 담당자: `APV_SAMPLE_B64` 등록 + 최근 `apv-smoke` PASS + readiness PASS 증빙)
+- [x] 프로젝트 파일 압축 안정화+계측 (Day 48 완료, gzip compact 직렬화 + 계측/회귀 테스트 고정)
+- 🔄 다음 스프린트: **클라우드 프로젝트 동기화** (협업 편집 기반 기능 착수)
 - [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
 - [x] 타임라인 마커 시스템 — M 키, 컬러 레이블, Undo/Redo (Phase D3)
 - [x] 컬러 보정 타임라인 인디케이터 — 보정된 클립 뱃지 표시 (Phase D3)

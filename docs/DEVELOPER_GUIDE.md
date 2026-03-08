@@ -67,6 +67,9 @@ python3 scripts/verify_apv_secret_ready.py
 
 # 운영 강제 검증 (PASS가 아니면 실패)
 python3 scripts/verify_apv_secret_ready.py --require-pass
+
+# 프로젝트 I/O 압축 계측
+python3 scripts/benchmark_project_io.py --segments 2000 --iterations 3 --text-length 80
 ```
 
 APV 스모크 결과 해석:
@@ -100,6 +103,11 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
 - `result: FAIL` + `reason: expected APV codec...`: 샘플이 실제 APV 코덱인지 `ffprobe`로 확인
 - `result: FAIL` + `reason: required secret is missing: APV_SAMPLE_B64`: 저장소 시크릿 등록 누락
 - `result: FAIL` + `reason: recent apv-smoke job ended with ...`: GitHub Actions `apv-smoke` 최근 실행 로그 확인
+
+프로젝트 I/O 압축 계측 해석:
+- `compression_ratio_avg`: 작을수록 좋음(권장 기준: `<= 0.50`)
+- `save_ms_avg`/`load_ms_avg`: 로컬 반복 비교용 지표(절대값보다 이전 대비 회귀 여부를 우선 확인)
+- 운영/CI에서는 동일 옵션(`--segments 2000 --iterations 3 --text-length 80`)으로 비교
 
 ## Pre-push 루틴
 권장 실행:

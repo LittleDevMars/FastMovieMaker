@@ -152,7 +152,8 @@ def save_project(project: ProjectState, path: Path) -> None:
         },
         "markers": [m.to_dict() for m in project.markers],
     }
-    raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    # Keep JSON compact before gzip to reduce save time and output size.
+    raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     path.write_bytes(gzip.compress(raw, compresslevel=6))
 
 
