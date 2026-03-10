@@ -28,7 +28,8 @@ python3 main.py
 - TTS provider 레지스트리는 내장 provider를 항상 유지하고, 외부 플러그인(`register_tts_providers`)은 실패 격리 후 선택적으로 병합합니다.
 - 플러그인 경로는 `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수를 병합해 로드합니다.
 - provider가 `provider_id`/`display_name`/`list_voices`/`requires_api_key` 계약을 만족하면 Preferences/TTS/Batch 엔진 UI에 자동 노출됩니다.
-- 프로젝트 동기화(MVP)는 로컬 폴더 백엔드 기준 수동 실행(`File > Sync Now`)만 지원합니다.
+- 프로젝트 동기화는 backend 추상화 기반으로 동작하며 `filesystem`(sync folder) / `git`(local repo) 백엔드를 지원합니다.
+- 기본 UX는 수동 실행(`File > Sync Now`)이며, `auto_push_on_save` 옵션이 켜진 경우 저장 직후 선택적 자동 push를 수행합니다.
 - 동기화 기본 흐름은 `Pull(원격 변경 반영) → 충돌 검사 → Push(로컬 반영)`이며 충돌은 자동 병합하지 않고 `Use Local/Use Remote/Cancel` 선택으로만 처리합니다.
 - 충돌 다이얼로그는 로컬/원격 요약(수정시각, 파일크기, 해시 축약값)을 표시하며, 컨트롤러는 `SyncResult` 구조화 필드(`local_info`, `remote_info`, `conflict_reason`)만 사용해 분기합니다.
 
@@ -77,6 +78,7 @@ python3 scripts/benchmark_project_io.py --segments 2000 --iterations 3 --text-le
 # 프로젝트 동기화 서비스 단위 테스트
 pytest tests/test_project_sync_service.py -v
 pytest tests/test_project_controller_sync.py -v
+pytest tests/test_project_sync_backends.py -v
 ```
 
 APV 스모크 결과 해석:
@@ -116,7 +118,10 @@ base64 -i /path/to/sample_apv.mov | tr -d '\n'
 - `save_ms_avg`/`load_ms_avg`: 로컬 반복 비교용 지표(절대값보다 이전 대비 회귀 여부를 우선 확인)
 - 운영/CI에서는 동일 옵션(`--segments 2000 --iterations 3 --text-length 80`)으로 비교
 
-Cloud Sync MVP 수동 체크리스트:
+Cloud Sync 수동 체크리스트(MVP + 2단계):
+- backend=`filesystem`: 기존 sync folder 경로로 no-op/pull/push/conflict 동작 확인
+- backend=`git`: 로컬 Git repo 경로에서 동일 동작 확인(`.fmm_sync_store/<project_file>`)
+- `Auto Push On Save` 켠 상태에서 저장 시 자동 push 시도(실패해도 저장은 성공 유지) 확인
 - 동일 파일 no-op: `Sync Now` 후 "already up to date" 상태 확인
 - 원격 선행 변경 pull: sync root 파일만 수정 후 `Sync Now` 시 로컬 반영 확인
 - 로컬 선행 변경 push: 프로젝트 편집 후 `Sync Now` 시 sync root 반영 확인

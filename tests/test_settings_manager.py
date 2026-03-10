@@ -69,6 +69,33 @@ def test_project_sync_root_roundtrip() -> None:
     assert mgr.get_project_sync_root_path() is None
 
 
+def test_project_sync_backend_roundtrip_and_fallback() -> None:
+    mgr = _make_manager()
+    assert mgr.get_project_sync_backend() == "filesystem"
+    mgr.set_project_sync_backend("git")
+    assert mgr.get_project_sync_backend() == "git"
+    mgr.set_project_sync_backend("invalid_backend")
+    assert mgr.get_project_sync_backend() == "filesystem"
+    mgr._settings.setValue("project_sync/backend", "unknown")
+    assert mgr.get_project_sync_backend() == "filesystem"
+
+
+def test_project_sync_git_repo_roundtrip() -> None:
+    mgr = _make_manager()
+    assert mgr.get_project_sync_git_repo_path() is None
+    mgr.set_project_sync_git_repo_path("/tmp/repo")
+    assert mgr.get_project_sync_git_repo_path() == "/tmp/repo"
+    mgr.set_project_sync_git_repo_path("")
+    assert mgr.get_project_sync_git_repo_path() is None
+
+
+def test_project_sync_auto_push_roundtrip() -> None:
+    mgr = _make_manager()
+    assert mgr.get_project_sync_auto_push_on_save() is False
+    mgr.set_project_sync_auto_push_on_save(True)
+    assert mgr.get_project_sync_auto_push_on_save() is True
+
+
 def test_project_sync_state_roundtrip_and_normalize() -> None:
     mgr = _make_manager()
     state = {

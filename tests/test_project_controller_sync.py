@@ -17,11 +17,30 @@ from src.utils.i18n import tr
 
 
 class _FakeSettingsManager:
-    def __init__(self, root_path: str | None) -> None:
+    def __init__(
+        self,
+        root_path: str | None,
+        *,
+        backend: str = "filesystem",
+        git_repo_path: str | None = None,
+        auto_push_on_save: bool = False,
+    ) -> None:
         self._root_path = root_path
+        self._backend = backend
+        self._git_repo_path = git_repo_path
+        self._auto_push_on_save = auto_push_on_save
 
     def get_project_sync_root_path(self) -> str | None:
         return self._root_path
+
+    def get_project_sync_backend(self) -> str:
+        return self._backend
+
+    def get_project_sync_git_repo_path(self) -> str | None:
+        return self._git_repo_path
+
+    def get_project_sync_auto_push_on_save(self) -> bool:
+        return self._auto_push_on_save
 
 
 def _make_context(project_path: Path | None) -> SimpleNamespace:
@@ -47,7 +66,7 @@ def test_sync_project_blocks_without_open_project(monkeypatch) -> None:
     warning.assert_called_once()
 
 
-def test_sync_project_blocks_without_sync_root(tmp_path: Path, monkeypatch) -> None:
+def test_sync_project_reports_error_without_sync_config(tmp_path: Path, monkeypatch) -> None:
     project_path = tmp_path / "sample.fmm.json"
     project_path.write_text("{}", encoding="utf-8")
     ctx = _make_context(project_path)
@@ -55,12 +74,12 @@ def test_sync_project_blocks_without_sync_root(tmp_path: Path, monkeypatch) -> N
 
     monkeypatch.setattr("src.ui.controllers.project_controller.SettingsManager", lambda: _FakeSettingsManager(None))
     monkeypatch.setattr("src.services.project_io.save_project", lambda project, path: None)
-    warning = MagicMock()
-    monkeypatch.setattr("src.ui.controllers.project_controller.QMessageBox.warning", warning)
+    critical = MagicMock()
+    monkeypatch.setattr("src.ui.controllers.project_controller.QMessageBox.critical", critical)
 
     ctrl.on_sync_project()
 
-    warning.assert_called_once()
+    critical.assert_called_once()
 
 
 def test_sync_project_success_updates_status_bar(tmp_path: Path, monkeypatch) -> None:
@@ -81,7 +100,7 @@ def test_sync_project_success_updates_status_bar(tmp_path: Path, monkeypatch) ->
         def __init__(self, settings=None) -> None:
             pass
 
-        def sync(self, project_path, sync_root, policy=SyncPolicy.AUTO):
+        def sync(self, project_path, policy=SyncPolicy.AUTO, backend=None, sync_root=None):
             return SyncResult(SyncResultCode.SUCCESS, "Project sync completed.", project_path.name)
 
     monkeypatch.setattr("src.ui.controllers.project_controller.ProjectSyncService", _FakeSyncService)
@@ -109,7 +128,7 @@ def test_sync_project_conflict_use_remote_reloads_project(tmp_path: Path, monkey
         def __init__(self, settings=None) -> None:
             self.calls = 0
 
-        def sync(self, project_path, sync_root, policy=SyncPolicy.AUTO):
+        def sync(self, project_path, policy=SyncPolicy.AUTO, backend=None, sync_root=None):
             self.calls += 1
             if self.calls == 1:
                 return SyncResult(SyncResultCode.CONFLICT, "conflict", project_path.name)
@@ -144,7 +163,7 @@ def test_sync_project_conflict_cancel_keeps_state(tmp_path: Path, monkeypatch) -
         def __init__(self, settings=None) -> None:
             pass
 
-        def sync(self, project_path, sync_root, policy=SyncPolicy.AUTO):
+        def sync(self, project_path, policy=SyncPolicy.AUTO, backend=None, sync_root=None):
             return SyncResult(SyncResultCode.CONFLICT, "conflict", project_path.name)
 
     monkeypatch.setattr("src.ui.controllers.project_controller.ProjectSyncService", _FakeSyncService)
@@ -207,3 +226,71 @@ def test_conflict_summary_contains_local_and_remote_fields() -> None:
     assert "abcdef12" in summary
     assert "01234567" in summary
     assert tr("Local and remote changed since last sync.") in summary
+
+
+def test_save_project_auto_push_runs_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    project_path = tmp_path / "save_target.fmm.json"
+    ctx = _make_context(project_path)
+    ctx.project.has_video = True
+    ctx.autosave = SimpleNamespace(set_active_file=lambda _p: None)
+    ctrl = ProjectController(ctx)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "src.ui.controllers.project_controller.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(project_path), "FastMovieMaker Project (*.fmm *.fmm.json)"),
+    )
+    monkeypatch.setattr(
+        "src.ui.controllers.project_controller.SettingsManager",
+        lambda: _FakeSettingsManager(str(tmp_path), auto_push_on_save=True),
+    )
+    monkeypatch.setattr("src.services.project_io.save_project", lambda project, path: Path(path).write_text("{}", encoding="utf-8"))
+    monkeypatch.setattr(ctrl, "update_recent_menu", lambda: None)
+
+    class _FakeSyncService:
+        def __init__(self, settings=None) -> None:
+            pass
+
+        def sync(self, project_path, policy=SyncPolicy.AUTO, backend=None, sync_root=None):
+            return SyncResult(SyncResultCode.SUCCESS, "Project sync completed.", Path(project_path).name)
+
+    monkeypatch.setattr("src.ui.controllers.project_controller.ProjectSyncService", _FakeSyncService)
+
+    ctrl.on_save_project()
+
+    status_messages = [args[0][0] for args in ctx.status_bar().showMessage.call_args_list]
+    assert tr("Project saved and synced.") in status_messages
+
+
+def test_save_project_auto_push_failure_does_not_block_save(tmp_path: Path, monkeypatch) -> None:
+    project_path = tmp_path / "save_target.fmm.json"
+    ctx = _make_context(project_path)
+    ctx.project.has_video = True
+    ctx.autosave = SimpleNamespace(set_active_file=lambda _p: None)
+    ctrl = ProjectController(ctx)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "src.ui.controllers.project_controller.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(project_path), "FastMovieMaker Project (*.fmm *.fmm.json)"),
+    )
+    monkeypatch.setattr(
+        "src.ui.controllers.project_controller.SettingsManager",
+        lambda: _FakeSettingsManager(str(tmp_path), auto_push_on_save=True),
+    )
+    monkeypatch.setattr("src.services.project_io.save_project", lambda project, path: Path(path).write_text("{}", encoding="utf-8"))
+    monkeypatch.setattr(ctrl, "update_recent_menu", lambda: None)
+
+    class _FakeSyncService:
+        def __init__(self, settings=None) -> None:
+            pass
+
+        def sync(self, project_path, policy=SyncPolicy.AUTO, backend=None, sync_root=None):
+            return SyncResult(SyncResultCode.ERROR, "Sync Failed", Path(project_path).name, detail="boom")
+
+    monkeypatch.setattr("src.ui.controllers.project_controller.ProjectSyncService", _FakeSyncService)
+    warning = MagicMock()
+    monkeypatch.setattr("src.ui.controllers.project_controller.QMessageBox.warning", warning)
+
+    ctrl.on_save_project()
+
+    assert project_path.exists()
+    warning.assert_called_once()

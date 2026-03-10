@@ -49,6 +49,7 @@ class ProjectController:
             ctx.autosave.set_active_file(path)
             self.update_recent_menu()
             ctx.status_bar().showMessage(f"{tr('Project saved')}: {path}")
+            self._maybe_auto_push_on_save(path)
         except Exception as e:
             QMessageBox.critical(ctx.window, tr("Save Error"), str(e))
 
@@ -122,32 +123,14 @@ class ProjectController:
             return
 
         settings = SettingsManager()
-        sync_root = settings.get_project_sync_root_path()
-        if not sync_root:
-            QMessageBox.warning(
-                ctx.window,
-                tr("Sync Unavailable"),
-                tr("Project sync folder is not configured. Set it in Preferences."),
-            )
-            return
-
-        sync_root_path = Path(sync_root)
-        if not sync_root_path.is_dir():
-            QMessageBox.warning(
-                ctx.window,
-                tr("Sync Unavailable"),
-                tr("Project sync folder is unavailable."),
-            )
-            return
-
         sync_service = ProjectSyncService(settings=settings)
-        result = sync_service.sync(current_path, sync_root_path, policy=SyncPolicy.AUTO)
+        result = sync_service.sync(current_path, policy=SyncPolicy.AUTO)
         if result.code == SyncResultCode.CONFLICT:
             choice = self._prompt_sync_conflict(result)
             if choice is None:
                 ctx.status_bar().showMessage(tr("Sync canceled."), 3000)
                 return
-            result = sync_service.sync(current_path, sync_root_path, policy=choice)
+            result = sync_service.sync(current_path, policy=choice)
             if result.code == SyncResultCode.SUCCESS and choice == SyncPolicy.USE_REMOTE:
                 self.on_load_project(path=current_path)
             if choice == SyncPolicy.USE_LOCAL:
@@ -157,6 +140,25 @@ class ProjectController:
                 self._show_sync_result(result, success_message=tr("Project synced using remote version."))
                 return
         self._show_sync_result(result)
+
+    def _maybe_auto_push_on_save(self, project_path: Path) -> None:
+        settings = SettingsManager()
+        if not settings.get_project_sync_auto_push_on_save():
+            return
+        sync_service = ProjectSyncService(settings=settings)
+        result = sync_service.sync(project_path, policy=SyncPolicy.USE_LOCAL)
+        if result.code == SyncResultCode.SUCCESS:
+            self.ctx.status_bar().showMessage(tr("Project saved and synced."), 3000)
+            return
+        if result.code == SyncResultCode.NO_CHANGES:
+            self.ctx.status_bar().showMessage(tr("Project saved and sync is up to date."), 3000)
+            return
+        detail = f"\n{result.detail}" if result.detail else ""
+        QMessageBox.warning(
+            self.ctx.window,
+            tr("Sync Failed"),
+            tr("Auto sync failed after save.") + detail,
+        )
 
     # ---- 내보내기 ----
 

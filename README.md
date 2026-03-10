@@ -102,6 +102,7 @@
 - **프로젝트 관리:**
   - `.fmm.json` 프로젝트 파일 저장/불러오기
   - 수동 프로젝트 동기화(MVP): 로컬 폴더 백엔드 + File > Sync Now
+  - Cloud Sync 2단계(완료): FileSystem/Git 백엔드 선택 + 저장 시 선택적 Auto Push
   - 백업 시스템을 포함한 자동 저장
   - QUndoStack을 이용한 실행 취소/다시 실행
 
@@ -368,12 +369,13 @@ track.clips[1].source_path = "path/to/video_b.mp4"
 - ⏳ APV 운영 마감 종료 대기 (운영 담당자: `APV_SAMPLE_B64` 등록 + 최근 `apv-smoke` PASS + readiness PASS 증빙)
 - [x] 프로젝트 파일 압축 안정화+계측 (Day 48 완료, gzip compact 직렬화 + 계측/회귀 테스트 고정)
 - [x] 클라우드 프로젝트 동기화 MVP (Day 49 완료, 로컬 폴더 백엔드 + 수동 Sync Now + 충돌 요약 모달)
-- 🔄 다음 스프린트: **클라우드 동기화 확장** (외부 백엔드/자동 동기화 정책)
+- [x] Cloud Sync 2단계 (Day 50 완료, 백엔드 추상화 + FileSystem/Git + 선택적 Auto Push on Save)
+- 🔄 다음 스프린트: **클라우드 동기화 후속** (원격 Git/자동 스케줄 동기화 정책)
 - [x] Whisper 변환 중 실시간 자막 미리보기 (v0.9.6)
 - [x] 타임라인 마커 시스템 — M 키, 컬러 레이블, Undo/Redo (Phase D3)
 - [x] 컬러 보정 타임라인 인디케이터 — 보정된 클립 뱃지 표시 (Phase D3)
 - [x] 커스텀 TTS 제공자를 위한 플러그인 시스템
-- [ ] 클라우드 프로젝트 동기화 (MVP 완료, 외부 백엔드/자동 동기화는 후속)
+- [ ] 클라우드 프로젝트 동기화 (MVP/2단계 완료, 원격 Git/자동 스케줄 동기화는 후속)
 - [ ] 오디오 더킹 (Audio Ducking) 고도화
 
 ---

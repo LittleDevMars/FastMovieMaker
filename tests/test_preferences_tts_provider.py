@@ -25,6 +25,9 @@ class _FakeSettingsManager:
             "ffmpeg_path": None,
             "whisper_cache_dir": None,
             "project_sync_root_path": None,
+            "project_sync_backend": "filesystem",
+            "project_sync_git_repo_path": None,
+            "project_sync_auto_push_on_save": False,
             "tts_default_provider": TTSEngine.EDGE_TTS,
             "deepl_api_key": "",
             "openai_api_key": "",
@@ -234,3 +237,60 @@ def test_preferences_saves_project_sync_root(qtbot, monkeypatch) -> None:
     dialog._save_and_accept()
 
     assert shared_settings.get_project_sync_root_path() == "/tmp/new-sync"
+
+
+def test_preferences_loads_sync_backend_git_fields(qtbot, monkeypatch) -> None:
+    shared_settings = _FakeSettingsManager()
+    shared_settings.set_project_sync_backend("git")
+    shared_settings.set_project_sync_git_repo_path("/tmp/git-sync")
+    shared_settings.set_project_sync_auto_push_on_save(True)
+    monkeypatch.setattr(pref_module, "SettingsManager", lambda: shared_settings)
+    monkeypatch.setattr(
+        pref_module,
+        "get_all_providers",
+        lambda: {
+            TTSEngine.EDGE_TTS: SimpleNamespace(
+                provider_id=TTSEngine.EDGE_TTS,
+                display_name="Edge-TTS (Free)",
+            ),
+        },
+    )
+    monkeypatch.setattr(pref_module, "reload_provider_registry", lambda: None)
+    monkeypatch.setattr(pref_module, "get_provider_load_errors", lambda: [])
+
+    dialog = pref_module.PreferencesDialog()
+    qtbot.addWidget(dialog)
+
+    assert dialog._project_sync_backend.currentData() == "git"
+    assert dialog._project_sync_git_repo.text() == "/tmp/git-sync"
+    assert dialog._sync_auto_push_on_save.isChecked() is True
+    assert dialog._project_sync_root.isEnabled() is False
+    assert dialog._project_sync_git_repo.isEnabled() is True
+
+
+def test_preferences_saves_sync_backend_and_auto_push(qtbot, monkeypatch) -> None:
+    shared_settings = _FakeSettingsManager()
+    monkeypatch.setattr(pref_module, "SettingsManager", lambda: shared_settings)
+    monkeypatch.setattr(
+        pref_module,
+        "get_all_providers",
+        lambda: {
+            TTSEngine.EDGE_TTS: SimpleNamespace(
+                provider_id=TTSEngine.EDGE_TTS,
+                display_name="Edge-TTS (Free)",
+            ),
+        },
+    )
+    monkeypatch.setattr(pref_module, "reload_provider_registry", lambda: None)
+    monkeypatch.setattr(pref_module, "get_provider_load_errors", lambda: [])
+
+    dialog = pref_module.PreferencesDialog()
+    qtbot.addWidget(dialog)
+    dialog._project_sync_backend.setCurrentIndex(dialog._project_sync_backend.findData("git"))
+    dialog._project_sync_git_repo.setText("/tmp/new-git-repo")
+    dialog._sync_auto_push_on_save.setChecked(True)
+    dialog._save_and_accept()
+
+    assert shared_settings.get_project_sync_backend() == "git"
+    assert shared_settings.get_project_sync_git_repo_path() == "/tmp/new-git-repo"
+    assert shared_settings.get_project_sync_auto_push_on_save() is True

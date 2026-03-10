@@ -229,6 +229,40 @@ class SettingsManager:
         token = str(path).strip() if path is not None else ""
         self._settings.setValue("project_sync/root_path", token)
 
+    def get_project_sync_backend(self) -> str:
+        """Get sync backend id (filesystem | git)."""
+        raw = self._settings.value("project_sync/backend", "filesystem", str)
+        token = str(raw).strip().lower()
+        if token not in {"filesystem", "git"}:
+            return "filesystem"
+        return token
+
+    def set_project_sync_backend(self, backend: str) -> None:
+        """Set sync backend id (filesystem | git)."""
+        token = str(backend).strip().lower()
+        if token not in {"filesystem", "git"}:
+            token = "filesystem"
+        self._settings.setValue("project_sync/backend", token)
+
+    def get_project_sync_git_repo_path(self) -> Optional[str]:
+        """Get local git repository path for sync backend."""
+        path = self._settings.value("project_sync/git_repo_path", "", str)
+        token = str(path).strip()
+        return token if token else None
+
+    def set_project_sync_git_repo_path(self, path: Optional[str]) -> None:
+        """Set local git repository path for sync backend."""
+        token = str(path).strip() if path is not None else ""
+        self._settings.setValue("project_sync/git_repo_path", token)
+
+    def get_project_sync_auto_push_on_save(self) -> bool:
+        """Get whether to auto-push sync after manual project save."""
+        return bool(self._settings.value("project_sync/auto_push_on_save", False, bool))
+
+    def set_project_sync_auto_push_on_save(self, enabled: bool) -> None:
+        """Set whether to auto-push sync after manual project save."""
+        self._settings.setValue("project_sync/auto_push_on_save", bool(enabled))
+
     def get_project_sync_state(self) -> dict[str, dict[str, str]]:
         """Get per-project sync state map."""
         raw_value = self._settings.value("project_sync/state", "{}", str)

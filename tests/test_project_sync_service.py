@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
+import pytest
+
 from src.services.project_sync_service import (
+    FileSystemSyncBackend,
+    GitSyncBackend,
     ProjectSyncService,
     SyncPolicy,
     SyncResultCode,
@@ -14,12 +19,29 @@ from src.services.project_sync_service import (
 class _FakeSettings:
     def __init__(self) -> None:
         self.state: dict[str, dict[str, str]] = {}
+        self.sync_backend = "filesystem"
+        self.sync_root_path: str | None = None
+        self.sync_git_repo_path: str | None = None
 
     def get_project_sync_state(self) -> dict[str, dict[str, str]]:
         return dict(self.state)
 
     def set_project_sync_state(self, state: dict[str, dict[str, str]]) -> None:
         self.state = dict(state)
+
+    def get_project_sync_backend(self) -> str:
+        return self.sync_backend
+
+    def get_project_sync_root_path(self) -> str | None:
+        return self.sync_root_path
+
+    def get_project_sync_git_repo_path(self) -> str | None:
+        return self.sync_git_repo_path
+
+
+def _git_available() -> bool:
+    proc = subprocess.run(["git", "--version"], capture_output=True, text=True)
+    return proc.returncode == 0
 
 
 def test_sync_push_and_no_changes(tmp_path: Path) -> None:
@@ -131,3 +153,62 @@ def test_sync_fails_for_missing_project_or_invalid_root(tmp_path: Path) -> None:
     invalid_root_result = svc.sync(local, invalid_root)
     assert invalid_root_result.code == SyncResultCode.ERROR
     assert invalid_root_result.local_info is None
+
+
+def test_sync_fails_when_backend_config_is_missing(tmp_path: Path) -> None:
+    local = tmp_path / "sample.fmm.json"
+    local.write_text("{}", encoding="utf-8")
+    settings = _FakeSettings()
+    svc = ProjectSyncService(settings=settings)  # type: ignore[arg-type]
+
+    settings.sync_backend = "filesystem"
+    settings.sync_root_path = None
+    fs_missing = svc.sync(local)
+    assert fs_missing.code == SyncResultCode.ERROR
+    assert "configured" in fs_missing.message
+
+    settings.sync_backend = "git"
+    settings.sync_git_repo_path = None
+    git_missing = svc.sync(local)
+    assert git_missing.code == SyncResultCode.ERROR
+    assert "Git sync repository is not configured." == git_missing.message
+
+    settings.sync_git_repo_path = str(tmp_path / "missing-repo")
+    git_unavailable = svc.sync(local)
+    assert git_unavailable.code == SyncResultCode.ERROR
+    assert "Git sync repository is unavailable." == git_unavailable.message
+
+
+def test_sync_supports_explicit_filesystem_backend(tmp_path: Path) -> None:
+    local = tmp_path / "sample.fmm.json"
+    local.write_text('{"a":1}', encoding="utf-8")
+    root = tmp_path / "sync"
+    root.mkdir()
+    settings = _FakeSettings()
+    svc = ProjectSyncService(settings=settings)  # type: ignore[arg-type]
+
+    result = svc.sync(local, backend=FileSystemSyncBackend(root))
+    assert result.code == SyncResultCode.SUCCESS
+    assert (root / "sample.fmm.json").is_file()
+
+
+@pytest.mark.skipif(not _git_available(), reason="git is not available")
+def test_sync_uses_git_backend_from_settings(tmp_path: Path) -> None:
+    local = tmp_path / "sample.fmm.json"
+    local.write_text('{"a":1}', encoding="utf-8")
+    repo = tmp_path / "sync_repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True, text=True)
+
+    settings = _FakeSettings()
+    settings.sync_backend = "git"
+    settings.sync_git_repo_path = str(repo)
+    svc = ProjectSyncService(settings=settings)  # type: ignore[arg-type]
+
+    first = svc.sync(local)
+    assert first.code == SyncResultCode.SUCCESS
+    assert (repo / ".fmm_sync_store" / "sample.fmm.json").is_file()
+
+    local.write_text('{"a":2}', encoding="utf-8")
+    second = svc.sync(local)
+    assert second.code == SyncResultCode.SUCCESS

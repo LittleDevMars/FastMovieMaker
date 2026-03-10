@@ -4,9 +4,52 @@
 
 ## 현재 상태 및 미구현 사항
 
-**현재 상태:** Day 49 완료 (2026-03-08)
+**현재 상태:** Day 50 완료 (2026-03-10)
 
 **참고:** 가상환경 Python 3.13 사용 (3.9 호환성 고려 불필요)
+
+---
+
+## 2026-03-10 (Day 50) 작업 요약
+
+**Cloud Sync 2단계 마감 (백엔드 추상화 + Git 백엔드 + 저장 시 Auto Push 옵션)**
+
+### 1. 동기화 백엔드 계층 확장
+- `src/services/project_sync_service.py`
+  - `ProjectSyncBackend` 계약 도입(`fetch/store/describe`)
+  - `FileSystemSyncBackend`, `GitSyncBackend` 추가
+  - `ProjectSyncService.sync(...)`가 backend 주입 또는 설정 기반 backend 선택을 지원하도록 확장
+  - 기존 3-way hash 충돌 판정/`SyncResult` 구조(`local_info`, `remote_info`, `conflict_reason`)는 유지
+
+### 2. 설정/컨트롤러/Preferences 연동
+- `SettingsManager` 확장:
+  - `project_sync/backend` (`filesystem|git`)
+  - `project_sync/git_repo_path`
+  - `project_sync/auto_push_on_save`
+- `ProjectController`
+  - `on_sync_project()`를 backend 타입 분기 없는 단일 경로로 정리
+  - 프로젝트 저장 후 `auto_push_on_save=True`일 때 선택적 자동 push 실행(실패 시 저장 성공 유지)
+- `PreferencesDialog > Advanced > Project Sync`
+  - Backend 선택(FileSystem/Git), Git Repository 경로, Auto Push On Save 옵션 추가
+  - backend 변경 시 root/git 입력 필드 활성/비활성 동기화
+
+### 3. 테스트/문서 동기화
+- 신규: `tests/test_project_sync_backends.py` (FileSystem/Git backend 계약 검증)
+- 확장:
+  - `tests/test_project_sync_service.py` (설정 기반 backend 경로/오류 케이스)
+  - `tests/test_project_controller_sync.py` (저장 후 auto push 성공/실패 비차단)
+  - `tests/test_settings_manager.py` (backend/git path/auto push round-trip)
+  - `tests/test_preferences_tts_provider.py` (sync backend/git/auto push load/save)
+- 문서:
+  - `README.md`, `TODO.md`, `docs/DEVELOPER_GUIDE.md`에 Cloud Sync 2단계 기준선 반영
+
+### 4. 실행 검증 결과
+- `pytest tests/test_project_sync_backends.py -v` → 4 passed
+- `pytest tests/test_project_sync_service.py -v` → 8 passed
+- `pytest tests/test_project_controller_sync.py -v` → 9 passed
+- `pytest tests/test_settings_manager.py -v` → 10 passed
+- `QT_QPA_PLATFORM=offscreen pytest tests/test_preferences_tts_provider.py -v` → 8 passed
+- `pytest tests/test_project_io.py tests/test_controllers.py -q` → 24 passed
 
 ---
 

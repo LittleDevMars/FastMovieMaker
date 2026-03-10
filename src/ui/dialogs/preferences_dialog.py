@@ -36,6 +36,8 @@ from src.services.translator import ISO_639_1_CODES
 from src.utils.i18n import tr
 
 _EDGE_PROVIDER_ID = "edge_tts"
+_SYNC_BACKEND_FILESYSTEM = "filesystem"
+_SYNC_BACKEND_GIT = "git"
 
 # 단축키 탭에 표시될 (action_key, display_name) 목록
 _SHORTCUT_ACTIONS: list[tuple[str, str]] = [
@@ -240,19 +242,42 @@ class PreferencesDialog(QDialog):
 
         # Project sync group
         sync_group = QGroupBox(tr("Project Sync"))
-        sync_layout = QVBoxLayout(sync_group)
+        sync_layout = QFormLayout(sync_group)
+
+        self._project_sync_backend = QComboBox()
+        self._project_sync_backend.addItem(tr("FileSystem (Folder)"), _SYNC_BACKEND_FILESYSTEM)
+        self._project_sync_backend.addItem(tr("Git (Local Repository)"), _SYNC_BACKEND_GIT)
+        sync_layout.addRow(tr("Backend:"), self._project_sync_backend)
 
         sync_root_layout = QHBoxLayout()
         self._project_sync_root = QLineEdit()
         self._project_sync_root.setPlaceholderText(tr("Select sync folder"))
-        sync_root_layout.addWidget(QLabel(tr("Sync Folder:")))
         sync_root_layout.addWidget(self._project_sync_root)
 
         browse_sync = QPushButton(tr("Browse..."))
         browse_sync.clicked.connect(self._browse_project_sync_root)
         sync_root_layout.addWidget(browse_sync)
+        self._browse_sync_root_btn = browse_sync
+        sync_root_widget = QWidget()
+        sync_root_widget.setLayout(sync_root_layout)
+        sync_layout.addRow(tr("Sync Folder:"), sync_root_widget)
 
-        sync_layout.addLayout(sync_root_layout)
+        git_repo_layout = QHBoxLayout()
+        self._project_sync_git_repo = QLineEdit()
+        self._project_sync_git_repo.setPlaceholderText(tr("Select git repository"))
+        git_repo_layout.addWidget(self._project_sync_git_repo)
+
+        browse_git_repo = QPushButton(tr("Browse..."))
+        browse_git_repo.clicked.connect(self._browse_project_sync_git_repo)
+        git_repo_layout.addWidget(browse_git_repo)
+        self._browse_sync_git_btn = browse_git_repo
+        git_repo_widget = QWidget()
+        git_repo_widget.setLayout(git_repo_layout)
+        sync_layout.addRow(tr("Git Repository:"), git_repo_widget)
+
+        self._sync_auto_push_on_save = QCheckBox(tr("Auto Push On Save"))
+        sync_layout.addRow("", self._sync_auto_push_on_save)
+        self._project_sync_backend.currentIndexChanged.connect(self._on_sync_backend_changed)
         layout.addWidget(sync_group)
 
         layout.addStretch()
@@ -446,8 +471,18 @@ class PreferencesDialog(QDialog):
 
         whisper_cache = self._settings.get_whisper_cache_dir()
         self._whisper_cache.setText(whisper_cache or "")
+        sync_backend = self._settings.get_project_sync_backend()
+        sync_backend_idx = self._project_sync_backend.findData(sync_backend)
+        if sync_backend_idx < 0:
+            sync_backend_idx = self._project_sync_backend.findData(_SYNC_BACKEND_FILESYSTEM)
+        if sync_backend_idx >= 0:
+            self._project_sync_backend.setCurrentIndex(sync_backend_idx)
         project_sync_root = self._settings.get_project_sync_root_path()
         self._project_sync_root.setText(project_sync_root or "")
+        project_sync_git_repo = self._settings.get_project_sync_git_repo_path()
+        self._project_sync_git_repo.setText(project_sync_git_repo or "")
+        self._sync_auto_push_on_save.setChecked(self._settings.get_project_sync_auto_push_on_save())
+        self._on_sync_backend_changed()
 
         # API Keys
         provider = self._settings.get_tts_default_provider()
@@ -491,8 +526,12 @@ class PreferencesDialog(QDialog):
 
         whisper_cache = self._whisper_cache.text().strip()
         self._settings.set_whisper_cache_dir(whisper_cache if whisper_cache else None)
+        self._settings.set_project_sync_backend(self._project_sync_backend.currentData())
         project_sync_root = self._project_sync_root.text().strip()
         self._settings.set_project_sync_root_path(project_sync_root if project_sync_root else None)
+        project_sync_git_repo = self._project_sync_git_repo.text().strip()
+        self._settings.set_project_sync_git_repo_path(project_sync_git_repo if project_sync_git_repo else None)
+        self._settings.set_project_sync_auto_push_on_save(self._sync_auto_push_on_save.isChecked())
 
         # API Keys
         self._settings.set_tts_default_provider(self._tts_provider.currentData())
@@ -544,6 +583,22 @@ class PreferencesDialog(QDialog):
         )
         if dir_path:
             self._project_sync_root.setText(dir_path)
+
+    def _browse_project_sync_git_repo(self) -> None:
+        """Browse for project sync git repository directory."""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, tr("Select Git Repository"), str(Path.home())
+        )
+        if dir_path:
+            self._project_sync_git_repo.setText(dir_path)
+
+    def _on_sync_backend_changed(self) -> None:
+        backend_id = self._project_sync_backend.currentData()
+        use_git = backend_id == _SYNC_BACKEND_GIT
+        self._project_sync_root.setEnabled(not use_git)
+        self._browse_sync_root_btn.setEnabled(not use_git)
+        self._project_sync_git_repo.setEnabled(use_git)
+        self._browse_sync_git_btn.setEnabled(use_git)
 
     def _add_tts_plugin_path(self) -> None:
         """Add a plugin path from file picker."""

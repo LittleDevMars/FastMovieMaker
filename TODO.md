@@ -11,6 +11,11 @@
   - [ ] 저장소 시크릿 `APV_SAMPLE_B64` 등록
   - [ ] `apv-smoke` 최근 3회 연속 `PASS` 확인
   - [ ] `python3 scripts/verify_apv_secret_ready.py` 결과 `PASS` 로그 첨부
+- [x] Cloud Sync 2단계 (백엔드 추상화 + FileSystem/Git + 선택적 Auto Push)
+  - [x] `ProjectSyncBackend` 계약 및 FileSystem/Git 백엔드 경로 검증 완료
+  - [x] Preferences에서 backend/git repo/auto push 설정 저장·복원 반영
+  - [x] 저장 시 `auto_push_on_save` 옵션 동작(실패 비차단) 검증
+  - [x] `project_sync_service`/`project_controller_sync`/`settings_manager` 테스트 회귀 통과
 - [x] 클라우드 프로젝트 동기화 MVP
   - [x] `ProjectSyncService` 추가 (로컬 폴더 백엔드, 3-way hash 기반 push/pull/conflict)
   - [x] File 메뉴 `Sync Now` + `ProjectController.on_sync_project` 연결
@@ -54,7 +59,7 @@
 - [x] ~~AI 기반 자막 번역 (DeepL/GPT)~~ (완료, Phase 4 Week 2)
 - [x] ~~실시간 자막 프리뷰 (Whisper 진행 중)~~ (`WhisperDialog` 라이브 프리뷰, Day 43)
 - [x] ~~플러그인 시스템 (커스텀 TTS 제공자)~~ (Phase 1 로더 + Preferences 경로 관리 + 동적 엔진 선택 UI 완료)
-- [ ] 클라우드 프로젝트 동기화 (MVP 완료, 외부 백엔드/자동 동기화는 후속)
+- [ ] 클라우드 프로젝트 동기화 (MVP/2단계 완료, 원격 Git/자동 스케줄 동기화는 후속)
 
 ### 성능 개선
 - [ ] 파이썬 코어 로직 Cython 변환
