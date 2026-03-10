@@ -1,9 +1,13 @@
 """Settings manager for application preferences."""
 
+import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QSettings
+
+from src.utils.config import TTSEngine
 
 # 커스터마이징 가능한 단축키 기본값
 _SHORTCUT_DEFAULTS: dict[str, str] = {
@@ -187,6 +191,95 @@ class SettingsManager:
         """Set a setting value by key."""
         self._settings.setValue(key, value)
 
+    # ---------------------------------------------------- TTS Settings
+
+    def get_tts_default_provider(self) -> str:
+        """Get default TTS provider id (default: edge_tts)."""
+        value = self._settings.value("tts/default_provider", TTSEngine.EDGE_TTS, str)
+        if not str(value).strip():
+            return TTSEngine.EDGE_TTS
+        return str(value)
+
+    def set_tts_default_provider(self, provider_id: str) -> None:
+        """Set default TTS provider id."""
+        if not str(provider_id).strip():
+            provider_id = TTSEngine.EDGE_TTS
+        self._settings.setValue("tts/default_provider", str(provider_id))
+
+    def get_tts_plugin_paths(self) -> list[str]:
+        """Get configured TTS plugin file paths."""
+        raw_value = self._settings.value("tts/plugin_paths", [])
+        return self._normalize_path_list(raw_value)
+
+    def set_tts_plugin_paths(self, paths: list[str]) -> None:
+        """Set configured TTS plugin file paths."""
+        normalized = self._normalize_path_list(paths)
+        self._settings.setValue("tts/plugin_paths", normalized)
+
+    # ---------------------------------------------------- Project Sync Settings
+
+    def get_project_sync_root_path(self) -> Optional[str]:
+        """Get project sync root folder path."""
+        path = self._settings.value("project_sync/root_path", "", str)
+        token = str(path).strip()
+        return token if token else None
+
+    def set_project_sync_root_path(self, path: Optional[str]) -> None:
+        """Set project sync root folder path."""
+        token = str(path).strip() if path is not None else ""
+        self._settings.setValue("project_sync/root_path", token)
+
+    def get_project_sync_backend(self) -> str:
+        """Get sync backend id (filesystem | git)."""
+        raw = self._settings.value("project_sync/backend", "filesystem", str)
+        token = str(raw).strip().lower()
+        if token not in {"filesystem", "git"}:
+            return "filesystem"
+        return token
+
+    def set_project_sync_backend(self, backend: str) -> None:
+        """Set sync backend id (filesystem | git)."""
+        token = str(backend).strip().lower()
+        if token not in {"filesystem", "git"}:
+            token = "filesystem"
+        self._settings.setValue("project_sync/backend", token)
+
+    def get_project_sync_git_repo_path(self) -> Optional[str]:
+        """Get local git repository path for sync backend."""
+        path = self._settings.value("project_sync/git_repo_path", "", str)
+        token = str(path).strip()
+        return token if token else None
+
+    def set_project_sync_git_repo_path(self, path: Optional[str]) -> None:
+        """Set local git repository path for sync backend."""
+        token = str(path).strip() if path is not None else ""
+        self._settings.setValue("project_sync/git_repo_path", token)
+
+    def get_project_sync_auto_push_on_save(self) -> bool:
+        """Get whether to auto-push sync after manual project save."""
+        return bool(self._settings.value("project_sync/auto_push_on_save", False, bool))
+
+    def set_project_sync_auto_push_on_save(self, enabled: bool) -> None:
+        """Set whether to auto-push sync after manual project save."""
+        self._settings.setValue("project_sync/auto_push_on_save", bool(enabled))
+
+    def get_project_sync_state(self) -> dict[str, dict[str, str]]:
+        """Get per-project sync state map."""
+        raw_value = self._settings.value("project_sync/state", "{}", str)
+        if isinstance(raw_value, dict):
+            return self._normalize_sync_state(raw_value)
+        try:
+            parsed = json.loads(str(raw_value))
+        except Exception:
+            return {}
+        return self._normalize_sync_state(parsed)
+
+    def set_project_sync_state(self, state: dict[str, dict[str, str]]) -> None:
+        """Set per-project sync state map."""
+        normalized = self._normalize_sync_state(state)
+        payload = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        self._settings.setValue("project_sync/state", payload)
+
     # ---------------------------------------------------- Shortcut Settings
 
     def get_shortcut(self, action: str) -> str:
@@ -198,3 +291,37 @@ class SettingsManager:
     def set_shortcut(self, action: str, key: str) -> None:
         """Persist the key sequence string for the given action."""
         self._settings.setValue(f"shortcuts/{action}", key)
+
+    @staticmethod
+    def _normalize_path_list(value: Any) -> list[str]:
+        if isinstance(value, str):
+            tokens = value.split(os.pathsep) if os.pathsep in value else [value]
+            return [token.strip() for token in tokens if token and token.strip()]
+        if isinstance(value, (list, tuple, set)):
+            seen: set[str] = set()
+            out: list[str] = []
+            for item in value:
+                token = str(item).strip()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                out.append(token)
+            return out
+        return []
+
+    @staticmethod
+    def _normalize_sync_state(value: Any) -> dict[str, dict[str, str]]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for raw_key, raw_entry in value.items():
+            key = str(raw_key).strip()
+            if not key or not isinstance(raw_entry, dict):
+                continue
+            last_hash = str(raw_entry.get("last_hash", "")).strip()
+            updated_at = str(raw_entry.get("updated_at", "")).strip()
+            out[key] = {
+                "last_hash": last_hash,
+                "updated_at": updated_at,
+            }
+        return out

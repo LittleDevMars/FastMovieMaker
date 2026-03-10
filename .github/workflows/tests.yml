@@ -6,6 +6,10 @@ on:
     branches: ["master"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
@@ -25,3 +29,78 @@ jobs:
 
       - name: Run test suite
         run: pytest tests/ -q
+
+  apv-smoke:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Prepare APV sample (optional)
+        env:
+          APV_SAMPLE_B64: ${{ secrets.APV_SAMPLE_B64 }}
+        run: |
+          set -euo pipefail
+          echo "[APV][prepare] start"
+          if [ -z "${APV_SAMPLE_B64}" ]; then
+            echo "APV_SMOKE_STATUS=SKIPPED" >> "$GITHUB_ENV"
+            echo "SKIPPED: APV_SAMPLE_B64 is not configured."
+          else
+            mkdir -p .ci/apv
+            if ! printf '%s' "${APV_SAMPLE_B64}" | base64 --decode > .ci/apv/sample_apv.mov; then
+              echo "FAIL: APV_SAMPLE_B64 decode failed."
+              exit 1
+            fi
+            if [ ! -s .ci/apv/sample_apv.mov ]; then
+              echo "FAIL: decoded APV sample is empty."
+              exit 1
+            fi
+            echo "APV_SMOKE_STATUS=READY" >> "$GITHUB_ENV"
+            echo "FMM_APV_SAMPLE=${GITHUB_WORKSPACE}/.ci/apv/sample_apv.mov" >> "$GITHUB_ENV"
+            echo "Prepared APV sample at ${GITHUB_WORKSPACE}/.ci/apv/sample_apv.mov"
+          fi
+          echo "[APV][prepare] end"
+
+      - name: Verify APV conversion pipeline
+        run: |
+          echo "[APV][verify-script] start"
+          python3 scripts/verify_apv_pipeline.py
+          echo "[APV][verify-script] end"
+
+      - name: Run APV smoke tests
+        run: |
+          echo "[APV][pytest] start"
+          pytest -m apv_smoke -v
+          echo "[APV][pytest] end"
+
+      - name: Cleanup APV sample
+        if: always()
+        run: rm -f .ci/apv/sample_apv.mov
+
+  apv-operational-ready:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify APV operational readiness (enforced)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[APV][operational] start"
+          python3 scripts/verify_apv_secret_ready.py --require-pass
+          echo "[APV][operational] end"

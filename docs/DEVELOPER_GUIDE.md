@@ -22,6 +22,16 @@ python3 main.py
 - 모델/서비스 레이어에 Qt 객체를 넣지 않습니다.
 - 워커 시그널은 컨트롤러(QObject)에서 받아 메인 스레드에서 UI를 갱신합니다.
 - 시간 단위는 내부적으로 `milliseconds(int)`를 사용합니다.
+- TTS Worker 입력 계약은 `speed(float)` 단일값을 사용하고, 엔진별 변환은 provider에서만 처리합니다.
+- TTS 오류 문자열 계약은 `TTS_ERROR::<CODE>::<detail>`이며, 코드→사용자 메시지 매핑은 `src/services/tts_error_presenter.py` 단일 모듈에서 관리합니다.
+- UI는 presenter가 반환한 친화 메시지만 노출하고, raw detail은 tooltip/로그 디버깅 용도로만 사용합니다.
+- TTS provider 레지스트리는 내장 provider를 항상 유지하고, 외부 플러그인(`register_tts_providers`)은 실패 격리 후 선택적으로 병합합니다.
+- 플러그인 경로는 `tts/plugin_paths` 설정 + `FMM_TTS_PLUGIN_PATHS` 환경변수를 병합해 로드합니다.
+- provider가 `provider_id`/`display_name`/`list_voices`/`requires_api_key` 계약을 만족하면 Preferences/TTS/Batch 엔진 UI에 자동 노출됩니다.
+- 프로젝트 동기화는 backend 추상화 기반으로 동작하며 `filesystem`(sync folder) / `git`(local repo) 백엔드를 지원합니다.
+- 기본 UX는 수동 실행(`File > Sync Now`)이며, `auto_push_on_save` 옵션이 켜진 경우 저장 직후 선택적 자동 push를 수행합니다.
+- 동기화 기본 흐름은 `Pull(원격 변경 반영) → 충돌 검사 → Push(로컬 반영)`이며 충돌은 자동 병합하지 않고 `Use Local/Use Remote/Cancel` 선택으로만 처리합니다.
+- 충돌 다이얼로그는 로컬/원격 요약(수정시각, 파일크기, 해시 축약값)을 표시하며, 컨트롤러는 `SyncResult` 구조화 필드(`local_info`, `remote_info`, `conflict_reason`)만 사용해 분기합니다.
 
 ## 브랜치 및 커밋 규칙
 - 기능/수정 브랜치는 `codex/<short-topic>` 형식을 사용합니다.
@@ -51,12 +61,82 @@ QT_QPA_PLATFORM=offscreen pytest tests/ -q --collect-only
 # 문서 테스트 수치 동기화(운영 모드: Day 자동 갱신 없음)
 python3 scripts/sync_test_counts.py
 python3 scripts/sync_test_counts.py --check
+
+# APV 파이프라인 스모크 검증 (샘플 없으면 SKIPPED)
+python3 scripts/verify_apv_pipeline.py
+FMM_APV_SAMPLE=/path/to/sample_apv.mov python3 scripts/verify_apv_pipeline.py
+
+# APV 운영 준비 상태 검증 (gh 인증/권한 없으면 SKIPPED)
+python3 scripts/verify_apv_secret_ready.py
+
+# 운영 강제 검증 (PASS가 아니면 실패)
+python3 scripts/verify_apv_secret_ready.py --require-pass
+
+# 프로젝트 I/O 압축 계측
+python3 scripts/benchmark_project_io.py --segments 2000 --iterations 3 --text-length 80
+
+# 프로젝트 동기화 서비스 단위 테스트
+pytest tests/test_project_sync_service.py -v
+pytest tests/test_project_controller_sync.py -v
+pytest tests/test_project_sync_backends.py -v
 ```
+
+APV 스모크 결과 해석:
+- `PASS`: APV 감지 + MP4 변환 + 비디오/오디오 스트림 검증 완료
+- `SKIPPED`: `FMM_APV_SAMPLE` 미설정(실패 아님)
+- `FAIL`: APV 감지/변환/스트림 검증 중 하나라도 실패
+
+CI APV 잡(`tests.yml`의 `apv-smoke`):
+- 기본 동작은 `SKIPPED` 허용
+- 시크릿 `APV_SAMPLE_B64`(base64 인코딩 APV 샘플)를 설정하면 자동으로 `FMM_APV_SAMPLE` 주입 후 검증 수행
+- 시크릿 decode 실패/빈 샘플은 즉시 `FAIL` 처리
+
+APV CI 시크릿 준비:
+```bash
+# macOS/Linux: base64 한 줄 문자열 생성
+base64 -i /path/to/sample_apv.mov | tr -d '\n'
+```
+- GitHub 저장소 `Settings > Secrets and variables > Actions`에 `APV_SAMPLE_B64` 등록
+- `apv-smoke` 로그에서 단계별 고정 프리픽스 확인:
+  - `[APV][prepare]`
+  - `[APV][verify-script]`
+  - `[APV][pytest]`
+- 운영 마감 검증:
+  - `python3 scripts/verify_apv_secret_ready.py` 결과가 `PASS`
+  - `apv-smoke` 최근 3회 `PASS`
+  - 증빙 템플릿 `docs/operations/APV_READINESS.md` 갱신
+
+트러블슈팅:
+- `result: FAIL` + `reason: APV_SAMPLE_B64 decode failed.`: 시크릿 문자열이 base64 형식인지 확인
+- `result: FAIL` + `reason: decoded APV sample is empty.`: 빈 문자열/잘못된 복사 여부 확인
+- `result: FAIL` + `reason: expected APV codec...`: 샘플이 실제 APV 코덱인지 `ffprobe`로 확인
+- `result: FAIL` + `reason: required secret is missing: APV_SAMPLE_B64`: 저장소 시크릿 등록 누락
+- `result: FAIL` + `reason: recent apv-smoke job ended with ...`: GitHub Actions `apv-smoke` 최근 실행 로그 확인
+
+프로젝트 I/O 압축 계측 해석:
+- `compression_ratio_avg`: 작을수록 좋음(권장 기준: `<= 0.50`)
+- `save_ms_avg`/`load_ms_avg`: 로컬 반복 비교용 지표(절대값보다 이전 대비 회귀 여부를 우선 확인)
+- 운영/CI에서는 동일 옵션(`--segments 2000 --iterations 3 --text-length 80`)으로 비교
+
+Cloud Sync 수동 체크리스트(MVP + 2단계):
+- backend=`filesystem`: 기존 sync folder 경로로 no-op/pull/push/conflict 동작 확인
+- backend=`git`: 로컬 Git repo 경로에서 동일 동작 확인(`.fmm_sync_store/<project_file>`)
+- `Auto Push On Save` 켠 상태에서 저장 시 자동 push 시도(실패해도 저장은 성공 유지) 확인
+- 동일 파일 no-op: `Sync Now` 후 "already up to date" 상태 확인
+- 원격 선행 변경 pull: sync root 파일만 수정 후 `Sync Now` 시 로컬 반영 확인
+- 로컬 선행 변경 push: 프로젝트 편집 후 `Sync Now` 시 sync root 반영 확인
+- 양측 충돌: 로컬/원격 모두 수정 후 `Sync Now`에서 요약 모달 확인
+  - `Use Local` 선택 시 원격이 로컬로 덮이는지 확인
+  - `Use Remote` 선택 시 로컬 reload 후 원격 내용이 반영되는지 확인
+  - `Cancel` 선택 시 로컬/원격 파일이 유지되는지 확인
 
 ## Pre-push 루틴
 권장 실행:
 ```bash
 scripts/pre_push_checks.sh
+
+# 운영 준비 상태를 로컬에서 강제 검증하려면:
+FMM_ENFORCE_APV_READY=1 scripts/pre_push_checks.sh
 ```
 
 Git hook 자동 설정:

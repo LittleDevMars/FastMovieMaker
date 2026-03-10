@@ -67,6 +67,28 @@ class SubtitleTrack:
         """
         bisect.insort(self.segments, segment, key=lambda s: s.start_ms)
 
+    def visible_range_indices(self, start_ms: int, end_ms: int) -> tuple[int, int]:
+        """Return [start_idx, end_idx) for segments that may overlap the visible range.
+
+        Segments are sorted by ``start_ms``. We use binary search and include one
+        segment before ``start_idx`` when it overlaps the left boundary.
+        """
+        if not self.segments:
+            return 0, 0
+
+        if end_ms < start_ms:
+            start_ms, end_ms = end_ms, start_ms
+
+        start_idx = bisect.bisect_left(self.segments, start_ms, key=lambda s: s.start_ms)
+        end_idx = bisect.bisect_right(self.segments, end_ms, key=lambda s: s.start_ms)
+
+        while start_idx > 0 and self.segments[start_idx - 1].end_ms > start_ms:
+            start_idx -= 1
+
+        if end_idx < start_idx:
+            end_idx = start_idx
+        return start_idx, end_idx
+
     def clear(self) -> None:
         self.segments.clear()
 

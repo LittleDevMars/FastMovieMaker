@@ -297,17 +297,19 @@ class TestExportVideoOptions:
         self.process_mock.returncode = 0
         self.process_mock.wait.return_value = None
 
-    @patch("src.utils.hw_accel.get_hw_encoder")
+    @patch("src.utils.hw_accel.get_encoder_candidates")
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
-    def test_export_with_gpu(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_hw):
+    def test_export_with_gpu(self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_candidates):
         from src.services.video_exporter import export_video
         
         mock_popen.return_value = self.process_mock
-        mock_get_hw.return_value = ("h264_nvenc", ["-preset", "p4"])
+        mock_get_candidates.return_value = [
+            {"backend": "nvenc", "encoder": "h264_nvenc", "flags": ["-preset", "p4"], "is_hardware": True}
+        ]
 
         track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
         export_video(
@@ -320,14 +322,14 @@ class TestExportVideoOptions:
         idx = cmd.index("-c:v")
         assert cmd[idx + 1] == "h264_nvenc"
 
-    @patch("src.utils.hw_accel.get_hw_encoder")
+    @patch("src.utils.hw_accel.get_encoder_candidates")
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
     def test_gpu_fallback_to_software_on_hw_failure(
-        self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_hw
+        self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_candidates
     ):
         from src.services.video_exporter import export_video
 
@@ -344,7 +346,10 @@ class TestExportVideoOptions:
         ok_proc.wait.return_value = None
 
         mock_popen.side_effect = [fail_proc, ok_proc]
-        mock_get_hw.return_value = ("h264_nvenc", ["-preset", "p4", "-cq", "23"])
+        mock_get_candidates.return_value = [
+            {"backend": "nvenc", "encoder": "h264_nvenc", "flags": ["-preset", "p4", "-cq", "23"], "is_hardware": True},
+            {"backend": "software", "encoder": "libx264", "flags": ["-preset", "medium", "-crf", "23"], "is_hardware": False},
+        ]
 
         status_messages: list[str] = []
         track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
@@ -362,16 +367,16 @@ class TestExportVideoOptions:
         second_cmd = mock_popen.call_args_list[1][0][0]
         assert first_cmd[first_cmd.index("-c:v") + 1] == "h264_nvenc"
         assert second_cmd[second_cmd.index("-c:v") + 1] == "libx264"
-        assert any("retrying with software" in m.lower() for m in status_messages)
+        assert any("retrying with libx264" in m.lower() for m in status_messages)
 
-    @patch("src.utils.hw_accel.get_hw_encoder")
+    @patch("src.utils.hw_accel.get_encoder_candidates")
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.subtitle_exporter.export_ass")
     @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
     @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
     @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
     def test_gpu_fallback_raises_when_software_retry_fails(
-        self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_hw
+        self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_candidates
     ):
         from src.services.video_exporter import export_video
 
@@ -388,7 +393,10 @@ class TestExportVideoOptions:
         fail_sw.wait.return_value = None
 
         mock_popen.side_effect = [fail_hw, fail_sw]
-        mock_get_hw.return_value = ("h264_videotoolbox", ["-q:v", "65"])
+        mock_get_candidates.return_value = [
+            {"backend": "videotoolbox", "encoder": "h264_videotoolbox", "flags": ["-q:v", "65"], "is_hardware": True},
+            {"backend": "software", "encoder": "libx264", "flags": ["-preset", "medium", "-crf", "23"], "is_hardware": False},
+        ]
 
         track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
         with pytest.raises(RuntimeError):
@@ -399,6 +407,55 @@ class TestExportVideoOptions:
                 use_gpu=True,
                 codec="h264",
             )
+
+    @patch("src.utils.hw_accel.get_encoder_candidates")
+    @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
+    @patch("src.services.subtitle_exporter.export_ass")
+    @patch("src.infrastructure.ffmpeg_runner.subprocess.Popen")
+    @patch("src.services.video_exporter._get_video_duration", return_value=10.0)
+    @patch("src.services.video_exporter._get_video_resolution", return_value=(1920, 1080))
+    def test_gpu_fallback_tries_multiple_hardware_candidates(
+        self, mock_res, mock_dur, mock_popen, mock_ass, mock_find, mock_get_candidates
+    ):
+        from src.services.video_exporter import export_video
+
+        fail_nvenc = MagicMock()
+        fail_nvenc.stdout = iter([])
+        fail_nvenc.stderr = iter(["h264_nvenc: No capable devices found"])
+        fail_nvenc.returncode = 1
+        fail_nvenc.wait.return_value = None
+
+        ok_qsv = MagicMock()
+        ok_qsv.stdout = iter([])
+        ok_qsv.stderr = iter([])
+        ok_qsv.returncode = 0
+        ok_qsv.wait.return_value = None
+
+        mock_popen.side_effect = [fail_nvenc, ok_qsv]
+        mock_get_candidates.return_value = [
+            {"backend": "nvenc", "encoder": "h264_nvenc", "flags": ["-preset", "p4"], "is_hardware": True},
+            {"backend": "qsv", "encoder": "h264_qsv", "flags": ["-global_quality", "23"], "is_hardware": True},
+            {"backend": "software", "encoder": "libx264", "flags": ["-preset", "medium", "-crf", "23"], "is_hardware": False},
+        ]
+
+        statuses: list[str] = []
+        track = SubtitleTrack(segments=[SubtitleSegment(0, 1000, "Hello")])
+        export_video(
+            Path("test.mp4"),
+            track,
+            Path("out.mp4"),
+            use_gpu=True,
+            codec="h264",
+            on_status=statuses.append,
+        )
+
+        assert mock_popen.call_count == 2
+        first_cmd = mock_popen.call_args_list[0][0][0]
+        second_cmd = mock_popen.call_args_list[1][0][0]
+        assert first_cmd[first_cmd.index("-c:v") + 1] == "h264_nvenc"
+        assert second_cmd[second_cmd.index("-c:v") + 1] == "h264_qsv"
+        assert any("trying gpu encoder: h264_nvenc" in s.lower() for s in statuses)
+        assert any("retrying with h264_qsv" in s.lower() for s in statuses)
 
     @patch("src.utils.ffmpeg_utils.find_ffmpeg", return_value="/usr/bin/ffmpeg")
     @patch("src.services.subtitle_exporter.export_ass")

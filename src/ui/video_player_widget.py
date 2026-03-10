@@ -38,6 +38,7 @@ class VideoPlayerWidget(QGraphicsView):
         self._player = player
         self._subtitle_track: SubtitleTrack | None = None
         self._current_subtitle_text = ""
+        self._current_subtitle_style_key: tuple | None = None
         self._default_style = SubtitleStyle()
         self._current_template: OverlayTemplate | None = None
         self.setMinimumSize(640, 360)
@@ -107,6 +108,7 @@ class VideoPlayerWidget(QGraphicsView):
 
         # Install event filter to track subtitle movement
         self._subtitle_item.installEventFilter(self)
+        self._subtitle_font_cache: dict[tuple, QFont] = {}
 
         # Apply default style
         self._apply_style(self._default_style)
@@ -119,12 +121,14 @@ class VideoPlayerWidget(QGraphicsView):
         self._default_style = style
         # Re-render current subtitle with new style
         self._current_subtitle_text = ""  # force re-render
+        self._current_subtitle_style_key = None
         self._update_subtitle(self._player.position())
 
     def set_subtitle_track(self, track: SubtitleTrack | None) -> None:
         self._subtitle_track = track
         # Force update by clearing cache
         self._current_subtitle_text = ""
+        self._current_subtitle_style_key = None
         try:
             self._update_subtitle(self._player.position())
         except RuntimeError:
@@ -140,30 +144,56 @@ class VideoPlayerWidget(QGraphicsView):
         self._update_image_overlays(position_ms)
         self._update_text_overlays(position_ms)
 
+    @staticmethod
+    def _style_key(style: SubtitleStyle) -> tuple:
+        return (
+            style.font_family,
+            style.font_size,
+            style.font_bold,
+            style.font_italic,
+            style.font_color,
+            style.outline_color,
+            style.outline_width,
+            style.bg_color,
+            style.position,
+            style.margin_bottom,
+            style.custom_x,
+            style.custom_y,
+        )
+
     def _update_subtitle(self, position_ms: int) -> None:
         if not self._subtitle_track or self._subtitle_track.hidden:
             self._subtitle_item.setVisible(False)
             self._current_subtitle_text = ""
+            self._current_subtitle_style_key = None
             return
 
         seg = self._subtitle_track.segment_at(position_ms)
         if seg:
             style = self._get_effective_style(seg)
-            if seg.text != self._current_subtitle_text:
+            style_key = self._style_key(style)
+            if seg.text != self._current_subtitle_text or style_key != self._current_subtitle_style_key:
                 self._current_subtitle_text = seg.text
+                self._current_subtitle_style_key = style_key
                 self._apply_style(style)
-                self._subtitle_item.setPlainText(seg.text)
+                if seg.text != self._subtitle_item.toPlainText():
+                    self._subtitle_item.setPlainText(seg.text)
                 self._position_subtitle(style)
             self._subtitle_item.setVisible(True)
         else:
             self._subtitle_item.setVisible(False)
             self._current_subtitle_text = ""
+            self._current_subtitle_style_key = None
 
     def _apply_style(self, style: SubtitleStyle) -> None:
         """Apply visual style to the subtitle text item."""
-        weight = QFont.Weight.Bold if style.font_bold else QFont.Weight.Normal
-        font = QFont(style.font_family, style.font_size, weight)
-        font.setItalic(style.font_italic)
+        style_key = self._style_key(style)
+        font = self._subtitle_font_cache.get(style_key)
+        if font is None:
+            weight = QFont.Weight.Bold if style.font_bold else QFont.Weight.Normal
+            font = QFont(style.font_family, style.font_size, weight)
+            font.setItalic(style.font_italic)
+            self._subtitle_font_cache[style_key] = font
         self._subtitle_item.setFont(font)
         self._subtitle_item.setDefaultTextColor(QColor(style.font_color))
 

@@ -6,6 +6,9 @@ TimelineWidget은 이벤트 핸들링·공개 API에 집중한다.
 
 from __future__ import annotations
 
+import logging
+import os
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QLineF
@@ -142,6 +145,113 @@ class TimelinePainter:
         # 웨이브폼 이미지 캐시
         self._waveform_image_cache: QImage | None = None
         self._waveform_cache_key: tuple | None = None
+        # 자주 쓰는 페인터 객체 재사용 (프레임당 생성 비용 감소)
+        self._font_small = QFont("Arial", 8)
+        self._audio_brush = QBrush(self._AUDIO_COLOR_TOP)
+        self._audio_pen = QPen(self._AUDIO_BORDER, 1)
+        self._segment_pen = QPen(self._SEGMENT_BORDER, 1)
+        self._segment_selected_pen = QPen(self._SELECTED_BORDER, 1)
+        self._segment_text_cache: dict[tuple[str, int], str] = {}
+        self._visible_window_cache_key: tuple[int, int, int] | None = None
+        self._visible_window_cache: tuple[int, int] = (0, 0)
+        self._render_metrics_enabled = os.getenv("FMM_TIMELINE_RENDER_METRICS", "").strip() == "1"
+        self._logger = logging.getLogger(__name__)
+
+    def _visible_segment_window(self) -> tuple[int, int]:
+        """Return visible segment index window for the current viewport."""
+        tw = self.tw
+        if not tw._track:
+            return 0, 0
+        visible_start = int(tw._visible_start_ms)
+        visible_end = int(tw._visible_start_ms + tw._visible_range_ms())
+        cache_key = (id(tw._track), visible_start, visible_end)
+        if self._visible_window_cache_key == cache_key:
+            return self._visible_window_cache
+        window = tw._track.visible_range_indices(visible_start, visible_end)
+        self._visible_window_cache_key = cache_key
+        self._visible_window_cache = window
+        return window
+
+    @staticmethod
+    def _style_signature(seg) -> tuple | None:
+        style = getattr(seg, "style", None)
+        if style is None:
+            return None
+        return (
+            style.font_family,
+            style.font_size,
+            style.font_bold,
+            style.font_italic,
+            style.font_color,
+            style.outline_color,
+            style.outline_width,
+            style.bg_color,
+            style.position,
+            style.margin_bottom,
+            style.custom_x,
+            style.custom_y,
+        )
+
+    def _segment_paint_signature(self) -> tuple:
+        """Build signature for visible subtitle/audio content used by static cache."""
+        tw = self.tw
+        if not tw._track:
+            return ()
+        start_idx, end_idx = self._visible_segment_window()
+        sig: list[tuple] = []
+        for i in range(start_idx, end_idx):
+            seg = tw._track[i]
+            anim = getattr(seg, "animation", None)
+            sig.append(
+                (
+                    i,
+                    seg.start_ms,
+                    seg.end_ms,
+                    seg.text,
+                    bool(seg.audio_file),
+                    bool(anim is not None and anim.is_active),
+                    self._style_signature(seg),
+                )
+            )
+        return tuple(sig)
+
+    def _static_cache_invalidation_signature(self) -> tuple:
+        """Return minimal signature fields that should invalidate static cache."""
+        tw = self.tw
+        clip_count = (
+            tuple(len(vt.clips) for vt in tw._project.video_tracks)
+            if tw._project else ()
+        )
+        ovl_count = len(tw._image_overlay_track) if tw._image_overlay_track else 0
+        v_h = tw._clip_track.hidden if tw._clip_track else False
+        s_h = tw._track.hidden if tw._track else False
+        o_h = tw._image_overlay_track.hidden if tw._image_overlay_track else False
+        return (
+            tw._selected_index,
+            tw._selected_overlay_index,
+            tw._selected_clip_index,
+            tw._selected_clip_track_index,
+            frozenset(tw._selected_clips),
+            clip_count,
+            self._segment_paint_signature(),
+            ovl_count,
+            tw._has_video,
+            id(tw._waveform_data),
+            v_h,
+            s_h,
+            o_h,
+        )
+
+    def _build_static_cache_key(self, w: int, h: int, visible_ms: float) -> tuple:
+        """Return static timeline render cache key."""
+        tw = self.tw
+        return (
+            w,
+            h,
+            tw._visible_start_ms,
+            visible_ms,
+            self._static_cache_invalidation_signature(),
+        )
 
     # ================================================================
     # 메인 페인트 엔트리
@@ -150,6 +260,7 @@ class TimelinePainter:
     def paint(self) -> None:
         """TimelineWidget.paintEvent에서 호출되는 메인 렌더링 루틴."""
         tw = self.tw
+        t0 = time.perf_counter() if self._render_metrics_enabled else 0.0
         w = tw.width()
         h = tw.height()
 
@@ -167,27 +278,7 @@ class TimelinePainter:
             visible_ms = tw._duration_ms
         tw._px_per_ms = w / visible_ms
 
-        # 정적 레이어 캐시 키
-        seg_count = len(tw._track) if tw._track else 0
-        ovl_count = len(tw._image_overlay_track) if tw._image_overlay_track else 0
-        clip_count = (
-            tuple(len(vt.clips) for vt in tw._project.video_tracks)
-            if tw._project else ()
-        )
-        v_h = tw._clip_track.hidden if tw._clip_track else False
-        s_h = tw._track.hidden if tw._track else False
-        o_h = tw._image_overlay_track.hidden if tw._image_overlay_track else False
-
-        cache_key = (
-            w, h, tw._visible_start_ms, visible_ms,
-            tw._selected_index, tw._selected_overlay_index,
-            tw._selected_clip_index, tw._selected_clip_track_index,
-            frozenset(tw._selected_clips),
-            clip_count,
-            seg_count, ovl_count, tw._has_video,
-            id(tw._waveform_data),
-            v_h, s_h, o_h,
-        )
+        cache_key = self._build_static_cache_key(w, h, visible_ms)
 
         if tw._static_cache_key != cache_key or tw._static_cache is None:
             pixmap = QPixmap(w, h)
@@ -231,6 +322,9 @@ class TimelinePainter:
         self._draw_snap_indicator(painter, h)
         self._draw_drop_indicator(painter, h)
         painter.end()
+        if self._render_metrics_enabled:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            self._logger.debug("timeline paint: %.2f ms", elapsed_ms)
 
     # ================================================================
     # 개별 드로잉 메서드
@@ -438,9 +532,11 @@ class TimelinePainter:
         tw = self.tw
         if not tw._track:
             return
+        start_idx, end_idx = self._visible_segment_window()
         y = tw._audio_track_y()
         track_h = _AUDIO_H
-        for i, seg in enumerate(tw._track):
+        for i in range(start_idx, end_idx):
+            seg = tw._track[i]
             if not seg.audio_file:
                 continue
             x1 = tw._ms_to_x(seg.start_ms)
@@ -448,8 +544,8 @@ class TimelinePainter:
             if x2 < 0 or x1 > tw.width():
                 continue
             rect = QRectF(x1, y, x2 - x1, track_h)
-            painter.setBrush(QBrush(self._AUDIO_COLOR_TOP))
-            painter.setPen(QPen(self._AUDIO_BORDER, 1))
+            painter.setBrush(self._audio_brush)
+            painter.setPen(self._audio_pen)
             painter.drawRoundedRect(rect, 4, 4)
 
     def _draw_segments(self, painter: QPainter, h: int) -> None:
@@ -457,6 +553,7 @@ class TimelinePainter:
         tw = self.tw
         if not tw._track:
             return
+        start_idx, end_idx = self._visible_segment_window()
         y = tw._subtitle_track_y()
         track_h = _SEG_H
         # 로컬 변수 캐싱 — self.tw._xxx 딕셔너리 룩업 체인 제거
@@ -465,10 +562,11 @@ class TimelinePainter:
         selected_idx = tw._selected_index
         seg_top = self._SEGMENT_COLOR_TOP
         seg_bot = self._SEGMENT_COLOR_BOT
-        seg_border = self._SEGMENT_BORDER
-        sel_border = self._SELECTED_BORDER
         sel_glow = self._SELECTED_GLOW
-        for i, seg in enumerate(tw._track):
+        painter.setFont(self._font_small)
+        fm = painter.fontMetrics()
+        for i in range(start_idx, end_idx):
+            seg = tw._track[i]
             x1 = ms_to_x(seg.start_ms)
             x2 = ms_to_x(seg.end_ms)
             if x2 < 0 or x1 > widget_w:
@@ -477,23 +575,28 @@ class TimelinePainter:
             is_selected = (selected_idx == i)
             top = seg_top
             bot = seg_bot
-            border = seg_border
+            border_pen = self._segment_pen
             if is_selected:
-                border = sel_border
+                border_pen = self._segment_selected_pen
                 painter.setBrush(QBrush(sel_glow))
                 painter.drawRect(rect.adjusted(-2, -2, 2, 2))
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             grad.setColorAt(0, top)
             grad.setColorAt(1, bot)
             painter.setBrush(grad)
-            painter.setPen(QPen(border, 1))
+            painter.setPen(border_pen)
             painter.drawRoundedRect(rect, 4, 4)
             painter.setPen(Qt.GlobalColor.white)
-            painter.setFont(QFont("Arial", 8))
+            text_width = max(0, int(rect.width()) - 10)
+            text_cache_key = (seg.text, text_width)
+            display_text = self._segment_text_cache.get(text_cache_key)
+            if display_text is None:
+                display_text = fm.elidedText(seg.text, Qt.TextElideMode.ElideRight, text_width)
+                self._segment_text_cache[text_cache_key] = display_text
             painter.drawText(
                 rect.adjusted(5, 0, -5, 0),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                seg.text,
+                display_text,
             )
             # 애니메이션 배지 (파란 원형) — animation 설정된 세그먼트
             anim = getattr(seg, "animation", None)

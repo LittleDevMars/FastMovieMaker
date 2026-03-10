@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import uuid
 from pathlib import Path
@@ -28,18 +27,19 @@ from PySide6.QtWidgets import (
 
 from src.models.subtitle import SubtitleTrack
 from src.utils.i18n import tr
+from src.services.tts_error_presenter import to_user_message
+from src.services.tts_provider import validate_tts_request
+from src.services.tts_provider_registry import get_all_providers, get_provider
 from src.services.settings_manager import SettingsManager
 from src.services.text_splitter import SplitStrategy
-from src.services.tts_service import TTSService
 from src.utils.config import (
-    ELEVENLABS_DEFAULT_VOICES,
     TTS_DEFAULT_VOICE,
     TTS_DEFAULT_SPEED,
-    TTS_VOICES,
-    TTSEngine,
 )
 from src.services.tts_preset_manager import TTSPreset, TTSPresetManager
 from src.workers.tts_worker import TTSWorker
+
+_EDGE_PROVIDER_ID = "edge_tts"
 
 
 class TTSPreviewWorker(QObject):
@@ -48,41 +48,27 @@ class TTSPreviewWorker(QObject):
     finished = Signal(str)  # audio_path
     error = Signal(str)
 
-    def __init__(self, engine: str, text: str, voice: str, rate: str, api_key: str = ""):
+    def __init__(self, engine: str, text: str, voice: str, speed: float):
         super().__init__()
         self._engine = engine
         self._text = text
         self._voice = voice
-        self._rate = rate
-        self._api_key = api_key
+        self._speed = speed
 
     def run(self) -> None:
         try:
             temp_dir = Path(tempfile.gettempdir())
             output_path = temp_dir / f"tts_preview_{uuid.uuid4().hex}.mp3"
-
-            if self._engine == TTSEngine.ELEVENLABS:
-                from src.services.elevenlabs_tts_service import ElevenLabsTTSService
-                service = ElevenLabsTTSService(self._api_key)
-                speed = 1.0
-                try:
-                    speed = float(self._rate)
-                except ValueError:
-                    pass
-                service.generate_speech(
-                    text=self._text,
-                    voice_id=self._voice,
-                    speed=speed,
-                    output_path=output_path
-                )
-            else:
-                # Edge-TTS requires asyncio
-                asyncio.run(TTSService.generate_speech(
-                    text=self._text,
-                    voice=self._voice,
-                    rate=self._rate,
-                    output_path=output_path
-                ))
+            validate_tts_request(voice=self._voice, speed=self._speed)
+            provider = get_provider(self._engine)
+            if provider is None:
+                raise ValueError(f"Unknown TTS provider: {self._engine}")
+            provider.synthesize(
+                text=self._text,
+                voice=self._voice,
+                speed=self._speed,
+                output_path=output_path,
+            )
 
             self.finished.emit(str(output_path))
         except Exception as e:
@@ -192,8 +178,7 @@ class TTSDialog(QDialog):
 
         # Engine selector
         self._engine_combo = QComboBox()
-        self._engine_combo.addItem(tr("Edge-TTS (Free)"), TTSEngine.EDGE_TTS)
-        self._engine_combo.addItem(tr("ElevenLabs (Premium)"), TTSEngine.ELEVENLABS)
+        self._populate_engine_options()
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         settings_layout.addRow(tr("Engine:"), self._engine_combo)
 
@@ -206,7 +191,7 @@ class TTSDialog(QDialog):
 
         # Voice selector
         self._voice_combo = QComboBox()
-        self._populate_voices("Korean")
+        self._populate_voices_for_engine(self._engine_combo.currentData(), "Korean")
         settings_layout.addRow(tr("Voice:"), self._voice_combo)
 
         # Speed
@@ -229,6 +214,7 @@ class TTSDialog(QDialog):
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
+        self._apply_default_provider()
 
         # Volume controls (if mixing with video audio)
         if self._video_audio_path:
@@ -312,7 +298,7 @@ class TTSDialog(QDialog):
             self._engine_combo.setCurrentIndex(engine_idx)
 
         # Language (Edge-TTS 전용)
-        if preset.engine == TTSEngine.EDGE_TTS:
+        if preset.engine == _EDGE_PROVIDER_ID:
             lang_idx = self._lang_combo.findText(preset.language)
             if lang_idx >= 0:
                 self._lang_combo.setCurrentIndex(lang_idx)
@@ -420,43 +406,54 @@ class TTSDialog(QDialog):
             if idx >= 0:
                 self._voice_combo.setCurrentIndex(idx)
 
-    def _populate_voices(self, language: str) -> None:
-        """Populate voice combo with voices for the selected language."""
+    def _populate_engine_options(self) -> None:
+        """Populate engine options from provider registry."""
+        self._engine_combo.clear()
+        providers = get_all_providers()
+        for provider in providers.values():
+            self._engine_combo.addItem(provider.display_name, provider.provider_id)
+
+    def _populate_voices_for_engine(self, engine: str, language: str | None = None) -> None:
+        """Populate voice combo for any selected provider engine."""
         self._voice_combo.clear()
-
-        if language in TTS_VOICES:
-            voices = TTS_VOICES[language]
-            for gender in ["Female", "Male"]:
-                if gender in voices:
-                    for voice_name in voices[gender]:
-                        # Extract display name (e.g., "ko-KR-SunHiNeural" -> "SunHi")
-                        display = voice_name.split("-")[-1].replace("Neural", "").replace("Multilingual", "")
-                        self._voice_combo.addItem(f"{display} ({gender})", voice_name)
-
-        # Set default
-        default_index = self._voice_combo.findData(TTS_DEFAULT_VOICE)
-        if default_index >= 0:
-            self._voice_combo.setCurrentIndex(default_index)
+        provider = get_provider(engine)
+        if provider is None:
+            return
+        target_lang = language if engine == _EDGE_PROVIDER_ID else None
+        for label, voice in provider.list_voices(target_lang):
+            self._voice_combo.addItem(label, voice)
+        if engine == _EDGE_PROVIDER_ID:
+            default_index = self._voice_combo.findData(TTS_DEFAULT_VOICE)
+            if default_index >= 0:
+                self._voice_combo.setCurrentIndex(default_index)
 
     def _on_engine_changed(self, index: int) -> None:
         """Handle TTS engine selection change."""
         engine = self._engine_combo.currentData()
-        if engine == TTSEngine.ELEVENLABS:
-            self._lang_combo.setEnabled(False)
-            self._populate_elevenlabs_voices()
-        else:
+        if engine == _EDGE_PROVIDER_ID:
             self._lang_combo.setEnabled(True)
-            self._populate_voices(self._lang_combo.currentText())
+            self._populate_voices_for_engine(engine, self._lang_combo.currentText())
+            return
+        self._lang_combo.setEnabled(False)
+        self._populate_voices_for_engine(engine, None)
 
-    def _populate_elevenlabs_voices(self) -> None:
-        """Populate voice combo with ElevenLabs voices."""
-        self._voice_combo.clear()
-        for display_name, voice_id in ELEVENLABS_DEFAULT_VOICES.items():
-            self._voice_combo.addItem(display_name, voice_id)
+    def _apply_default_provider(self) -> None:
+        """Set initial engine from preferences without locking user choice."""
+        provider_id = SettingsManager().get_tts_default_provider()
+        idx = self._engine_combo.findData(provider_id)
+        if idx < 0:
+            idx = self._engine_combo.findData(_EDGE_PROVIDER_ID)
+        if idx >= 0:
+            self._engine_combo.setCurrentIndex(idx)
+            return
+        if self._engine_combo.count() > 0:
+            self._engine_combo.setCurrentIndex(0)
 
     def _on_language_changed(self, language: str) -> None:
         """Handle language selection change."""
-        self._populate_voices(language)
+        engine = self._engine_combo.currentData()
+        if engine == _EDGE_PROVIDER_ID:
+            self._populate_voices_for_engine(engine, language)
 
     def _on_preview(self) -> None:
         """Handle preview button click."""
@@ -486,16 +483,15 @@ class TTSDialog(QDialog):
                 preview_text = preview_text[:last_space]
 
         engine = self._engine_combo.currentData()
-        api_key = ""
-
-        # Validate API key for ElevenLabs
-        if engine == TTSEngine.ELEVENLABS:
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
             api_key = SettingsManager().get_elevenlabs_api_key()
             if not api_key:
                 QMessageBox.warning(
                     self,
                     tr("API Key Required"),
-                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    tr("Selected provider requires an API key.") + "\n\n"
                     + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
@@ -503,11 +499,13 @@ class TTSDialog(QDialog):
         # Get settings
         voice_data = self._voice_combo.currentData()
         speed = self._speed_spin.value()
-        
-        if engine == TTSEngine.ELEVENLABS:
-            rate = str(speed)
-        else:
-            rate = TTSService.format_rate(speed)
+        if not voice_data:
+            QMessageBox.warning(
+                self,
+                tr("TTS Generation Failed"),
+                tr("No voice available for selected provider."),
+            )
+            return
 
         # UI update
         self._preview_btn.setText(tr("Stop Preview"))
@@ -515,7 +513,7 @@ class TTSDialog(QDialog):
 
         # Start worker
         self._preview_thread = QThread()
-        self._preview_worker = TTSPreviewWorker(engine, preview_text, voice_data, rate, api_key)
+        self._preview_worker = TTSPreviewWorker(engine, preview_text, voice_data, speed)
         self._preview_worker.moveToThread(self._preview_thread)
         
         self._preview_thread.started.connect(self._preview_worker.run)
@@ -553,7 +551,9 @@ class TTSDialog(QDialog):
 
     def _on_preview_error(self, message: str) -> None:
         self._preview_btn.setText(tr("Preview"))
-        self._status_label.setText(f"{tr('Preview failed')}: {message}")
+        friendly = to_user_message(message)
+        self._status_label.setText(f"{tr('Preview failed')}: {friendly}")
+        self._status_label.setToolTip(str(message))
 
     def _on_generate(self) -> None:  # In segment mode, this acts as "Apply"
         """Start TTS generation."""
@@ -568,14 +568,15 @@ class TTSDialog(QDialog):
 
         engine = self._engine_combo.currentData()
 
-        # Validate API key for ElevenLabs
-        if engine == TTSEngine.ELEVENLABS:
+        provider = get_provider(engine)
+        requires_api_key = callable(getattr(provider, "requires_api_key", None)) and bool(provider.requires_api_key())
+        if requires_api_key:
             api_key = SettingsManager().get_elevenlabs_api_key()
             if not api_key:
                 QMessageBox.warning(
                     self,
                     tr("API Key Required"),
-                    tr("ElevenLabs requires an API key.") + "\n\n"
+                    tr("Selected provider requires an API key.") + "\n\n"
                     + tr("Set it in Edit > Preferences > API Keys."),
                 )
                 return
@@ -600,16 +601,17 @@ class TTSDialog(QDialog):
 
         # Get settings
         voice_data = self._voice_combo.currentData()
+        if not voice_data:
+            QMessageBox.warning(
+                self,
+                tr("TTS Generation Failed"),
+                tr("No voice available for selected provider."),
+            )
+            return
         self._final_voice = voice_data
         self._final_speed = self._speed_spin.value()
         strategy = self._strategy_combo.currentData()
         language = self._lang_combo.currentText().lower()[:2]  # "Korean" -> "ko"
-
-        # Rate format differs by engine
-        if engine == TTSEngine.ELEVENLABS:
-            rate = str(self._final_speed)
-        else:
-            rate = TTSService.format_rate(self._final_speed)
 
         bg_volume = self._bg_volume_spin.value() if self._bg_volume_spin else 0.5
         tts_volume = self._tts_volume_spin.value() if self._tts_volume_spin else 1.0
@@ -619,8 +621,8 @@ class TTSDialog(QDialog):
         self._worker = TTSWorker(
             script=script,
             voice=voice_data,
-            rate=rate,
             strategy=strategy,
+            speed=self._final_speed,
             language=language,
             video_audio_path=self._video_audio_path,
             bg_volume=bg_volume,
@@ -665,6 +667,7 @@ class TTSDialog(QDialog):
     def _on_error(self, message: str) -> None:
         """Handle error."""
         self._status_label.setText(f"Error: {message}")
+        self._status_label.setToolTip(str(message))
         self._progress_bar.setVisible(False)
 
         # Re-enable controls
@@ -678,7 +681,7 @@ class TTSDialog(QDialog):
             self._strategy_combo.setEnabled(True)
         # Re-enable language only if edge-tts is selected
         engine = self._engine_combo.currentData()
-        self._lang_combo.setEnabled(engine != TTSEngine.ELEVENLABS)
+        self._lang_combo.setEnabled(engine == _EDGE_PROVIDER_ID)
         if self._bg_volume_spin:
             self._bg_volume_spin.setEnabled(True)
         if self._tts_volume_spin:
@@ -687,7 +690,7 @@ class TTSDialog(QDialog):
         QMessageBox.critical(
             self,
             tr("TTS Generation Failed"),
-            f"{tr('Failed to generate speech')}:\n\n{message}"
+            f"{tr('Failed to generate speech')}:\n\n{to_user_message(message)}"
         )
 
     def _cleanup_thread(self) -> None:
